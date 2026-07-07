@@ -1,6 +1,6 @@
 # random-ai-companion — 작업 가이드
 
-프로필 없이 만나, 같은 달력을 살고, 먼저 물어봐주는 AI 대화 상대 PoC. 컨셉·가설·설계 총론은 [README.md](README.md), 캐릭터 속성 체계는 [docs/character-design.md](docs/character-design.md)가 단일 소스. 이 저장소 밖의 기획 사료 위치는 `LOCAL-CONTEXT.md`(gitignored, 로컬 전용) 참조 — 새 세션은 그 파일부터 읽을 것.
+나와 같은 시간을 살고 먼저 물어봐주는 AI 대화 상대 PoC (만남은 카드 한 장으로 시작). 컨셉·가설·설계 총론은 [README.md](README.md), 캐릭터 속성 체계는 [docs/character-design.md](docs/character-design.md)가 단일 소스. 이 저장소 밖의 기획 사료 위치는 `LOCAL-CONTEXT.md`(gitignored, 로컬 전용) 참조 — 새 세션은 그 파일부터 읽을 것.
 
 ## 상태 (갱신 의무 — 세션이 끝나기 전 여기와 LOCAL-CONTEXT.md를 최신화한다)
 
@@ -37,7 +37,7 @@ yarn dev        # 로컬 기동 (long polling)
 [Telegram] ←→ src/bot.ts (grammY long polling)
                 ├─ /start → src/character.ts (케미 축 코드 랜덤 → 바이블 LLM 생성) → 첫 인사
                 ├─ 메시지 → src/context.ts (바이블+관계+최근 일기+KST) → src/llm.ts → 응답
-                └─ 크론 2개 (src/index.ts): 밤 일기 23:30 · 아침 안부 08:30~09:10 — 시스템의 심장
+                └─ 비동기 2종 (src/index.ts): 밤 일기 · 선제 발송 디스패처 — 반응형 챗봇과 갈라지는 지점
 [SQLite] src/db.ts — characters(바이블 불변) / relationships(관계 상태) / user_preferences(매칭 전용, 캐릭터에 주입 금지) / diary_entries / messages(원시 로그 = 측정 재료)
 ```
 
