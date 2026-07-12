@@ -65,8 +65,9 @@ const presencePrompt = (
   pending: boolean,
   lastLine: string,
   fixed: boolean,
+  chatId: string,
 ): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
-${renderUserBlock()}
+${renderUserBlock(chatId)}
 지금 시각 ${kstClock()}.
 ${
   between
@@ -174,6 +175,7 @@ export const runPresenceTick = async (): Promise<void> => {
           last.role === "user",
           lastLineOf(c.chat_id),
           blockCategory(target) === "공적",
+          c.chat_id,
         ),
         400,
         config.model, // 실시간성이라 대화 모델(sonnet)

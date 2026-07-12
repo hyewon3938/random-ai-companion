@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   chat_id TEXT PRIMARY KEY,
   pref_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS user_profile (
+  chat_id TEXT PRIMARY KEY,
+  name TEXT,
+  gender TEXT,
+  age_band TEXT,
+  updated_at TEXT
+);
 CREATE TABLE IF NOT EXISTS diary_entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER NOT NULL REFERENCES characters(id),
@@ -515,6 +522,46 @@ export const saveUserPreferences = (
   db.prepare(
     `INSERT OR REPLACE INTO user_preferences (chat_id, pref_json) VALUES (?, ?)`,
   ).run(chatId, JSON.stringify(prefs));
+};
+
+// 유저 프로필(이름·성별·나이대). user_preferences(매칭 전용·비주입)와 달리 이건
+// 캐릭터가 상대를 부르고 대하는 데 쓰는 공개 정보다. env로 지정하지 않았으면 밤 정리가 대화로 채운다.
+// chat_id 기준(교체돼도 유지) — 유저의 정체는 어떤 캐릭터를 만나든 그대로다.
+export interface StoredUserProfile {
+  name?: string;
+  gender?: string;
+  ageBand?: string;
+}
+
+export const getUserProfile = (chatId: string): StoredUserProfile => {
+  const row = db
+    .prepare(
+      `SELECT name, gender, age_band FROM user_profile WHERE chat_id = ?`,
+    )
+    .get(chatId) as
+    | { name: string | null; gender: string | null; age_band: string | null }
+    | undefined;
+  if (!row) return {};
+  return {
+    name: row.name ?? undefined,
+    gender: row.gender ?? undefined,
+    ageBand: row.age_band ?? undefined,
+  };
+};
+
+// 새로 확실해진 값만 채운다 — 빈 값은 기존 값을 덮지 않는다(한번 안 건 유지).
+export const saveUserProfile = (
+  chatId: string,
+  p: StoredUserProfile,
+  at: string,
+): void => {
+  const cur = getUserProfile(chatId);
+  const name = p.name?.trim() || cur.name;
+  const gender = p.gender?.trim() || cur.gender;
+  const ageBand = p.ageBand?.trim() || cur.ageBand;
+  db.prepare(
+    `INSERT OR REPLACE INTO user_profile (chat_id, name, gender, age_band, updated_at) VALUES (?, ?, ?, ?, ?)`,
+  ).run(chatId, name ?? null, gender ?? null, ageBand ?? null, at);
 };
 
 // 마지막 유저 메시지 이후 캐릭터가 먼저 보낸(proactive) 수 — '연속 무응답'을 세어 매달림을 막는다.

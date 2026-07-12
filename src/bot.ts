@@ -342,7 +342,7 @@ const respond = async (
       console.error("[bot] day plan error:", e),
     );
     const state = getRelationshipState(character.id);
-    const system = buildSystemPrompt(character.id, bible, state);
+    const system = buildSystemPrompt(character.id, bible, state, chatId);
     const turns = toTurns(getRecentMessages(chatId, 40));
     const reply = await chat(system, turns);
     // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음])면 주의집중을 켠다 — 그 블록 끝까지(최소 30분) 곁에.

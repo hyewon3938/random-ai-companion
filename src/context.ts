@@ -216,6 +216,7 @@ export const buildSystemPrompt = (
   characterId: number,
   bible: Bible,
   state: RelationshipState,
+  chatId: string,
 ): string => {
   const metAt = getMetAt(characterId) ?? kstDateString();
   const diaries = getRecentDiaries(characterId, 3);
@@ -238,7 +239,7 @@ export const buildSystemPrompt = (
     JSON.stringify(bible, null, 2),
     STANCE,
     RULES,
-    renderUserBlock(),
+    renderUserBlock(chatId),
     `[시간] 지금은 ${kstDescription()}. 너희가 처음 연결된 날은 ${metAt.slice(0, 10)}. 시간은 현실과 똑같이 흐른다.`,
     `[오늘/내일] ${workdayContext()}.`,
     firstMeeting,

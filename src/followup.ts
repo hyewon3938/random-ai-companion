@@ -46,8 +46,9 @@ const GOODNIGHT_SYSTEM = `너는 주어진 인물이다. 밤에 상대와 대화
 
 const goodnightPrompt = (
   bible: Bible,
+  chatId: string,
 ): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
-${renderUserBlock()}
+${renderUserBlock(chatId)}
 상대가 대화 중 답이 없어진 지 두어 시간 됐다. 잠든 것 같다. 자기 전에 가볍고 다정한 굿나잇 한 마디를 남긴다(상대가 아침에 보면 기분 좋을 결로).
 - 예: "자나 보네요 ㅎㅎ 잘 자요", "먼저 잠들었나 봐요 좋은 꿈 꿔요", "저도 이제 자러 가요 잘 자요".
 - 매번 다르게, 자연스럽게. 재촉·서운함 없음. 1~2개 말풍선(줄바꿈). 이모지 없음. 지금 관계 말투(존댓말이면 존댓말) 유지.
@@ -58,8 +59,9 @@ const followupPrompt = (
   block: { activity: string },
   lastLine: string,
   openLoops: string[],
+  chatId: string,
 ): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
-${renderUserBlock()}
+${renderUserBlock(chatId)}
 지금 시각 ${kstClock()}, 너는 지금 "${block.activity}" 참이다.
 
 마지막으로 오간 말: ${lastLine || "(없음)"}
@@ -112,7 +114,7 @@ export const runFollowupTick = async (): Promise<void> => {
         const bible = JSON.parse(c.bible_json) as Bible;
         const g = await chatJson<{ text: string }>(
           GOODNIGHT_SYSTEM,
-          goodnightPrompt(bible),
+          goodnightPrompt(bible, c.chat_id),
           300,
           config.model,
         );
@@ -159,6 +161,7 @@ export const runFollowupTick = async (): Promise<void> => {
           state.open_loops
             .filter((l) => l.status === "open")
             .map((l) => l.content),
+          c.chat_id,
         ),
         500,
         config.model, // 실시간성이라 대화 모델(sonnet)
