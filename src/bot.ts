@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import { createDaepyoCharacter, type Bible } from "./character.js";
 import { ensureTodayPlan, blockCategory } from "./day-plan.js";
 import { buildSystemPrompt, currentBlock } from "./context.js";
+import { maybeCaptureFacts } from "./capture.js";
 import { chat, type ChatTurn } from "./llm.js";
 import {
   db,
@@ -371,6 +372,10 @@ const respond = async (
     const lu = lastMessage(chatId);
     if (lu?.role === "user") setRecoveryMark(chatId, lu.ts);
     logMessage(chatId, character.id, "char", text, nowIso(), { kind });
+    // 세션 중 가벼운 사실 포착(비동기 — 답장 지연 없음). 유저 메시지가 쌓이면 밤 정리 전에 저장.
+    void maybeCaptureFacts(character.id, chatId).catch((e) =>
+      console.error("[capture] error:", e),
+    );
   } finally {
     responding.delete(chatId);
   }

@@ -108,6 +108,10 @@ CREATE TABLE IF NOT EXISTS attention_override (
   chat_id TEXT PRIMARY KEY,
   until_ts TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS capture_marks (
+  chat_id TEXT PRIMARY KEY,
+  last_msg_id INTEGER NOT NULL
+);
 `);
 
 export interface CharacterRow {
@@ -603,6 +607,20 @@ export const setAttentionOverride = (chatId: string, untilTs: string): void => {
   db.prepare(
     `INSERT OR REPLACE INTO attention_override (chat_id, until_ts) VALUES (?, ?)`,
   ).run(chatId, untilTs);
+};
+
+// 세션 중 사실 포착의 워터마크: 여기 id까지는 이미 포착을 시도했다. 다음엔 그 이후 메시지만 본다.
+export const getCaptureMark = (chatId: string): number =>
+  (
+    db
+      .prepare(`SELECT last_msg_id FROM capture_marks WHERE chat_id = ?`)
+      .get(chatId) as { last_msg_id: number } | undefined
+  )?.last_msg_id ?? 0;
+
+export const setCaptureMark = (chatId: string, lastMsgId: number): void => {
+  db.prepare(
+    `INSERT OR REPLACE INTO capture_marks (chat_id, last_msg_id) VALUES (?, ?)`,
+  ).run(chatId, lastMsgId);
 };
 
 export const getDayPlan = (
