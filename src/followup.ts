@@ -1,5 +1,6 @@
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
+import { renderUserBlock } from "./user-profile.js";
 import {
   db,
   getActiveCharacter,
@@ -46,6 +47,7 @@ const GOODNIGHT_SYSTEM = `너는 주어진 인물이다. 밤에 상대와 대화
 const goodnightPrompt = (
   bible: Bible,
 ): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
+${renderUserBlock()}
 상대가 대화 중 답이 없어진 지 두어 시간 됐다. 잠든 것 같다. 자기 전에 가볍고 다정한 굿나잇 한 마디를 남긴다(상대가 아침에 보면 기분 좋을 결로).
 - 예: "자나 보네요 ㅎㅎ 잘 자요", "먼저 잠들었나 봐요 좋은 꿈 꿔요", "저도 이제 자러 가요 잘 자요".
 - 매번 다르게, 자연스럽게. 재촉·서운함 없음. 1~2개 말풍선(줄바꿈). 이모지 없음. 지금 관계 말투(존댓말이면 존댓말) 유지.
@@ -57,6 +59,7 @@ const followupPrompt = (
   lastLine: string,
   openLoops: string[],
 ): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
+${renderUserBlock()}
 지금 시각 ${kstClock()}, 너는 지금 "${block.activity}" 참이다.
 
 마지막으로 오간 말: ${lastLine || "(없음)"}

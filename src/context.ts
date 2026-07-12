@@ -3,6 +3,7 @@ import type { RelationshipState } from "./db.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory } from "./day-plan.js";
 import { config } from "./config.js";
+import { renderUserBlock } from "./user-profile.js";
 import {
   getMetAt,
   getRecentDiaries,
@@ -237,6 +238,7 @@ export const buildSystemPrompt = (
     JSON.stringify(bible, null, 2),
     STANCE,
     RULES,
+    renderUserBlock(),
     `[시간] 지금은 ${kstDescription()}. 너희가 처음 연결된 날은 ${metAt.slice(0, 10)}. 시간은 현실과 똑같이 흐른다.`,
     `[오늘/내일] ${workdayContext()}.`,
     firstMeeting,

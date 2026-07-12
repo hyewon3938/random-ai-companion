@@ -1,5 +1,6 @@
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
+import { renderUserBlock } from "./user-profile.js";
 import {
   db,
   getAttentionUntil,
@@ -65,6 +66,7 @@ const presencePrompt = (
   lastLine: string,
   fixed: boolean,
 ): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
+${renderUserBlock()}
 지금 시각 ${kstClock()}.
 ${
   between

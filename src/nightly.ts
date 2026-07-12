@@ -1,5 +1,6 @@
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
+import { renderUserBlock } from "./user-profile.js";
 import {
   db,
   getDayPlan,
@@ -360,6 +361,8 @@ const sendPrompt = (
   moment: string,
 ): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}
 오늘은 ${g.today} (${g.todayLabel}).
+
+${renderUserBlock()}
 
 [이번 문안을 보내는 시점]
 ${moment}
