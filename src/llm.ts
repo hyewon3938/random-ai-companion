@@ -18,9 +18,10 @@ export const chat = async (
   system: string,
   turns: ChatTurn[],
   maxTokens = 1024,
+  model = config.model,
 ): Promise<string> => {
   const response = await client.messages.create({
-    model: config.model,
+    model,
     max_tokens: maxTokens,
     system,
     messages: turns,
@@ -33,9 +34,15 @@ export const chatJson = async <T>(
   system: string,
   userPrompt: string,
   maxTokens = 2048,
+  model = config.model,
 ): Promise<T> => {
   const ask = async (extra: string): Promise<string> =>
-    chat(system, [{ role: "user", content: userPrompt + extra }], maxTokens);
+    chat(
+      system,
+      [{ role: "user", content: userPrompt + extra }],
+      maxTokens,
+      model,
+    );
 
   const parse = (raw: string): T => {
     const stripped = raw
