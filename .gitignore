@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 LOCAL-CONTEXT.md
+docs/
 *.db
 *.db-shm
 *.db-wal
