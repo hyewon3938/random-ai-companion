@@ -68,9 +68,8 @@ export interface ExtractOutput {
     topics: { topic: string; note: string }[];
     facets: { facet: string; response: string; note: string }[];
   } | null;
-  // 유저 프로필(이름·성별·나이대) — 대화로 확실해진 것만. env(USER_*) 미지정 시 이걸로 채운다.
+  // 유저 프로필(성별·나이대) — 대화로 확실해진 것만. env(USER_*) 미지정 시 이걸로 채운다.
   user_profile?: {
-    name?: string;
     gender?: string;
     age_band?: string;
   } | null;
@@ -271,12 +270,11 @@ export const applyNightlyOutput = (
         }
       saveUserPreferences(g.chatId, prefs);
     }
-    // 유저 프로필: 대화로 확실해진 이름·성별·나이대만 채운다(빈 값은 기존 유지). env 지정 시엔 그쪽이 우선.
+    // 유저 프로필: 대화로 확실해진 성별·나이대만 채운다(빈 값은 기존 유지). env 지정 시엔 그쪽이 우선.
     if (ex.user_profile)
       saveUserProfile(
         g.chatId,
         {
-          name: ex.user_profile.name,
           gender: ex.user_profile.gender,
           ageBand: ex.user_profile.age_band,
         },
@@ -366,12 +364,12 @@ ${g.knownUserFacts || "(없음)"}
 ${g.knownCast || "(없음)"}
 
 JSON으로:
-{"user_facts":["상대에 대해 새로 알게 된 사실 (직업·상황·취향 등 확실한 것만. 이름·성별·나이대는 여기 말고 user_profile로)"],"char_facts":["'나'가 자기 자신에 대해 새로 말한 즉흥 디테일 (기본 설정에 없을 법한 것)"],"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD (기준 날짜로 환산 가능한 것만, 캐릭터의 직업 상식과 어긋나면 제외 — 예: 은행원의 일요일 근무)","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지"}],"people":[{"who":"char 또는 user","name":"이름이나 호칭(예: 고등학교 친구)","relation":"관계","note":"한 줄"}],"preferences":{"topics":[{"topic":"상대가 몰입한 소재(영화·투자 등)","note":"어떻게 몰입했는지 한 줄"}],"facets":[{"facet":"'나'의 어떤 성향/모습","response":"높음|보통|낮음","note":"근거 한 줄"}]},"user_profile":{"name":"확실히 밝힌 이름만(없으면 생략)","gender":"여성|남성 — 대화로 확실해진 경우만","age_band":"예: 20대 후반 — 확실할 때만"}}
+{"user_facts":["상대에 대해 새로 알게 된 사실 (직업·상황·취향·이름 등 확실한 것만. 성별·나이대는 여기 말고 user_profile로)"],"char_facts":["'나'가 자기 자신에 대해 새로 말한 즉흥 디테일 (기본 설정에 없을 법한 것)"],"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD (기준 날짜로 환산 가능한 것만, 캐릭터의 직업 상식과 어긋나면 제외 — 예: 은행원의 일요일 근무)","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지"}],"people":[{"who":"char 또는 user","name":"이름이나 호칭(예: 고등학교 친구)","relation":"관계","note":"한 줄"}],"preferences":{"topics":[{"topic":"상대가 몰입한 소재(영화·투자 등)","note":"어떻게 몰입했는지 한 줄"}],"facets":[{"facet":"'나'의 어떤 성향/모습","response":"높음|보통|낮음","note":"근거 한 줄"}]},"user_profile":{"gender":"여성|남성 — 대화로 확실해진 경우만","age_band":"예: 20대 후반 — 확실할 때만"}}
 - people의 who: '나'(캐릭터)의 주변 인물이면 char, 상대(유저)가 언급한 상대의 사람(친구·가족·동료)이면 user. 이름을 모르면 호칭 그대로.
 - people 중복 금지: 위 '이미 아는 인물'에 있는 사람은 다시 넣지 않는다. 그 사람을 호칭으로만 부른 것(예: 이미 아는 '이수진(입행 동기)'을 대화에서 "입행 동기"라고만 함)도 새 인물이 아니다. 정말 처음 등장한 사람만 넣는다.
 - preferences.topics: 상대가 '평소보다 말이 많아지거나 깊이 파고든' 소재 = 호감 소재. 길이만이 아니라 상대가 그 화제를 얼마나 이어가고 되묻고 신나 했는지(대화량·몰입)로 판단. 없으면 빈 배열.
 - preferences.facets: 이 대화에서 드러난 '나(우진)'의 성향/모습(안정감 있는 태도·장난과 위트·은행원이라는 직업·취미 공유 등) 각각에 상대의 반응이 어땠는지. 반응이 뚜렷한 것만(response=높음/낮음), 미지근하면 생략. 근거 없이 지어내지 않는다.
-- user_profile: 상대가 자기 입으로 밝혔거나 대화로 분명해진 이름·성별·나이대만. 추측 금지, 애매하면 생략(빈 값은 무시된다). 이미 아는 값은 다시 넣지 않아도 된다.`;
+- user_profile: 상대가 자기 입으로 밝혔거나 대화로 분명해진 성별·나이대만. 추측 금지, 애매하면 생략(빈 값은 무시된다). 이미 아는 값은 다시 넣지 않아도 된다.`;
 
 const SEND_SYSTEM = `너는 주어진 인물 그 자체로, 상대에게 먼저 보낼 메신저 문안을 준비한다. 하루를 시작했다는 걸 가볍게 알리는 아침의 결이 기본이다.`;
 

@@ -18,11 +18,9 @@ export const config = {
   // '완전 밀착' 기간(일): 이 기간엔 찾으면 늘 곁에 있어주고, 자리 비움도 서사로 미리 알린다.
   // 이후 서서히 자기 삶의 시간을 늘려간다("밀착 → 자립" 곡선). bot·context·presence가 공유.
   earlyDays: Number(process.env.EARLY_DAYS ?? 60),
-  // 유저 프로필 — 매칭/온보딩 전 단계라 env로 미리 주입한다(단일 유저 PoC).
-  // 캐릭터가 상대의 이름·성별·나이대를 '처음부터' 알고 시작해, 성별·나이를 넘겨짚는 걸 막는다.
-  // 온보딩이 붙으면 출처만 DB(per-chat 프로필)로 옮기고 렌더링(user-profile.ts)은 그대로 재사용.
+  // 유저 프로필(성별·나이대) — 매칭/온보딩 전 단계라 env로 미리 주입할 수 있다(단일 유저 PoC).
+  // 안 넣으면 밤 정리가 대화로 학습한다. 이름은 다루지 않는다(호칭은 대화에 맡긴다 — user-profile.ts 참고).
   userProfile: {
-    name: process.env.USER_NAME?.trim() || undefined,
     gender: process.env.USER_GENDER?.trim() || undefined,
     ageBand: process.env.USER_AGE_BAND?.trim() || undefined,
   },
