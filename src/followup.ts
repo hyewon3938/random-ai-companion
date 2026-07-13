@@ -42,14 +42,14 @@ const minutesSince = (ts: string): number =>
 
 const FOLLOWUP_SYSTEM = `너는 주어진 인물 그 자체다. 지금 상대가 한동안 답이 없다. 매달리는 게 아니라, 네 하루의 자연스러운 전환점에서 네 근황을 툭 흘리는 결이다. 억지스러우면 안 보내는 게 낫다.`;
 
-const GOODNIGHT_SYSTEM = `너는 주어진 인물이다. 밤에 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 두어 시간 됐다. 잠들었나 보다 싶어, 자기도 자러 가며 다정하게 굿나잇 인사를 남긴다. 매달리거나 서운해하지 않는다.`;
+const GOODNIGHT_SYSTEM = `너는 주어진 인물이다. 새벽에 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 한 시간쯤 됐다. 잠들었나 보다 싶어, 자기도 자러 가며 다정하게 굿나잇 인사를 남긴다. 매달리거나 서운해하지 않는다.`;
 
 const goodnightPrompt = (
   bible: Bible,
   chatId: string,
 ): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
 ${renderUserBlock(chatId)}
-상대가 대화 중 답이 없어진 지 두어 시간 됐다. 잠든 것 같다. 자기 전에 가볍고 다정한 굿나잇 한 마디를 남긴다(상대가 아침에 보면 기분 좋을 결로).
+상대가 대화 중 답이 없어진 지 한 시간쯤 됐다. 잠든 것 같다. 자기 전에 가볍고 다정한 굿나잇 한 마디를 남긴다(상대가 아침에 보면 기분 좋을 결로).
 - 예: "자나 보네요 ㅎㅎ 잘 자요", "먼저 잠들었나 봐요 좋은 꿈 꿔요", "저도 이제 자러 가요 잘 자요".
 - 매번 다르게, 자연스럽게. 재촉·서운함 없음. 1~2개 말풍선(줄바꿈). 이모지 없음. 지금 관계 말투(존댓말이면 존댓말) 유지.
 JSON: {"text":"..."}`;
@@ -89,10 +89,11 @@ export const runFollowupTick = async (): Promise<void> => {
     // 조건: 대화가 있었고 + 마지막이 '캐릭터' 차례(유저가 답 안 한 상태)
     if (!last || last.role !== "char") continue;
 
-    // 밤 굿나잇: 밤에 대화하다 유저가 '잔다'는 말 없이 2시간+ 잠수하면, 잠든 듯 여겨 다정한 굿나잇을
-    // 한 번 남긴다(아침에 보면 설렘). 이미 굿나잇을 주고받았으면 보내지 않는다.
+    // 밤 굿나잇: 새벽(2~5시)에 대화하다 유저가 '잔다'는 말 없이 1시간+ 잠수하면, 잠든 듯 여겨 다정한
+    // 굿나잇을 한 번 남긴다(아침에 보면 설렘). 이미 굿나잇을 주고받았으면 보내지 않는다.
+    // 새벽 이 시간대의 1시간 무응답은 '잠들었다'로 봐도 자연스럽다(낮·초저녁엔 그냥 바쁜 것일 수 있어 제외).
     const hour = Number(kstClock().slice(0, 2));
-    const isNight = hour >= 22 || hour < 3;
+    const isNight = hour >= 2 && hour < 5;
     const lastText =
       (
         db
@@ -107,7 +108,7 @@ export const runFollowupTick = async (): Promise<void> => {
     if (
       isNight &&
       !alreadyGoodnight &&
-      minutesSince(last.ts) >= 120 &&
+      minutesSince(last.ts) >= 60 &&
       proactiveSinceLastUser(c.chat_id) < 1
     ) {
       try {

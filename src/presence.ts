@@ -88,6 +88,19 @@ ${pending ? `상대가 방금 남긴 말이 있다: "${lastLine.replace(/\n/g, "
 - 억지스러우면(딱히 알릴 만한 상황이 아니면) send=false.
 JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
 
+const RETURN_SYSTEM = `너는 주어진 인물이다. 아까 곧 자리를 비운다고 알리고 다녀왔다. 방금 그 일이 끝나서 돌아왔음을 상대에게 가볍게 한 마디 알린다. 매달림이 아니라 자연스러운 복귀 인사다.`;
+
+const returnPrompt = (
+  bible: Bible,
+  activity: string,
+  chatId: string,
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
+${renderUserBlock(chatId)}
+지금 시각 ${kstClock()}. 너는 방금 ${activity} 을(를) 끝내고 돌아왔다. 그 사이 상대에게선 답이 없었다.
+- 돌아왔음을 가볍게 알린다(이제 끝났어요 / 다녀왔어요 같은 결). 아까 하려던 안부를 자연스럽게 이어도 좋다.
+- 짧게 1~2개 말풍선(줄바꿈). 이모지 없음. 재촉·서운함 없음. 지금 관계 말투(존댓말이면 존댓말) 유지.
+JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
+
 export const runPresenceTick = async (): Promise<void> => {
   const rows = db
     .prepare(`SELECT * FROM characters WHERE status = 'active'`)
@@ -128,6 +141,52 @@ export const runPresenceTick = async (): Promise<void> => {
     ).c;
     if (cnt >= 4) continue;
 
+    // 복귀 알림: 예고하고 들어간 불가 일정이 방금 끝났는데 그 사이 유저가 답이 없었으면,
+    // 돌아왔음을 먼저 알린다("이제 끝났어"). 유저가 그 사이 답했으면 일반 답장이 자연스럽게 잇는다.
+    const ended = blocks.find(
+      (b) =>
+        isAwayUnavail(b) &&
+        nowMin - toMin(b.end) >= 0 &&
+        nowMin - toMin(b.end) <= 12,
+    );
+    if (ended) {
+      const announced = db
+        .prepare(
+          `SELECT 1 FROM messages WHERE chat_id = ? AND ts >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
+        )
+        .get(
+          c.chat_id,
+          dayStart,
+          '%"kind":"presence"%',
+          `%"block":"${ended.start}"%`,
+        );
+      const returned = db
+        .prepare(
+          `SELECT 1 FROM messages WHERE chat_id = ? AND ts >= ? AND meta_json LIKE ? LIMIT 1`,
+        )
+        .get(c.chat_id, dayStart, `%"return":"${ended.start}"%`);
+      if (announced && !returned && last.role === "char") {
+        try {
+          const bible = JSON.parse(c.bible_json) as Bible;
+          const draft = await chatJson<{ send: boolean; text?: string }>(
+            RETURN_SYSTEM,
+            returnPrompt(bible, ended.activity, c.chat_id),
+            400,
+            config.model,
+          );
+          if (draft.send && draft.text) {
+            await sendProactive(c.chat_id, c.id, draft.text, "presence", {
+              return: ended.start,
+            });
+            console.log(`[presence] return @ ${ended.activity} → ${c.chat_id}`);
+          }
+        } catch (e) {
+          console.error("[presence] return error:", e);
+        }
+        continue;
+      }
+    }
+
     // 예고할 불가 블록 찾기: 나가는 경우는 시작 직전, 연속 불가 사이는 경계(직후)에 알린다.
     let target: PlanBlock | null = null;
     let between = false;
@@ -135,7 +194,16 @@ export const runPresenceTick = async (): Promise<void> => {
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i];
       if (!isAwayUnavail(b)) continue;
-      if (toMin(b.end) - toMin(b.start) < 25) continue; // 짧은 불가는 예고 불필요
+      const dur = toMin(b.end) - toMin(b.start);
+      if (dur < 10) continue; // 아주 짧은 건 예고 불필요
+      if (dur < 20) {
+        // 20분 미만은 대개 그냥 사라지되, 가끔(블록·날짜별 결정론적으로 ~1/4)은 미리 알린다
+        const seed = [...(c.chat_id + kstDateString() + b.start)].reduce(
+          (a, ch) => a + ch.charCodeAt(0),
+          0,
+        );
+        if (seed % 4 !== 0) continue;
+      }
       const prev = i > 0 ? blocks[i - 1] : null;
       const prevAway = prev ? isAwayUnavail(prev) : false;
       const rel = toMin(b.start) - nowMin; // +면 아직 시작 전, -면 이미 시작

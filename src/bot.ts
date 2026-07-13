@@ -89,7 +89,7 @@ const sleepWhileTyping = async (chatId: string, ms: number): Promise<void> => {
 // 사람이 치는 것처럼: 봇 즉답 대신 버블별로 타이핑을 표시하고 길이에 비례한 텀을 두고 보낸다.
 const sendBubblesTo = async (chatId: string, text: string): Promise<void> => {
   for (const raw of splitBubbles(text)) {
-    const bubble = fixQuestion(raw);
+    const bubble = fixQuestion(stripDquotes(raw));
     // 실제 치는 속도(≈5~6자/초)에 맞춘 타이핑 시간. 90ms/자는 복붙처럼 빨라서 180ms/자로 늦춤.
     const typeMs =
       clamp(bubble.length * 180, 1700, 9000) + Math.random() * 1000;
@@ -114,9 +114,15 @@ const Q_ENDING =
   /(나요|인가요|은가요|까요|을까요|ㄹ까요|을래요|ㄹ래요|래요|니|냐|디)$/;
 const Q_WORD =
   /(뭐|무슨|무엇|뭘|어디|언제|누구|누가|왜|어떻게|어떤|어느|얼마|몇|어때)/;
+// 큰따옴표는 특유의 AI 느낌이라 발화에서 지운다(인용·강조 모두 따옴표 없이).
+const stripDquotes = (s: string): string => s.replace(/[“”„‟"]/gu, "");
+
 const fixQuestion = (bubble: string): string => {
   const t = bubble.replace(/\s+$/u, "");
   if (!t) return bubble;
+  // 평서 종결 어미 뒤에 LLM이 잘못 붙인 물음표는 뗀다(자기 설명을 확인 구하듯 끝내는 패턴 방지).
+  const q = t.match(/^(.*[^\s?？])[?？]+$/u);
+  if (q && DECLARATIVE_END.test(q[1])) return q[1] + ".";
   if (/[?？!！~.…”"』」)\]]$/u.test(t)) return bubble; // 이미 종결부호
   if (/[ㅋㅎ]$/u.test(t)) return bubble; // 웃음으로 끝나면 그대로
   if (DECLARATIVE_END.test(t)) return bubble; // 명백한 평서

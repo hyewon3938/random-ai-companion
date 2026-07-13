@@ -35,9 +35,9 @@ cron.schedule(
   { timezone: "Asia/Seoul" },
 );
 
-// 침묵 팔로업: 15분 틱. 낮엔 각본 전환점 근황, 밤(늦게~새벽 3시)엔 유저가 잠든 듯하면 굿나잇 챙김
+// 침묵 팔로업: 15분 틱. 낮엔 각본 전환점 근황, 새벽(2~5시)엔 유저가 잠든 듯하면 굿나잇 챙김
 cron.schedule(
-  "*/15 0-3,8-23 * * *",
+  "*/15 0-4,8-23 * * *",
   () => {
     runFollowupTick().catch((e) => console.error("[followup] tick error:", e));
   },
