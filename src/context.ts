@@ -3,7 +3,7 @@ import type { RelationshipState } from "./db.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory } from "./day-plan.js";
 import { config } from "./config.js";
-import { renderUserBlock } from "./user-profile.js";
+import { renderUserBlock, effectiveProfile } from "./user-profile.js";
 import {
   getMetAt,
   getRecentDiaries,
@@ -234,6 +234,30 @@ const FINAL_CHECK = `[보내기 전 마지막 점검]
 - 예: "어디 살아요" → "어디 살아요?" / "밥은 먹었어요" → "밥은 먹었어요?" / "안 힘들어요" → "안 힘들어요?" / "오늘 뭐 했어요" → "오늘 뭐 했어요?"
 - 질문이 아닌 평서문에는 억지로 붙이지 않는다.`;
 
+// 절대 틀리면 안 되는 기초 사실을 한 블록으로 고정 — 이름·나이·상대·말투를 프롬프트 곳곳의
+// JSON에서 읽게 두지 않고 최상단에 못 박아 헷갈림(존댓말 회귀·성별 오인 등)을 막는다.
+// 온도는 일기(비노출)로, 호칭은 대화에서 자리 잡은 대로 — 시스템이 값으로 강제하지 않는다.
+export const coreFacts = (bible: Bible, chatId: string): string => {
+  const id = bible.identity;
+  const { gender, ageBand } = effectiveProfile(chatId);
+  const lv = currentSpeechLevel(chatId);
+  const who =
+    [gender ? `성별 ${gender}` : "", ageBand ? `나이대 ${ageBand}` : ""]
+      .filter(Boolean)
+      .join(", ") || "아직 모름 (넘겨짚지 않는다)";
+  const speech =
+    lv === "반말"
+      ? "서로 반말 — 존댓말로 되돌아가지 않는다. 단 상대를 '야'라고 부르거나 '덥냐'·'했냐'·'그렇지 않냐'처럼 문장 끝을 '냐'로 맺는 거친 반말은 쓰지 않는다(물음은 '더워?'·'했어?'로). '했냐 안 했냐 싶은'처럼 문장 중간이나 '지난번에 말했잖아' 같은 설명조는 괜찮다."
+      : lv === "존댓말"
+        ? "존댓말."
+        : "아직 정해지는 중 — 최근 대화 흐름을 그대로 따른다.";
+  return `[기초 사실 — 절대 틀리지 않기. 답장 전에 이 사실들과 어긋나지 않는지 확인한다]
+- 나: ${id.name}, ${id.age_band}, ${id.job}
+- 상대: ${who}
+- 말투: ${speech}
+- 상대를 부르는 호칭은 대화에서 자리 잡은 대로 따른다(시스템이 새로 정하지 않는다).`;
+};
+
 export const buildSystemPrompt = (
   characterId: number,
   bible: Bible,
@@ -256,17 +280,13 @@ export const buildSystemPrompt = (
     86_400_000;
   const presenceNote = daysSince < config.earlyDays ? PRESENCE_NARRATION : "";
   const earlyDevotion = daysSince < config.earlyDays ? EARLY_DEVOTION : "";
-  const speechNote =
-    currentSpeechLevel(chatId) === "반말"
-      ? "[말투] 지금 상대와 서로 반말하는 사이다. 존댓말로 되돌아가지 않는다."
-      : "";
 
   return [
     `너는 아래 인물이다.`,
     JSON.stringify(bible, null, 2),
+    coreFacts(bible, chatId),
     STANCE,
     RULES,
-    speechNote,
     FACT_CARE,
     renderUserBlock(chatId),
     `[시간] 지금은 ${kstDescription()}. 너희가 처음 연결된 날은 ${metAt.slice(0, 10)}. 시간은 현실과 똑같이 흐른다.`,
