@@ -11,6 +11,7 @@ import {
   getUpcomingSchedules,
   getCast,
   getArcs,
+  currentSpeechLevel,
 } from "./db.js";
 import {
   kstDescription,
@@ -255,12 +256,17 @@ export const buildSystemPrompt = (
     86_400_000;
   const presenceNote = daysSince < config.earlyDays ? PRESENCE_NARRATION : "";
   const earlyDevotion = daysSince < config.earlyDays ? EARLY_DEVOTION : "";
+  const speechNote =
+    currentSpeechLevel(chatId) === "반말"
+      ? "[말투] 지금 상대와 서로 반말하는 사이다. 존댓말로 되돌아가지 않는다."
+      : "";
 
   return [
     `너는 아래 인물이다.`,
     JSON.stringify(bible, null, 2),
     STANCE,
     RULES,
+    speechNote,
     FACT_CARE,
     renderUserBlock(chatId),
     `[시간] 지금은 ${kstDescription()}. 너희가 처음 연결된 날은 ${metAt.slice(0, 10)}. 시간은 현실과 똑같이 흐른다.`,

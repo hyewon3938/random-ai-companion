@@ -304,6 +304,37 @@ export const addCastMember = (
   ).run(characterId, who, name, relation, note, now);
 };
 
+// 지금 이 관계가 반말인지 존댓말인지 — 최근 캐릭터 발화의 종결어미로 판정한다.
+// 반말 전환이 명시 상태로 저장돼 있지 않아, 선톡·팔로업 등 최근 대화를 안 보는 경로가
+// 씨앗 말투(존댓말)로 되돌아가는 회귀를 막기 위한 힌트. 표본이 적으면 null(판단 보류).
+export const currentSpeechLevel = (
+  chatId: string,
+): "반말" | "존댓말" | null => {
+  const rows = db
+    .prepare(
+      `SELECT text FROM messages WHERE chat_id = ? AND role = 'char' ORDER BY id DESC LIMIT 14`,
+    )
+    .all(chatId) as { text: string }[];
+  const JON =
+    /(요|에요|예요|세요|까요|네요|어요|아요|죠|습니다|ㅂ니다|십시오)[?!~.… ]*$/;
+  const BAN =
+    /(어|아|지|자|래|니|봐|줘|거든|거야|잖아|는데|던데|더라|을게|ㄹ게|야|음)[?!~.… ]*$/;
+  let jon = 0;
+  let ban = 0;
+  for (const r of rows) {
+    const last =
+      r.text
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .pop() ?? "";
+    if (JON.test(last)) jon++;
+    else if (BAN.test(last)) ban++;
+  }
+  if (jon + ban < 3) return null;
+  return ban > jon ? "반말" : "존댓말";
+};
+
 // 삶의 큰 흐름: 연/계절/월/주 단위 이벤트 아크. 하루 각본이 이를 참고한다
 export const getArcs = (characterId: number): Record<string, string> => {
   const rows = db

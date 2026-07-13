@@ -7,6 +7,7 @@ import {
   getMetAt,
   getDayPlan,
   lastMessage,
+  currentSpeechLevel,
   type CharacterRow,
 } from "./db.js";
 import type { Bible } from "./character.js";
@@ -66,7 +67,7 @@ const presencePrompt = (
   lastLine: string,
   fixed: boolean,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${currentSpeechLevel(chatId) === "반말" ? " (지금은 서로 반말하는 사이 — 존댓말로 되돌아가지 마라)" : ""}
 ${renderUserBlock(chatId)}
 지금 시각 ${kstClock()}.
 ${
@@ -94,7 +95,7 @@ const returnPrompt = (
   bible: Bible,
   activity: string,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${currentSpeechLevel(chatId) === "반말" ? " (지금은 서로 반말하는 사이 — 존댓말로 되돌아가지 마라)" : ""}
 ${renderUserBlock(chatId)}
 지금 시각 ${kstClock()}. 너는 방금 ${activity} 을(를) 끝내고 돌아왔다. 그 사이 상대에게선 답이 없었다.
 - 돌아왔음을 가볍게 알린다(이제 끝났어요 / 다녀왔어요 같은 결). 아까 하려던 안부를 자연스럽게 이어도 좋다.
