@@ -38,7 +38,7 @@ yarn dev        # 로컬 기동 (long polling)
 ```
 [Telegram] ←→ src/bot.ts (grammY long polling, 유저 분할입력 디바운스(유저별 텀 학습 20~40s) + 분할 발화 + 각본기반 답장지연 blockDelayMs(밤대화 즉답·초반 밀착 EARLY_DAYS=60·자다 깸·불가는 일정 끝날 때쯤) + 물음표 보정 fixQuestion + 부팅 시 놓친 답장 복구 recoverMissedReplies=워터마크 중복방지+최근 3h만(자정 경계 버그 회피) + 발송 종류 로그 kind=reply|recover|morning|followup)
                 ├─ /start → src/character.ts (PoC: 고정 대표 캐릭터 DAEPYO_BIBLE. 랜덤 생성 코드는 본서비스용으로 보존)
-                ├─ 메시지 → src/context.ts (바이블+관계(유저기억·누적정체성)+일기+KST+근무일+하루 각본+일정+아크+관계도) → src/llm.ts → 응답
+                ├─ 메시지 → src/context.ts (바이블+관계(유저기억·누적정체성)+일기+KST+근무일+하루 각본+일정+아크+관계도, **최상단 coreFacts로 이름·나이·상대·말투 기초 사실 고정** — 말투는 currentSpeechLevel이 최근 발화로 반말/존댓말 판정해 존댓말 회귀·성별 오인 방지, 반말이어도 '냐' 어미 거친 반말 금지) → src/llm.ts → 응답
                 ├─ src/day-plan.ts — 하루 각본: 밤 정리가 새 날 것을 사전 생성(대화가 먼저면 lazy). 그날 컨디션 시드(월 리듬)를 읽어 컨디션→기상→활동 연결, 어제 일기 실제 여파가 시드보다 우선. 블록별 **답장 여건(즉답/짬짬이/불가) × 활동 성격(개인/사회/공적)** — 두 축은 직교. category는 옵셔널, 없으면 activity로 추론(blockCategory: 회의·시험·발표·업무=공적 / 친구·가족·병원·학원·회식=사회 / 나머지 솔로=개인)
                 ├─ src/life-plan.ts — 월 리듬(중간 지평): 한 달치 이벤트 + 매일 컨디션 시드를 미리 생성(ensureMonthPlan), 항상 ~1개월 런웨이 롤링(ensureRhythmRunway). 이벤트↔컨디션 인과(회식 다음날 피곤 등), 급변 없는 파도. Opus, 밤 정리 배치가 생성
                 ├─ src/nightly.ts — 밤 정리(새벽 5시 컷오프): gather/apply 분리. 기본=외부 scheduled task(구독)가 tools/nightly-read·write로 수행, 폴백=봇 내 05:40 크론(API·opus). 월 리듬(rhythmNeeded 신호→rhythm 출력)도 이 배치가 생성
