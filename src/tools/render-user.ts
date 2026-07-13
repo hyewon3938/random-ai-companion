@@ -42,8 +42,52 @@ const prefs = getUserPreferences(row.chat_id);
 const lens = msgs.map((m) => m.text.length).sort((a, b) => a - b);
 const medianLen = lens.length ? lens[Math.floor(lens.length / 2)] : 0;
 const maxLen = lens.length ? lens[lens.length - 1] : 0;
-const spikeThreshold = Math.max(30, Math.round(medianLen * 1.8));
-const spikes = msgs.filter((m) => m.text.length >= spikeThreshold).slice(-10);
+// 호감 스파이크는 '한 턴'(유저가 연달아 보낸 말풍선 묶음) 단위로 본다 — 우진의 한 마디에
+// 유저가 평소보다 많은 말풍선/글자로 반응했는가. 단일 메시지 길이보다 진짜 몰입에 가깝다.
+type UTurn = {
+  ts: string;
+  bubbles: number;
+  chars: number;
+  text: string;
+  prompt: string;
+};
+const allWithText = db
+  .prepare(
+    `SELECT role, ts, text FROM messages WHERE chat_id = ? AND role IN ('user','char') ORDER BY id`,
+  )
+  .all(row.chat_id) as { role: string; ts: string; text: string }[];
+const turns: UTurn[] = [];
+let lastCharText = "";
+for (let i = 0; i < allWithText.length; i++) {
+  const m = allWithText[i];
+  if (m.role === "char") {
+    lastCharText = m.text;
+    continue;
+  }
+  const contiguous = i > 0 && allWithText[i - 1].role === "user";
+  const cur = turns[turns.length - 1];
+  if (contiguous && cur) {
+    cur.bubbles += 1;
+    cur.chars += m.text.length;
+    cur.text += " " + m.text;
+  } else {
+    turns.push({
+      ts: m.ts,
+      bubbles: 1,
+      chars: m.text.length,
+      text: m.text,
+      prompt: lastCharText,
+    });
+  }
+}
+const turnChars = turns.map((t) => t.chars).sort((a, b) => a - b);
+const medianTurnChars = turnChars.length
+  ? turnChars[Math.floor(turnChars.length / 2)]
+  : 0;
+const spikeCharCut = Math.max(40, Math.round(medianTurnChars * 1.8));
+const spikeTurns = turns
+  .filter((t) => t.chars >= spikeCharCut || t.bubbles >= 3)
+  .slice(-10);
 
 // 대화량(메시지 개수)도 몰입 신호 — 하루(새벽5시 경계)별 유저 메시지 수
 const dayOf = (ts: string): string =>
@@ -215,7 +259,7 @@ const html = `<!doctype html>
 <h2><span class="kicker k2">측정</span>행동에서 읽어낸 신호</h2>
 <div class="grid">
   <div class="card"><h2 style="margin-top:0">답장 리듬</h2><div class="metric"><div class="m"><b>${p80Gap ? Math.round(p80Gap / 1000) + "초" : "—"}</b><span>이어 보내기 텀(상위)</span></div><div class="m"><b>${waitSec}초</b><span>맞춤 디바운스 대기</span></div></div><div style="font-size:11.5px;color:#8a8272;margin-top:8px">짧게 끊어 보내는지 길게 몰아 치는지를 재서 답장 대기를 맞춘다.</div></div>
-  <div class="card"><h2 style="margin-top:0">대화량 · 메시지 길이</h2><div class="metric"><div class="m"><b>${avgPerDay}개</b><span>하루 평균 메시지</span></div><div class="m"><b>${medianLen}자</b><span>평소 길이(중앙값)</span></div><div class="m"><b>${spikes.length}</b><span>길이 스파이크</span></div></div><div style="font-size:11.5px;color:#8a8272;margin-top:8px">몰입은 길이보다 <b>대화량</b>(그 화제를 얼마나 이어가는지)이 더 크게 말한다 — 진짜 판정은 밤 정리 몫(아래).</div></div>
+  <div class="card"><h2 style="margin-top:0">대화량 · 메시지 길이</h2><div class="metric"><div class="m"><b>${avgPerDay}개</b><span>하루 평균 메시지</span></div><div class="m"><b>${medianLen}자</b><span>평소 길이(중앙값)</span></div><div class="m"><b>${spikeTurns.length}</b><span>반응 스파이크</span></div></div><div style="font-size:11.5px;color:#8a8272;margin-top:8px">몰입은 길이보다 <b>대화량</b>(그 화제를 얼마나 이어가는지)이 더 크게 말한다 — 진짜 판정은 밤 정리 몫(아래).</div></div>
   <div class="card"><h2 style="margin-top:0">먼저 다가가는 신호 <span style="font-size:11px;color:#c0685e">♥ 호감</span></h2><div class="metric"><div class="m"><b>${initiations}</b><span>먼저 말 건 횟수</span></div><div class="m"><b style="color:#c0685e">${reReaches}</b><span>답장 없어도 또 연락</span></div><div class="m"><b>${topInitHour >= 0 ? topInitHour + "시" : "—"}</b><span>주로 먼저 여는 때</span></div></div><div style="font-size:11.5px;color:#8a8272;margin-top:8px"><b>우진의 답장이 아직 없는데도 유저가 또 말을 거는 것</b> — 답을 기다리다 한 번 더 연락하는 것은 강한 호감 신호다. 언제 먼저 다가오는지(선호 시간대)도 매칭·선톡 타이밍의 재료가 된다.</div></div>
   <div class="card" style="grid-column:1/3"><h2 style="margin-top:0">활동 시간대 — 몇 시에 대화하나 (24시간)</h2><div class="hist">${hourBars}</div><div class="hlabels">${hourLabels}</div></div>
 </div>
@@ -226,19 +270,20 @@ const html = `<!doctype html>
   <div class="card"><h2 style="margin-top:0">우진의 어떤 모습에 반응이 좋나</h2>${prefs.facets.length ? prefs.facets.map((f) => `<div class="facet"><span class="rtag ${f.response === "높음" ? "r-high" : f.response === "낮음" ? "r-low" : "r-mid"}">${esc(f.response)}</span><span><b>${esc(f.facet)}</b>${f.note ? ` — ${esc(f.note)}` : ""}</span></div>`).join("") : "<div class='empty' style='font-size:13px'>(아직 없음 — 안정감·위트·직업·취미 등 우진의 성향별 반응을 밤 정리가 판정)</div>"}</div>
 </div>
 
-<h2><span class="kicker k2">측정</span>원시 신호 — 평소보다 길게 반응한 순간 (위 '호감 소재'의 재료)</h2>
+<h2><span class="kicker k2">측정</span>원시 신호 — 우진의 말에 평소보다 크게 반응한 순간 (위 '호감 소재'의 재료)</h2>
 <div class="card spike">${
-  spikes.length
-    ? spikes
+  spikeTurns.length
+    ? spikeTurns
+        .slice()
         .reverse()
         .map(
           (s) =>
-            `<div><span class="s">${s.ts.slice(5, 16)} (${s.text.length}자)</span> ${esc(s.text.replace(/\n/g, " ").slice(0, 80))}</div>`,
+            `<div style="margin-bottom:9px"><span class="s">${s.ts.slice(5, 16)} · 말풍선 ${s.bubbles}개 · ${s.chars}자</span>${s.prompt ? `<br><span style="color:#8a8272">우진: ${esc(s.prompt.replace(/\n/g, " ").slice(0, 46))}</span>` : ""}<br>나: ${esc(s.text.replace(/\n/g, " ").slice(0, 90))}</div>`,
         )
         .join("")
     : "(아직 없음)"
 }</div>
-<div style="font-size:11.5px;color:#8a8272;margin-top:6px">길이는 프록시다. 무엇에 몰입했는지(진짜 선호 소재)는 밤 정리가 내용으로 판정해 <code>user_preferences</code>에 넣는다 — 길지만 부정(불평)은 걸러서.</div>
+<div style="font-size:11.5px;color:#8a8272;margin-top:6px">우진의 한 마디에 유저가 평소보다 많은 말풍선·글자로 답한 순간이다(단일 메시지가 아니라 한 턴 전체로 잰다). 무엇에 몰입했는지(진짜 선호 소재)는 밤 정리가 내용으로 판정해 <code>user_preferences</code>에 넣는다 — 양은 많아도 부정(불평)은 걸러서.</div>
 
 <h2>이 데이터가 어떻게 쓰이나 — 선호에서 다음 만남으로</h2>
 <div class="flow">
