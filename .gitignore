@@ -9,3 +9,7 @@ docs/
 logs/
 data/
 .DS_Store
+
+# 사생활 데모 소스 (실제 폰 녹화·이미지 — 공개 금지)
+assets/*.mov
+assets/*.jpg
