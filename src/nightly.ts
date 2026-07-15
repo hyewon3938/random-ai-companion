@@ -18,6 +18,7 @@ import {
   getUserPreferences,
   saveUserPreferences,
   saveUserProfile,
+  currentSpeechLevel,
   type CharacterRow,
   type DaySeed,
 } from "./db.js";
@@ -107,6 +108,7 @@ export interface NightlyGathered {
   planBriefYesterday: string;
   planExistsToday: boolean;
   knownUserFacts: string;
+  speechLevel: "반말" | "존댓말" | null; // 현재 관계 말투 — 선톡 문안이 존댓말로 회귀하지 않게
   knownCast: string; // 이미 아는 우진의 주변 인물(이름·관계) — 추출 시 중복 방지용
   openLoops: string[];
   userSchedulesUpcoming: string; // 상대의 다가오는 일정 (선톡 근거)
@@ -170,6 +172,7 @@ export const gatherNightlyInput = (
     planBriefYesterday: planBrief(getDayPlan(character.id, diaryDate)),
     planExistsToday: !!getDayPlan(character.id, today),
     knownUserFacts: state.user_facts.map((f) => f.fact).join(" / "),
+    speechLevel: currentSpeechLevel(character.chat_id),
     knownCast: [
       ...getCast(character.id, "char").map((c) => `${c.name}(${c.relation})`),
       ...getCast(character.id, "user").map(
@@ -379,7 +382,7 @@ const SEND_SYSTEM = `너는 주어진 인물 그 자체로, 상대에게 먼저 
 const sendPrompt = (
   g: NightlyGathered,
   moment: string,
-): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}
+): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${currentSpeechLevel(g.chatId) === "반말" ? " (지금 서로 반말 — 존댓말로 되돌아가지 말고, '야'·'덥냐'·'했냐'처럼 문장 끝을 '냐'로 맺는 거친 반말도 쓰지 마라)" : ""}
 오늘은 ${g.today} (${g.todayLabel}).
 
 ${renderUserBlock(g.chatId)}
