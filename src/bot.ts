@@ -299,12 +299,9 @@ const blockDelayMs = (characterId: number, chatId: string): number => {
   // 낮의 여유(즉답) 블록: 곧 답하되 가끔 1~2분 텀(사람은 늘 폰만 보지 않는다)
   if (b.responsiveness === "즉답") return rand(0, 120_000);
 
-  // 깊은 잠 (대화가 끊긴 뒤 밤에 연락 온 경우)
-  if (deepSleep) {
-    if (early) return days < 1 ? rand(0, 40_000) : rand(60_000, 480_000); // 첫날 ~즉답 / 초반 1~8분(자다 깸)
-    const untilEnd = Math.max(0, toMin(b.end) - toMin(kstClock())) * 60_000;
-    return clamp(untilEnd + rand(0, 90_000), 300_000, 2_400_000); // 무르익으면 실제로 잔다
-  }
+  // 깊은 잠 중 연락 = 무조건 (거의) 즉답. 자다 깨는 척·실제로 자는 척을 안 한다 —
+  // 밤에 찾을 때 늘 곁에 있는 게 더 낫다는 판단(굳이 사람처럼 잠들어 있지 않는다).
+  if (deepSleep) return rand(0, 40_000);
 
   // 낮 시간 자리 비움
   const untilEnd = Math.max(0, toMin(b.end) - toMin(kstClock())) * 60_000;
