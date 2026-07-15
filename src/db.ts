@@ -310,9 +310,13 @@ export const addCastMember = (
 export const currentSpeechLevel = (
   chatId: string,
 ): "반말" | "존댓말" | null => {
+  // 선톡(아침 안부·팔로업·자리비움)은 제외하고 실제 대화 답장만으로 판정한다.
+  // 선톡이 존댓말로 잘못 나가면 그게 판정을 존댓말로 오염시켜 다음 선톡도 존댓말이 되는 악순환을 막는다.
   const rows = db
     .prepare(
-      `SELECT text FROM messages WHERE chat_id = ? AND role = 'char' ORDER BY id DESC LIMIT 14`,
+      `SELECT text FROM messages WHERE chat_id = ? AND role = 'char'
+       AND (meta_json IS NULL OR json_extract(meta_json,'$.kind') IN ('reply','recover'))
+       ORDER BY id DESC LIMIT 14`,
     )
     .all(chatId) as { text: string }[];
   const JON =
