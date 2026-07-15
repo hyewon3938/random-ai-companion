@@ -299,7 +299,9 @@ export const applyNightlyOutput = (
     });
   saveRelationshipState(g.characterId, state, ts);
 
-  if (out.plan) saveDayPlan(g.characterId, g.today, JSON.stringify(out.plan));
+  // 이미 그날 각본이 있으면 덮어쓰지 않는다(미리 생성해둔 각본을 그대로 사용).
+  if (out.plan && !getDayPlan(g.characterId, g.today))
+    saveDayPlan(g.characterId, g.today, JSON.stringify(out.plan));
 
   if (out.arcs) {
     for (const h of ["year", "season", "month", "week"] as const)
