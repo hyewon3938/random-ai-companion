@@ -237,10 +237,15 @@ const FINAL_CHECK = `[보내기 전 마지막 점검]
 // 절대 틀리면 안 되는 기초 사실을 한 블록으로 고정 — 이름·나이·상대·말투를 프롬프트 곳곳의
 // JSON에서 읽게 두지 않고 최상단에 못 박아 헷갈림(존댓말 회귀·성별 오인 등)을 막는다.
 // 온도는 일기(비노출)로, 호칭은 대화에서 자리 잡은 대로 — 시스템이 값으로 강제하지 않는다.
-export const coreFacts = (bible: Bible, chatId: string): string => {
+export const coreFacts = (
+  bible: Bible,
+  chatId: string,
+  characterId: number,
+): string => {
   const id = bible.identity;
   const { gender, ageBand } = effectiveProfile(chatId);
   const lv = currentSpeechLevel(chatId);
+  const cur = currentBlock(characterId);
   const who =
     [gender ? `성별 ${gender}` : "", ageBand ? `나이대 ${ageBand}` : ""]
       .filter(Boolean)
@@ -251,7 +256,11 @@ export const coreFacts = (bible: Bible, chatId: string): string => {
       : lv === "존댓말"
         ? "존댓말."
         : "아직 정해지는 중 — 최근 대화 흐름을 그대로 따른다.";
+  const nowLine = cur
+    ? `- 지금: ${kstDescription()} — 너는 지금 "${cur.activity}" 중이다(답장 여건 ${cur.responsiveness}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
+    : `- 지금: ${kstDescription()}. 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
   return `[기초 사실 — 절대 틀리지 않기. 답장 전에 이 사실들과 어긋나지 않는지 확인한다]
+${nowLine}
 - 나: ${id.name}, ${id.age_band}, ${id.job}
 - 상대: ${who}
 - 말투: ${speech}
@@ -284,7 +293,7 @@ export const buildSystemPrompt = (
   return [
     `너는 아래 인물이다.`,
     JSON.stringify(bible, null, 2),
-    coreFacts(bible, chatId),
+    coreFacts(bible, chatId, characterId),
     STANCE,
     RULES,
     FACT_CARE,
