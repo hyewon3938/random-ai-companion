@@ -1,4 +1,5 @@
 import { Bot } from "grammy";
+import { inspect } from "node:util";
 import { config } from "./config.js";
 import { createDaepyoCharacter, type Bible } from "./character.js";
 import { ensureTodayPlan, blockCategory } from "./day-plan.js";
@@ -38,6 +39,19 @@ const sleep = (ms: number): Promise<void> =>
 const clamp = (n: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, n));
 
+// 방어적 로그 위생 — 에러 출력에 봇 토큰 같은 민감 값이 섞여 남지 않도록 로그 직전에 가린다.
+// 외부 라이브러리가 에러에 요청 정보를 담을 수 있어, 만약을 대비해 값 자체 + 토큰 형태 둘 다 마스킹.
+const redactToken = (s: string): string =>
+  s
+    .split(config.telegramToken)
+    .join("<TOKEN>")
+    .replace(/\d{6,}:[A-Za-z0-9_-]{30,}/g, "<TOKEN>");
+
+// 에러를 안전하게 로그한다 — 어떤 형태의 에러든 깊이 직렬화한 뒤 민감 값을 가리고 출력.
+export const logErr = (prefix: string, e: unknown): void => {
+  console.error(prefix, redactToken(inspect(e, { depth: 5 })));
+};
+
 // 생각·문장 단위로 나뉜 말풍선(LLM이 줄바꿈으로 끊음). 상한을 넘는 초과분만 마지막에 합침
 const MAX_BUBBLES = 6;
 const splitBubbles = (text: string): string[] => {
@@ -64,7 +78,11 @@ const sendWithRetry = async (
       await bot.api.sendMessage(chatId, text);
       return;
     } catch (e) {
-      if (i === tries - 1) throw e;
+      // 최종 실패 시 원본 에러를 정리·마스킹해서 던진다 — 하류 로그가 깔끔하고 민감 값이 안 남게.
+      if (i === tries - 1)
+        throw new Error(
+          `sendMessage 실패(${tries}회): ${redactToken(inspect(e, { depth: 4 }))}`,
+        );
       await sleep(1500 * (i + 1));
     }
   }
@@ -346,7 +364,7 @@ const respond = async (
     const bible = JSON.parse(character.bible_json) as Bible;
     // 오늘의 하루 각본이 없으면 생성(그날 첫 대화 때 한 번). 실패해도 대화는 계속
     await ensureTodayPlan(character.id, bible).catch((e) =>
-      console.error("[bot] day plan error:", e),
+      logErr("[bot] day plan error:", e),
     );
     const state = getRelationshipState(character.id);
     const system = buildSystemPrompt(character.id, bible, state, chatId);
@@ -380,7 +398,7 @@ const respond = async (
     logMessage(chatId, character.id, "char", text, nowIso(), { kind });
     // 세션 중 가벼운 사실 포착(비동기 — 답장 지연 없음). 유저 메시지가 쌓이면 밤 정리 전에 저장.
     void maybeCaptureFacts(character.id, chatId).catch((e) =>
-      console.error("[capture] error:", e),
+      logErr("[capture] error:", e),
     );
   } finally {
     responding.delete(chatId);
@@ -399,7 +417,7 @@ const arm = (chatId: string, waitMs: number): void => {
         arm(chatId, waitMs);
         return;
       }
-      respond(chatId).catch((e) => console.error("[bot] respond error:", e));
+      respond(chatId).catch((e) => logErr("[bot] respond error:", e));
     }, waitMs),
   );
 };
@@ -442,14 +460,18 @@ export const recoverMissedReplies = async (): Promise<void> => {
       );
       continue;
     }
+    const prev = getRecoveryMark(c.chat_id);
     setRecoveryMark(c.chat_id, last.ts); // 보내기 전에 책임 표시(재부팅 중복 방지)
     console.log(`[recover] 놓친 답장 복구: ${c.chat_id} (마지막 ${last.ts})`);
-    await respond(c.chat_id, "recover").catch((e) =>
-      console.error("[recover] error:", e),
-    );
+    try {
+      await respond(c.chat_id, "recover");
+    } catch (e) {
+      setRecoveryMark(c.chat_id, prev ?? ""); // 전송 실패 → 되돌려 다음 복구 틱에 재시도
+      logErr("[recover] error:", e);
+    }
   }
 };
 
 bot.catch((err) => {
-  console.error("[bot] error:", err.error);
+  logErr("[bot] error:", err.error);
 });

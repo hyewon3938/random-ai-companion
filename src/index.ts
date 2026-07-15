@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import { bot, recoverMissedReplies } from "./bot.js";
+import { bot, recoverMissedReplies, logErr } from "./bot.js";
 import { db, type CharacterRow } from "./db.js";
 import { runNightly } from "./nightly.js";
 import { runDispatchTick } from "./dispatch.js";
@@ -20,7 +20,7 @@ cron.schedule(
     for (const c of rows)
       runNightly(c)
         .then((r) => console.log(`[nightly-fallback] #${c.id} ${r}`))
-        .catch((e) => console.error(`[nightly-fallback] #${c.id} error:`, e));
+        .catch((e) => logErr(`[nightly-fallback] #${c.id} error:`, e));
   },
   { timezone: "Asia/Seoul" },
 );
@@ -30,7 +30,7 @@ cron.schedule(
 cron.schedule(
   "*/10 6-22 * * *",
   () => {
-    runDispatchTick().catch((e) => console.error("[dispatch] tick error:", e));
+    runDispatchTick().catch((e) => logErr("[dispatch] tick error:", e));
   },
   { timezone: "Asia/Seoul" },
 );
@@ -39,7 +39,7 @@ cron.schedule(
 cron.schedule(
   "*/15 0-4,8-23 * * *",
   () => {
-    runFollowupTick().catch((e) => console.error("[followup] tick error:", e));
+    runFollowupTick().catch((e) => logErr("[followup] tick error:", e));
   },
   { timezone: "Asia/Seoul" },
 );
@@ -49,10 +49,16 @@ cron.schedule(
 cron.schedule(
   "*/10 7-23 * * *",
   () => {
-    runPresenceTick().catch((e) => console.error("[presence] tick error:", e));
+    runPresenceTick().catch((e) => logErr("[presence] tick error:", e));
   },
   { timezone: "Asia/Seoul" },
 );
+
+// 답장 전송이 네트워크 블립으로 실패하면(프로세스는 살아 있어 부팅 복구가 안 걸린다) 그 답장이 유실된다.
+// 2분마다 놓친 답장을 점검해, 네트워크가 돌아오면 이어서 보낸다. 처리 중이거나 이미 답한 건 스킵(워터마크로 중복 방지).
+cron.schedule("*/2 * * * *", () => {
+  recoverMissedReplies().catch((e) => logErr("[recover] tick error:", e));
+});
 
 console.log("[bot] starting (long polling)...");
 void bot.start();
@@ -60,5 +66,5 @@ void bot.start();
 // 재시작(배포)으로 놓친 답장 복구: 디바운스 대기 중 프로세스가 죽으면 그 답장은 영영 사라지므로,
 // 부팅 후 한 번 확인해 이어서 답한다. 폴링이 밀린 메시지를 먼저 받도록 잠깐 기다렸다가 실행.
 setTimeout(() => {
-  recoverMissedReplies().catch((e) => console.error("[recover] error:", e));
+  recoverMissedReplies().catch((e) => logErr("[recover] error:", e));
 }, 8000);
