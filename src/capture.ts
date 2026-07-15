@@ -15,7 +15,7 @@ import { kstDateString, kstClock } from "./kst.js";
 // 왜: 긴 세션에서 앞부분이 실시간 창(40개) 밖으로 밀려도, 또 다음 날로 넘어가기 전에도 핵심 사실이 남게.
 // 답장 경로에서 비동기로 fire-and-forget 호출한다(응답 지연 없음). sonnet, 세션당 소수 콜.
 
-const CAPTURE_EVERY = 10; // 유저 메시지 이만큼 쌓일 때마다 한 번
+const CAPTURE_EVERY = 10; // 유저 '턴'(연속 발화 묶음) 이만큼마다 한 번
 
 interface Captured {
   user_facts?: string[];
@@ -46,8 +46,15 @@ export const maybeCaptureFacts = async (
     )
     .all(chatId, mark) as { id: number; role: string; text: string }[];
 
-  const userCount = fresh.filter((m) => m.role === "user").length;
-  if (userCount < CAPTURE_EVERY) return; // 아직 덜 쌓임 — 값싼 조기 반환
+  // 말풍선(전송) 개수가 아니라 유저 '턴' 수로 센다 — 분할 전송을 한 턴으로 묶어,
+  // 몰아 보내든 한 개씩 보내든 같은 기준이 되게(char 발화 뒤 처음 오는 user = 새 턴).
+  let userTurns = 0;
+  let prevRole = "char";
+  for (const m of fresh) {
+    if (m.role === "user" && prevRole !== "user") userTurns++;
+    prevRole = m.role;
+  }
+  if (userTurns < CAPTURE_EVERY) return; // 아직 덜 쌓임 — 값싼 조기 반환
 
   const lastId = fresh[fresh.length - 1]?.id ?? mark;
   const stamp = `${kstDateString()} ${kstClock()}:00`;
