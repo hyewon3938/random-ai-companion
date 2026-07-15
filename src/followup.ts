@@ -8,7 +8,7 @@ import {
   lastMessage,
   proactiveCountToday,
   proactiveSinceLastUser,
-  currentSpeechLevel,
+  speechGuard,
   type CharacterRow,
 } from "./db.js";
 import type { Bible } from "./character.js";
@@ -48,11 +48,11 @@ const GOODNIGHT_SYSTEM = `너는 주어진 인물이다. 새벽에 상대와 대
 const goodnightPrompt = (
   bible: Bible,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${currentSpeechLevel(chatId) === "반말" ? " (지금 서로 반말 — 존댓말로 되돌아가지 말고, '야'·'덥냐'·'했냐'처럼 문장 끝을 '냐'로 맺는 거친 반말도 쓰지 마라)" : ""}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}
 ${renderUserBlock(chatId)}
 상대가 대화 중 답이 없어진 지 한 시간쯤 됐다. 잠든 것 같다. 자기 전에 가볍고 다정한 굿나잇 한 마디를 남긴다(상대가 아침에 보면 기분 좋을 결로).
 - 예: "자나 보네요 ㅎㅎ 잘 자요", "먼저 잠들었나 봐요 좋은 꿈 꿔요", "저도 이제 자러 가요 잘 자요".
-- 매번 다르게, 자연스럽게. 재촉·서운함 없음. 1~2개 말풍선(줄바꿈). 이모지 없음. 지금 관계 말투(존댓말이면 존댓말) 유지.
+- 매번 다르게, 자연스럽게. 재촉·서운함 없음. 1~2개 말풍선(줄바꿈). 이모지 없음. 말투는 위 [말투] 지시대로.
 JSON: {"text":"..."}`;
 
 const followupPrompt = (
@@ -61,7 +61,7 @@ const followupPrompt = (
   lastLine: string,
   openLoops: string[],
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${currentSpeechLevel(chatId) === "반말" ? " (지금 서로 반말 — 존댓말로 되돌아가지 말고, '야'·'덥냐'·'했냐'처럼 문장 끝을 '냐'로 맺는 거친 반말도 쓰지 마라)" : ""}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}
 ${renderUserBlock(chatId)}
 지금 시각 ${kstClock()}, 너는 지금 "${block.activity}" 참이다.
 

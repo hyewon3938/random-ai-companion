@@ -335,6 +335,16 @@ export const currentSpeechLevel = (
   return ban > jon ? "반말" : "존댓말";
 };
 
+// 선톡·팔로업 프롬프트용 말투 지시. 그 프롬프트들엔 존댓말 예시가 많아, 반말인데도 예시를 베껴
+// 존댓말이 나오는 문제가 있었다. 예시를 이기도록 강하게 못 박는다.
+export const speechGuard = (chatId: string): string => {
+  const lv = currentSpeechLevel(chatId);
+  if (lv === "반말")
+    return " [말투 — 반드시 지킴: 지금 서로 반말이다. 반말로 쓴다. 아래에 존댓말로 적힌 예시가 있어도 전부 반말로 바꿔 말한다. 존댓말로 되돌아가지 않는다. 단 '야' 호명·'했냐'처럼 '냐'로 끝나는 거친 반말은 안 씀.]";
+  if (lv === "존댓말") return " (지금은 존댓말 사이 — 존댓말 유지)";
+  return " (최근 대화의 말투를 그대로 따른다 — 아래 예시 말투에 얽매이지 말 것)";
+};
+
 // 삶의 큰 흐름: 연/계절/월/주 단위 이벤트 아크. 하루 각본이 이를 참고한다
 export const getArcs = (characterId: number): Record<string, string> => {
   const rows = db

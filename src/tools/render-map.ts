@@ -42,7 +42,6 @@ const todayBlocks: DayPlan["blocks"] = todayPlanRaw
   : [];
 
 // 연락 가용성(bot.ts blockDelayMs와 같은 규칙) — 지금 실제로 얼마나 빨리 답하는지
-const EARLY_DAYS = 60;
 const metRow = db
   .prepare(`SELECT met_at FROM relationships WHERE character_id = ?`)
   .get(row.id) as { met_at: string } | undefined;
@@ -64,16 +63,12 @@ const availabilityNow = !curBlock
   : isNightNow && !curDeepSleep
     ? "밤 대화 시간 → 즉답"
     : curDeepSleep
-      ? relDays < EARLY_DAYS
-        ? "자는 시간이지만 관계 초반이라 연락하면 자다 깨서 답"
-        : "자는 중 → 아침에 답"
+      ? "자는 시간이지만 연락하면 바로 답 (즉답)"
       : curBlock.responsiveness === "즉답"
         ? "여유 → 곧 답"
         : curBlock.responsiveness === "짬짬이"
-          ? "틈틈이 → 1~5분"
-          : relDays < EARLY_DAYS
-            ? "잠깐 자리 비움 → 그 일 끝나고(초반이라 1시간 넘기지 않음)"
-            : "자리 비움 → 그 일정 끝날 때쯤";
+          ? "틈틈이 → 몇 분 내"
+          : "잠깐 자리 비움 → 그 일 끝날 때쯤 (최대 ~35분)";
 const ym = kstDateString().slice(0, 7);
 const monthSeeds = getMonthSeeds(row.id, ym);
 const monthEvents = getSchedulesInMonth(row.id, ym, "char");
@@ -293,7 +288,7 @@ const html = `<!doctype html>
   ${nowBlock ? `<div class="pcur">지금 ${esc(nowHM)} · <b>${esc(nowBlock.activity)}</b> — ${respStyle(nowBlock.responsiveness).label}<br><span style="color:#a5792a;font-size:12.5px">연락하면: ${esc(availabilityNow)} <span style="color:#8a8272">(관계 ${Math.floor(relDays)}일차)</span></span></div>` : ""}
   <div class="plan">${planRows || "<span class='empty'>(오늘 각본 아직 없음 — 그날 첫 대화나 밤 정리 때 생성)</span>"}</div>
   <div class="legend"><span><span class="chip" style="background:#e3efe1"></span>즉답</span><span><span class="chip" style="background:#f5ecd8"></span>짬짬이 (1~5분 뒤)</span><span><span class="chip" style="background:#e6e3dc"></span>불가 (일정 끝나고)</span><span><span style="color:#c0392b">· 갑자기</span> = 미리 알려지지 않은 일</span></div>
-  <div class="legend" style="margin-top:6px">연락 가용성: <b>밤 대화는 즉답</b> · 관계 초반(~2개월)엔 찾으면 늘 곁에(자는 시간엔 자다 깨서 답, 1시간+ 공백 없음) · 무르익을수록 낮에 점점 자기 시간 · 밤에 유저가 잠들면 굿나잇 챙김</div>
+  <div class="legend" style="margin-top:6px">연락 가용성: <b>밤 대화는 즉답</b> · 찾으면 웬만하면 곁에(자는 시간에 연락 와도 바로 답, 업무 불가는 최대 1시간) · 밤에 유저가 잠들면 굿나잇 챙김</div>
 </div>
 
 <h2>주변 사람들 — 대화와 삶에서 자라는 관계도</h2>

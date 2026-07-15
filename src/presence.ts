@@ -4,10 +4,9 @@ import { renderUserBlock } from "./user-profile.js";
 import {
   db,
   getAttentionUntil,
-  getMetAt,
   getDayPlan,
   lastMessage,
-  currentSpeechLevel,
+  speechGuard,
   type CharacterRow,
 } from "./db.js";
 import type { Bible } from "./character.js";
@@ -16,7 +15,7 @@ import { blockCategory } from "./day-plan.js";
 import { sendProactive } from "./bot.js";
 import { kstClock, kstDateString } from "./kst.js";
 
-// 자리 비움 예고(선-불가 선톡): 관계 초반, 곧 한동안 답장이 어려운 일(운동·샤워·외출·회의 등)로
+// 자리 비움 예고(선-불가 선톡): 곧 한동안 답장이 어려운 일(운동·샤워·외출·회의 등)로
 // 들어가기 직전이면 조용히 사라지지 않고 "이제 ~하러 가요, 답 늦어요"를 먼저 남긴다.
 // 연속으로 바쁜 사이(러닝→샤워)의 짧은 틈에는 경계에서 "막 뛰고 왔어요, 이제 씻고 올게요"로 메운다.
 // '찾을 때 있어주기'의 연장 — 막연한 침묵(이탈)을 '알고 하는 기다림'으로 바꾼다. 블록당 한 번.
@@ -31,12 +30,6 @@ const ageMin = (ts: string): number =>
 // 예고할 만한 '불가'인가 — 실제로 자리를 비우거나 손이 묶이는 일. 잠은 제외(굿나잇 로직이 담당).
 const isAwayUnavail = (b: PlanBlock): boolean =>
   b.responsiveness === "불가" && !/잠|수면|숙면/.test(b.activity);
-
-const relationshipDays = (characterId: number): number => {
-  const met = getMetAt(characterId);
-  if (!met) return 999;
-  return ageMin(met) / 1440;
-};
 
 const lastCharTs = (chatId: string): string | undefined =>
   (
@@ -67,7 +60,7 @@ const presencePrompt = (
   lastLine: string,
   fixed: boolean,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${currentSpeechLevel(chatId) === "반말" ? " (지금 서로 반말 — 존댓말로 되돌아가지 말고, '야'·'덥냐'·'했냐'처럼 문장 끝을 '냐'로 맺는 거친 반말도 쓰지 마라)" : ""}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}
 ${renderUserBlock(chatId)}
 지금 시각 ${kstClock()}.
 ${
@@ -85,7 +78,7 @@ ${pending ? `상대가 방금 남긴 말이 있다: "${lastLine.replace(/\n/g, "
 조용히 사라지지 말고, 상대가 '네가 뭘 하는지 알고 기다리게' 지금 상황을 가볍게 한 마디 남긴다.
 - 나가는 경우: "이제 러닝 좀 갔다 올게요 답 좀 늦어요", "잠깐 나갔다 올게요 이따 봐요" 같은 결.
 - 방금 뭔가 하고 와서 또 나가는 경우: "막 뛰고 왔어요 이제 씻고 올게요"처럼 방금 걸 자연스럽게 언급.
-- 짧게 1~2개 말풍선(줄바꿈으로 구분). 이모지 없음. 재촉·서운함·매달림 없음. 지금 관계 말투(존댓말이면 존댓말) 유지.
+- 짧게 1~2개 말풍선(줄바꿈으로 구분). 이모지 없음. 재촉·서운함·매달림 없음. 말투는 위 [말투] 지시대로.
 - 억지스러우면(딱히 알릴 만한 상황이 아니면) send=false.
 JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
 
@@ -95,11 +88,11 @@ const returnPrompt = (
   bible: Bible,
   activity: string,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${currentSpeechLevel(chatId) === "반말" ? " (지금 서로 반말 — 존댓말로 되돌아가지 말고, '야'·'덥냐'·'했냐'처럼 문장 끝을 '냐'로 맺는 거친 반말도 쓰지 마라)" : ""}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}
 ${renderUserBlock(chatId)}
 지금 시각 ${kstClock()}. 너는 방금 ${activity} 을(를) 끝내고 돌아왔다. 그 사이 상대에게선 답이 없었다.
 - 돌아왔음을 가볍게 알린다(이제 끝났어요 / 다녀왔어요 같은 결). 아까 하려던 안부를 자연스럽게 이어도 좋다.
-- 짧게 1~2개 말풍선(줄바꿈). 이모지 없음. 재촉·서운함 없음. 지금 관계 말투(존댓말이면 존댓말) 유지.
+- 짧게 1~2개 말풍선(줄바꿈). 이모지 없음. 재촉·서운함 없음. 말투는 위 [말투] 지시대로.
 JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
 
 export const runPresenceTick = async (): Promise<void> => {
@@ -108,9 +101,6 @@ export const runPresenceTick = async (): Promise<void> => {
     .all() as CharacterRow[];
 
   for (const c of rows) {
-    // 관계 초반에만 — 무르익으면 자기 시간을 갖고, 매 자리 비움을 알리지 않는다.
-    if (relationshipDays(c.id) >= config.earlyDays) continue;
-
     const raw = getDayPlan(c.id, kstDateString());
     if (!raw) continue;
     let blocks: PlanBlock[];

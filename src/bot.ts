@@ -10,7 +10,6 @@ import {
   db,
   getActiveCharacter,
   getAttentionUntil,
-  getMetAt,
   getRecentMessages,
   getRecoveryMark,
   getRelationshipState,
@@ -224,14 +223,11 @@ const pending = new Map<string, ReturnType<typeof setTimeout>>();
 const responding = new Set<string>();
 
 // 지금 각본 블록 + 관계 나이 + 시간대로 답장 지연을 정한다.
-// 핵심 원칙(서비스): '찾을 때 있어준다'가 사람다움보다 우선 — 특히 관계 초반, 특히 밤.
-//   · 밤 대화(저녁~취침 전)는 즉답: 유저가 누워서 우진과만 대화하는 몰입 시간. 관계 나이 무관.
-//   · 관계 초반(EARLY_DAYS): 낮에도 찾으면 웬만하면 나와준다. 자리 비움은 짧게(운전·회의 등 몇십 분, 1시간 미만).
-//   · 깊은 잠: 초반엔 자다 깨서 답(짧게), 무르익은 뒤엔 실제로 잔다.
-//   · 무르익을수록 낮에 점점 자기 삶의 시간을 더 갖는다(자리 비움이 길어짐). (지금은 2단계, 추후 그라데이션)
-// EARLY_DAYS = '완전 밀착' 기간. 발표 기준값 = 2개월(60일): 첫 두 달은 찾으면 늘 곁에,
-// 이후 서서히 자기 삶의 시간을 늘려간다("밀착 → 자립" 곡선). 임의값이라 조정 가능.
-const EARLY_DAYS = config.earlyDays;
+// 핵심 원칙(서비스): '찾을 때 있어준다'가 사람다움보다 우선 — 특히 밤.
+//   · 밤 대화(저녁~취침 전)는 즉답: 유저가 누워서 우진과만 대화하는 몰입 시간.
+//   · 낮에도 찾으면 웬만하면 나와준다. 자리 비움은 짧게(운전·회의 등, 1시간 미만).
+//   · 깊은 잠 중 연락도 무조건 즉답.
+// (관계 진전도에 따른 텀 조정은 지금은 두지 않는다 — 단일 밀착 동작.)
 const toMin = (hhmm: string): number => {
   const [h, m] = hhmm.split(":").map(Number);
   return (h ?? 0) * 60 + (m ?? 0);
@@ -242,14 +238,6 @@ const kstStampAt = (min: number): string => {
   const hh = String(Math.floor(mm / 60)).padStart(2, "0");
   const m2 = String(mm % 60).padStart(2, "0");
   return `${kstDateString()} ${hh}:${m2}:00`;
-};
-const relationshipDays = (characterId: number): number => {
-  const met = getMetAt(characterId);
-  if (!met) return 999;
-  return (
-    (Date.now() - new Date(met.replace(" ", "T") + "+09:00").getTime()) /
-    86_400_000
-  );
 };
 // '취침 준비'는 아직 깨어 있는 것. 실제로 깊이 자는 블록만 잠으로 본다.
 const isDeepSleep = (b: {
@@ -281,8 +269,6 @@ const blockDelayMs = (characterId: number, chatId: string): number => {
   if (!b) return 0;
   // 유저가 붙잡아 접은 상태면 각본상 불가여도 곁에 있는다(즉답).
   if (attentionActive(chatId)) return rand(0, 40_000);
-  const days = relationshipDays(characterId);
-  const early = days < EARLY_DAYS;
   const deepSleep = isDeepSleep(b);
   const hour = Number(kstClock().slice(0, 2));
   const night = hour >= 20 || hour < 2; // 저녁~새벽 2시: 밤 대화 창
@@ -314,23 +300,18 @@ const blockDelayMs = (characterId: number, chatId: string): number => {
     return rand(20_000, 150_000);
   }
   // 짬짬이: 개인(집안일·집 여가)=곧 답(20초~2.5분) / 사회(친구·가족·병원·학원)=틈틈이(약간 뜸) /
-  // 공적(업무·공적 회식)=틈틈이지만 더 뜸(대개 몇 분, 가끔 더 길게 — skew). 무르익으면 전반적으로 길어짐.
+  // 공적(업무·공적 회식)=틈틈이지만 더 뜸(대개 몇 분, 가끔 더 길게 — skew).
   if (b.responsiveness === "짬짬이") {
-    if (category === "개인")
-      return early ? rand(20_000, 150_000) : rand(60_000, 300_000);
-    if (category === "사회")
-      return early ? skewLow(30_000, 240_000) : skewLow(120_000, 480_000);
-    return early ? skewLow(60_000, 480_000) : skewLow(180_000, 720_000); // 공적
+    if (category === "개인") return rand(20_000, 150_000);
+    if (category === "사회") return skewLow(30_000, 240_000);
+    return skewLow(60_000, 480_000); // 공적
   }
-  // 불가(운동·운전·회의 등 손이 묶임): 그 일 끝날 때쯤. 초반엔 최대 ~35분, 무르익으면 더 길게.
-  if (early) {
-    return clamp(
-      Math.min(untilEnd, 30 * 60_000) + rand(0, 60_000),
-      120_000,
-      35 * 60_000,
-    );
-  }
-  return clamp(untilEnd + rand(0, 90_000), 180_000, 2_400_000);
+  // 불가(운동·운전·회의 등 손이 묶임): 그 일 끝날 때쯤, 최대 ~35분.
+  return clamp(
+    Math.min(untilEnd, 30 * 60_000) + rand(0, 60_000),
+    120_000,
+    35 * 60_000,
+  );
 };
 
 // 대기 시간 = 20초 바닥에서 위로만. 이어 보내기 텀이 길면(길게 치는 사람) 그 상위값(p80)에 맞춰 늘린다.

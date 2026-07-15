@@ -19,6 +19,7 @@ import {
   saveUserPreferences,
   saveUserProfile,
   currentSpeechLevel,
+  speechGuard,
   type CharacterRow,
   type DaySeed,
 } from "./db.js";
@@ -382,7 +383,7 @@ const SEND_SYSTEM = `너는 주어진 인물 그 자체로, 상대에게 먼저 
 const sendPrompt = (
   g: NightlyGathered,
   moment: string,
-): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${currentSpeechLevel(g.chatId) === "반말" ? " (지금 서로 반말 — 존댓말로 되돌아가지 말고, '야'·'덥냐'·'했냐'처럼 문장 끝을 '냐'로 맺는 거친 반말도 쓰지 마라)" : ""}
+): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}
 오늘은 ${g.today} (${g.todayLabel}).
 
 ${renderUserBlock(g.chatId)}
@@ -401,7 +402,7 @@ ${g.userSchedulesUpcoming || "(없음)"}
 - 각본상 오늘 유난히 일찍 깼거나 늦잠이면 그 결을 자연스럽게 반영한다(예: "오늘따라 눈이 일찍 떠졌네요" / 늦잠이라 허둥지둥해서 회사 와서야 연락).
 - 이어갈 것(위 목록)이나 상대의 오늘 일정이 있으면 그중 하나를 자연스럽게 엮는다. 특히 상대의 일정이 오늘이면 그걸 챙기는 게 우선이다.
 - 한 통에 하나만. 캐묻지 않는다. 용건 없는 애정 표시성 핑은 금지.
-- 지금 관계의 말투(존댓말이면 존댓말)를 유지한다. 질문엔 물음표. 1~3개 말풍선(줄바꿈 구분). 이모지 없음.
+- 말투는 위 [말투] 지시대로 쓴다. 질문엔 물음표. 1~3개 말풍선(줄바꿈 구분). 이모지 없음.
 - 상대 일정이 점심·저녁에 있으면 window를 "점심"/"저녁"으로 바꿔도 된다(그 외엔 "아침").
 - 아주 가끔은(그날 각본이 유난히 정신없으면) 건너뛰어도 사람답다 → send=false.
 
