@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS scheduled_sends (
   text TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   reason TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
   created_at TEXT NOT NULL,
   sent_at TEXT
 );
@@ -268,6 +270,17 @@ if (!castCols.some((c) => c.name === "who"))
   db.exec(
     `ALTER TABLE cast_members ADD COLUMN who TEXT NOT NULL DEFAULT 'char'`,
   );
+
+// 선톡 발송 시도 흔적: 폐기된 문안이 '창을 놓쳤을 뿐'인지 '계속 전송에 실패했는지' 구분용
+const sendCols = db.prepare(`PRAGMA table_info(scheduled_sends)`).all() as {
+  name: string;
+}[];
+if (!sendCols.some((c) => c.name === "attempts"))
+  db.exec(
+    `ALTER TABLE scheduled_sends ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
+  );
+if (!sendCols.some((c) => c.name === "last_error"))
+  db.exec(`ALTER TABLE scheduled_sends ADD COLUMN last_error TEXT`);
 
 export interface CastMember {
   name: string;
@@ -471,6 +484,7 @@ export interface ScheduledSendRow {
   window_start: string;
   window_end: string;
   text: string;
+  attempts: number;
 }
 
 export const insertScheduledSend = (
@@ -496,7 +510,7 @@ export const insertScheduledSend = (
 export const getPendingSends = (date: string): ScheduledSendRow[] =>
   db
     .prepare(
-      `SELECT id, character_id, chat_id, date, window_start, window_end, text FROM scheduled_sends WHERE status = 'pending' AND date = ?`,
+      `SELECT id, character_id, chat_id, date, window_start, window_end, text, attempts FROM scheduled_sends WHERE status = 'pending' AND date = ?`,
     )
     .all(date) as ScheduledSendRow[];
 
@@ -509,6 +523,14 @@ export const markScheduledSend = (
   db.prepare(
     `UPDATE scheduled_sends SET status = ?, reason = ?, sent_at = ? WHERE id = ?`,
   ).run(status, reason, sentAt, id);
+};
+
+// 전송 실패를 행에 남긴다 — 로그를 뒤지지 않고도 "몇 번 시도했고 왜 못 갔는지"가 보이게.
+// (정상 스킵과 네트워크 실패가 똑같이 '발송 창 지남'으로 뭉뚱그려지던 걸 가르는 근거)
+export const recordSendAttempt = (id: number, error: string): void => {
+  db.prepare(
+    `UPDATE scheduled_sends SET attempts = attempts + 1, last_error = ? WHERE id = ?`,
+  ).run(error.slice(0, 300), id);
 };
 
 export const hasUserMessageSince = (chatId: string, ts: string): boolean =>

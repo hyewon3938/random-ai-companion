@@ -12,7 +12,7 @@ import {
 import type { Bible } from "./character.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory } from "./day-plan.js";
-import { sendProactive } from "./bot.js";
+import { sendProactive, logErr } from "./bot.js";
 import { kstClock, kstDateString } from "./kst.js";
 
 // 자리 비움 예고(선-불가 선톡): 곧 한동안 답장이 어려운 일(운동·샤워·외출·회의 등)로
@@ -173,7 +173,7 @@ export const runPresenceTick = async (): Promise<void> => {
             console.log(`[presence] return @ ${ended.activity} → ${c.chat_id}`);
           }
         } catch (e) {
-          console.error("[presence] return error:", e);
+          logErr("[presence] 복귀 알림 전송 실패:", e);
         }
         continue;
       }
@@ -249,7 +249,7 @@ export const runPresenceTick = async (): Promise<void> => {
         );
       }
     } catch (e) {
-      console.error("[presence] error:", e);
+      logErr("[presence] 전송 실패:", e);
     }
   }
 };

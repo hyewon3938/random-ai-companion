@@ -12,7 +12,7 @@ import {
   type CharacterRow,
 } from "./db.js";
 import type { Bible } from "./character.js";
-import { sendProactive } from "./bot.js";
+import { sendProactive, logErr } from "./bot.js";
 import { currentBlock } from "./context.js";
 import { kstClock, kstDateString } from "./kst.js";
 
@@ -125,7 +125,7 @@ export const runFollowupTick = async (): Promise<void> => {
           console.log(`[followup] goodnight to ${c.chat_id}`);
         }
       } catch (e) {
-        console.error("[followup] goodnight error:", e);
+        logErr("[followup] 굿나잇 전송 실패:", e);
       }
       continue;
     }
@@ -173,7 +173,7 @@ export const runFollowupTick = async (): Promise<void> => {
         console.log(`[followup] sent to ${c.chat_id} @ ${block.activity}`);
       }
     } catch (e) {
-      console.error("[followup] error:", e);
+      logErr("[followup] 전송 실패:", e);
     }
   }
 };
