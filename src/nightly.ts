@@ -4,6 +4,7 @@ import { renderUserBlock } from "./user-profile.js";
 import {
   db,
   getDayPlan,
+  getDayPlanSource,
   getDaySeed,
   getRelationshipState,
   saveRelationshipState,
@@ -132,20 +133,34 @@ const planBrief = (raw: string | undefined): string => {
   }
 };
 
+// targetDiaryDate를 주면 그 날짜의 하루(05:00~익일 05:00)를 응고 대상으로 잡는다 — 결번 백필용.
+// 생략하면 기본대로 '어제'.
 export const gatherNightlyInput = (
   character: CharacterRow,
+  targetDiaryDate?: string,
 ): NightlyGathered => {
   const bible = JSON.parse(character.bible_json) as Bible;
   const now = getKstNow();
   const shifted = new Date(now.getTime() - 5 * 3600_000);
   const today = kstDateString(shifted);
-  const diaryDate = kstDateString(new Date(shifted.getTime() - 24 * 3600_000));
+  const diaryDate =
+    targetDiaryDate ??
+    kstDateString(new Date(shifted.getTime() - 24 * 3600_000));
 
+  // 대화 창은 그 하루(diaryDate 05:00 ~ 다음날 05:00)로 한정 — 백필로 과거 날짜를 잡아도
+  // 오늘까지의 대화가 통째로 섞이지 않게.
+  const diaryNext = kstDateString(
+    new Date(new Date(`${diaryDate}T00:00:00Z`).getTime() + 24 * 3600_000),
+  );
   const msgs = db
     .prepare(
       `SELECT role, ts, text FROM messages WHERE chat_id = ? AND role IN ('user','char') AND ts >= ? AND ts < ? ORDER BY id`,
     )
-    .all(character.chat_id, `${diaryDate} 05:00:00`, `${today} 05:00:00`) as {
+    .all(
+      character.chat_id,
+      `${diaryDate} 05:00:00`,
+      `${diaryNext} 05:00:00`,
+    ) as {
     role: string;
     ts: string;
     text: string;
@@ -199,131 +214,182 @@ export const gatherNightlyInput = (
   };
 };
 
-// 생성 결과를 DB에 반영한다. 외부 scheduled task와 API 폴백이 공유하는 단일 쓰기 경로
+// 생성 결과를 DB에 반영한다. 외부 scheduled task와 API 폴백이 공유하는 단일 쓰기 경로.
+//
+// 전체가 하나의 트랜잭션이다(본문은 전부 동기 호출). 이게 없으면 일기 INSERT 후 뒷단(추출~선톡)
+// 어디서든 예외가 나면 일기만 남고, 재실행은 아래 dup 체크에 막혀 그 날짜의 기억·일정·선톡이
+// 영구히 빠진다 — 전부 반영되거나 전부 롤백되어 재실행이 항상 안전하게.
+const applyNightlyTxn = db.transaction(
+  (g: NightlyGathered, out: NightlyOutput): string => {
+    const ts = nowStamp();
+
+    const dup = db
+      .prepare(
+        `SELECT 1 FROM diary_entries WHERE character_id = ? AND date = ? LIMIT 1`,
+      )
+      .get(g.characterId, g.diaryDate);
+    if (dup) return `skip: ${g.diaryDate} 일기 이미 있음`;
+
+    db.prepare(
+      `INSERT INTO diary_entries (character_id, date, entry_json) VALUES (?, ?, ?)`,
+    ).run(g.characterId, g.diaryDate, JSON.stringify(out.entry));
+
+    const state = getRelationshipState(g.characterId);
+    const ex = out.extract;
+    if (ex) {
+      // 동일 문자열 사실은 다시 쌓지 않는다 — "이미 아는 건 뽑지 마라"는 프롬프트 지시만으로는
+      // LLM이 표현을 바꿔 재추출할 때 못 막는다(capture.ts와 같은 코드 레벨 가드로 통일).
+      for (const f of ex.user_facts ?? [])
+        if (!state.user_facts.some((x) => x.fact === f))
+          state.user_facts.push({ fact: f, learned_at: g.diaryDate });
+      if (ex.char_facts?.length) {
+        state.char_facts = state.char_facts ?? [];
+        for (const f of ex.char_facts)
+          if (!state.char_facts.some((x) => x.fact === f))
+            state.char_facts.push({ fact: f, learned_at: g.diaryDate });
+      }
+      for (const s of ex.schedules ?? [])
+        if (s.date && s.content)
+          addSchedule(
+            g.characterId,
+            s.who === "user" ? "user" : "char",
+            s.date,
+            s.time_hint ?? null,
+            s.content,
+            ts,
+          );
+      for (const p of ex.people ?? [])
+        if (p.name)
+          addCastMember(
+            g.characterId,
+            p.who === "user" ? "user" : "char",
+            p.name,
+            p.relation || "지인",
+            p.note || null,
+            ts,
+          );
+      // 유저 선호 누적(매칭 전용). 같은 소재·성향은 최신 note로 갱신
+      if (ex.preferences) {
+        const prefs = getUserPreferences(g.chatId);
+        for (const t of ex.preferences.topics ?? [])
+          if (t.topic) {
+            const e = prefs.topics.find((x) => x.topic === t.topic);
+            if (e) e.note = t.note || e.note;
+            else
+              prefs.topics.push({
+                topic: t.topic,
+                note: t.note || "",
+                learned_at: g.diaryDate,
+              });
+          }
+        for (const f of ex.preferences.facets ?? [])
+          if (f.facet) {
+            const e = prefs.facets.find((x) => x.facet === f.facet);
+            if (e) {
+              e.response = f.response || e.response;
+              e.note = f.note || e.note;
+            } else
+              prefs.facets.push({
+                facet: f.facet,
+                response: f.response || "보통",
+                note: f.note || "",
+                learned_at: g.diaryDate,
+              });
+          }
+        saveUserPreferences(g.chatId, prefs);
+      }
+      // 유저 프로필: 대화로 확실해진 성별·나이대만 채운다(빈 값은 기존 유지). env 지정 시엔 그쪽이 우선.
+      if (ex.user_profile)
+        saveUserProfile(
+          g.chatId,
+          {
+            gender: ex.user_profile.gender,
+            ageBand: ex.user_profile.age_band,
+          },
+          ts,
+        );
+    }
+    let loopId = state.open_loops.reduce((m, l) => Math.max(m, l.id), 0);
+    for (const t of out.entry.tomorrow ?? [])
+      state.open_loops.push({
+        id: ++loopId,
+        content: t,
+        due_hint: null,
+        status: "open",
+        created_at: g.diaryDate,
+      });
+    saveRelationshipState(g.characterId, state, ts);
+
+    // 그날 각본: 없으면 저장하고, 있어도 새벽 대화가 만든 lazy 각본이면 정식 각본으로 교체한다.
+    // lazy 각본은 어제 일기가 아직 없을 때(이틀 전 일기 참조) 만들어진 것 — 그대로 두면
+    // "어제 여파가 시드보다 우선" 설계가 정확히 새벽까지 대화한 날마다 무력화된다.
+    // (교체에 쓰는 정식 각본은 그 새벽 대화가 담긴 어제 일기를 반영하므로 모순 위험은 작다.)
+    if (
+      out.plan &&
+      (!getDayPlan(g.characterId, g.today) ||
+        getDayPlanSource(g.characterId, g.today) === "lazy")
+    )
+      saveDayPlan(g.characterId, g.today, JSON.stringify(out.plan), "nightly");
+
+    if (out.arcs) {
+      for (const h of ["year", "season", "month", "week"] as const)
+        if (out.arcs[h]) saveArc(g.characterId, h, out.arcs[h]);
+    }
+
+    if (out.rhythm)
+      for (const r of out.rhythm)
+        if (r.ym) applyMonthPlan(g.characterId, r.ym, r);
+
+    if (out.send?.text)
+      insertScheduledSend(
+        g.characterId,
+        g.chatId,
+        g.today,
+        out.send.window_start,
+        out.send.window_end,
+        out.send.text,
+        ts,
+      );
+
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개)${out.plan ? ` + ${g.today} 각본` : ""}${out.send?.text ? " + 선톡 준비" : ""}`;
+  },
+);
+
 export const applyNightlyOutput = (
   g: NightlyGathered,
   out: NightlyOutput,
-): string => {
-  const ts = nowStamp();
+): string => applyNightlyTxn(g, out);
 
-  const dup = db
-    .prepare(
-      `SELECT 1 FROM diary_entries WHERE character_id = ? AND date = ? LIMIT 1`,
-    )
-    .get(g.characterId, g.diaryDate);
-  if (dup) return `skip: ${g.diaryDate} 일기 이미 있음`;
-
-  db.prepare(
-    `INSERT INTO diary_entries (character_id, date, entry_json) VALUES (?, ?, ?)`,
-  ).run(g.characterId, g.diaryDate, JSON.stringify(out.entry));
-
-  const state = getRelationshipState(g.characterId);
-  const ex = out.extract;
-  if (ex) {
-    for (const f of ex.user_facts ?? [])
-      state.user_facts.push({ fact: f, learned_at: g.diaryDate });
-    if (ex.char_facts?.length) {
-      state.char_facts = state.char_facts ?? [];
-      for (const f of ex.char_facts)
-        state.char_facts.push({ fact: f, learned_at: g.diaryDate });
-    }
-    for (const s of ex.schedules ?? [])
-      if (s.date && s.content)
-        addSchedule(
-          g.characterId,
-          s.who === "user" ? "user" : "char",
-          s.date,
-          s.time_hint ?? null,
-          s.content,
-          ts,
-        );
-    for (const p of ex.people ?? [])
-      if (p.name)
-        addCastMember(
-          g.characterId,
-          p.who === "user" ? "user" : "char",
-          p.name,
-          p.relation || "지인",
-          p.note || null,
-          ts,
-        );
-    // 유저 선호 누적(매칭 전용). 같은 소재·성향은 최신 note로 갱신
-    if (ex.preferences) {
-      const prefs = getUserPreferences(g.chatId);
-      for (const t of ex.preferences.topics ?? [])
-        if (t.topic) {
-          const e = prefs.topics.find((x) => x.topic === t.topic);
-          if (e) e.note = t.note || e.note;
-          else
-            prefs.topics.push({
-              topic: t.topic,
-              note: t.note || "",
-              learned_at: g.diaryDate,
-            });
-        }
-      for (const f of ex.preferences.facets ?? [])
-        if (f.facet) {
-          const e = prefs.facets.find((x) => x.facet === f.facet);
-          if (e) {
-            e.response = f.response || e.response;
-            e.note = f.note || e.note;
-          } else
-            prefs.facets.push({
-              facet: f.facet,
-              response: f.response || "보통",
-              note: f.note || "",
-              learned_at: g.diaryDate,
-            });
-        }
-      saveUserPreferences(g.chatId, prefs);
-    }
-    // 유저 프로필: 대화로 확실해진 성별·나이대만 채운다(빈 값은 기존 유지). env 지정 시엔 그쪽이 우선.
-    if (ex.user_profile)
-      saveUserProfile(
-        g.chatId,
-        {
-          gender: ex.user_profile.gender,
-          ageBand: ex.user_profile.age_band,
-        },
-        ts,
-      );
-  }
-  let loopId = state.open_loops.reduce((m, l) => Math.max(m, l.id), 0);
-  for (const t of out.entry.tomorrow ?? [])
-    state.open_loops.push({
-      id: ++loopId,
-      content: t,
-      due_hint: null,
-      status: "open",
-      created_at: g.diaryDate,
-    });
-  saveRelationshipState(g.characterId, state, ts);
-
-  // 이미 그날 각본이 있으면 덮어쓰지 않는다(미리 생성해둔 각본을 그대로 사용).
-  if (out.plan && !getDayPlan(g.characterId, g.today))
-    saveDayPlan(g.characterId, g.today, JSON.stringify(out.plan));
-
-  if (out.arcs) {
-    for (const h of ["year", "season", "month", "week"] as const)
-      if (out.arcs[h]) saveArc(g.characterId, h, out.arcs[h]);
-  }
-
-  if (out.rhythm)
-    for (const r of out.rhythm)
-      if (r.ym) applyMonthPlan(g.characterId, r.ym, r);
-
-  if (out.send?.text)
-    insertScheduledSend(
-      g.characterId,
-      g.chatId,
-      g.today,
-      out.send.window_start,
-      out.send.window_end,
-      out.send.text,
-      ts,
+// 최근 결번 날짜들: 원시 대화는 있는데 일기가 안 써진 날(오래된 순, '어제' 포함).
+// 밤 정리가 며칠 안 돌면(외부 경로·폴백 모두 실패) 생기며, 소급하지 않으면 그 날짜의
+// 기억·일정·인물 추출이 영구히 빠진다 — 매일 한 번 도는 밤 정리가 이 목록을 순회해 따라잡는다.
+// (대화가 없던 결번 날은 소급하지 않는다 — 응고할 재료가 없고, 지어낸 일기만 남는다.)
+export const missingDiaryDates = (
+  characterId: number,
+  chatId: string,
+  lookbackDays = 7,
+): string[] => {
+  const shifted = new Date(getKstNow().getTime() - 5 * 3600_000);
+  const out: string[] = [];
+  for (let i = lookbackDays; i >= 1; i--) {
+    const d = kstDateString(new Date(shifted.getTime() - i * 24 * 3600_000));
+    const next = kstDateString(
+      new Date(shifted.getTime() - (i - 1) * 24 * 3600_000),
     );
-
-  return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개)${out.plan ? ` + ${g.today} 각본` : ""}${out.send?.text ? " + 선톡 준비" : ""}`;
+    const hasDiary = !!db
+      .prepare(
+        `SELECT 1 FROM diary_entries WHERE character_id = ? AND date = ? LIMIT 1`,
+      )
+      .get(characterId, d);
+    if (hasDiary) continue;
+    const hasMsgs = !!db
+      .prepare(
+        `SELECT 1 FROM messages WHERE chat_id = ? AND role IN ('user','char') AND ts >= ? AND ts < ? LIMIT 1`,
+      )
+      .get(chatId, `${d} 05:00:00`, `${next} 05:00:00`);
+    if (hasMsgs) out.push(d);
+  }
+  return out;
 };
 
 // ── 이하 API 폴백 경로 ──────────────────────────────────────────
@@ -489,8 +555,41 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   // 이번 달(+월말이면 다음 달) 리듬을 확보한다. ensureTodayPlan이 오늘 시드를 읽어 각본에 잇는다
   await ensureRhythmRunway(g.characterId, g.bible, g.today);
 
+  // 결번 백필: '어제'보다 오래된 미응고 날짜(대화는 있는데 일기가 없는 날)를 먼저 처리한다.
+  // 밤 정리가 며칠 안 돌았어도 중간 날짜의 기억·일정 추출이 영구히 빠지지 않게. 각본·선톡은
+  // 오늘 것만 의미가 있으므로 백필에서는 만들지 않는다.
+  for (const d of missingDiaryDates(g.characterId, g.chatId).filter(
+    (x) => x < g.diaryDate,
+  )) {
+    try {
+      const bg = gatherNightlyInput(character, d);
+      const entry = await chatJson<DiaryOutput>(
+        DIARY_SYSTEM,
+        diaryPrompt(bg),
+        2000,
+        config.modelDeep,
+      );
+      const extract = await chatJson<ExtractOutput>(
+        EXTRACT_SYSTEM,
+        extractPrompt(bg),
+        1500,
+        config.modelDeep,
+      );
+      console.log(
+        `[nightly] 백필 ${applyNightlyOutput(bg, { entry, extract })}`,
+      );
+    } catch (e) {
+      // 백필 하루 실패가 오늘(어제 일기) 처리까지 막지 않게 — 다음 밤에 같은 날짜를 재시도한다
+      console.error(
+        `[nightly] 백필 실패 (${d}):`,
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+
   if (g.diaryExists) {
-    await ensureTodayPlan(g.characterId, g.bible);
+    // 정식(어제 일기 반영) 각본 확보 — 새벽 대화가 만든 lazy 각본이 있으면 교체된다
+    await ensureTodayPlan(g.characterId, g.bible, true);
     return `skip: ${g.diaryDate} 일기 이미 있음`;
   }
 
@@ -520,8 +619,9 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
     );
   }
 
-  // 오늘 각본을 먼저 만들고, 아침 안부의 발송 시점을 그 각본의 삶(기상·출근·자리)과 연동한다
-  await ensureTodayPlan(g.characterId, g.bible);
+  // 오늘 각본을 먼저 만들고, 아침 안부의 발송 시점을 그 각본의 삶(기상·출근·자리)과 연동한다.
+  // 밤 정리 경로(nightly=true)라 새벽 대화가 만든 lazy 각본이 있으면 정식 각본으로 교체된다.
+  await ensureTodayPlan(g.characterId, g.bible, true);
   const anchors = morningAnchors(getDayPlan(g.characterId, g.today));
   const isWorkday = g.todayLabel.includes("근무");
   const styles: [string, string, string][] = [];

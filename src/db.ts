@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "./config.js";
+import { getKstNow, kstDateString } from "./kst.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS day_plans (
   character_id INTEGER NOT NULL REFERENCES characters(id),
   date TEXT NOT NULL,
   plan_json TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'nightly',
   PRIMARY KEY (character_id, date)
 );
 CREATE TABLE IF NOT EXISTS day_seeds (
@@ -113,6 +115,14 @@ CREATE TABLE IF NOT EXISTS attention_override (
 CREATE TABLE IF NOT EXISTS capture_marks (
   chat_id TEXT PRIMARY KEY,
   last_msg_id INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS send_failures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id TEXT NOT NULL,
+  character_id INTEGER,
+  kind TEXT NOT NULL,
+  error TEXT NOT NULL,
+  ts TEXT NOT NULL
 );
 `);
 
@@ -186,9 +196,19 @@ export const getRelationshipState = (
   const row = db
     .prepare(`SELECT state_json FROM relationships WHERE character_id = ?`)
     .get(characterId) as { state_json: string } | undefined;
-  return row
-    ? (JSON.parse(row.state_json) as RelationshipState)
-    : emptyRelationshipState();
+  if (!row) return emptyRelationshipState();
+  try {
+    return JSON.parse(row.state_json) as RelationshipState;
+  } catch (e) {
+    // 손상된 state_json 하나가 실시간 응답 경로 전체(buildSystemPrompt)를 죽이지 않게 빈 상태로
+    // 강등한다. 원본 행은 건드리지 않지만, 이 상태에서 밤 정리·캡처가 save하면 빈 상태로 덮어써질
+    // 수 있다 — 그래서 조용히 넘기지 않고 크게 로그를 남긴다(발견 즉시 행 복구가 우선).
+    console.error(
+      `[db] state_json 파싱 실패 — 빈 상태로 강등 (character=${characterId}, len=${row.state_json.length}):`,
+      e instanceof Error ? e.message : String(e),
+    );
+    return emptyRelationshipState();
+  }
 };
 
 export const saveRelationshipState = (
@@ -281,6 +301,16 @@ if (!sendCols.some((c) => c.name === "attempts"))
   );
 if (!sendCols.some((c) => c.name === "last_error"))
   db.exec(`ALTER TABLE scheduled_sends ADD COLUMN last_error TEXT`);
+
+// 하루 각본의 출처: 밤 정리 정식 생성(nightly) vs 그날 첫 대화의 lazy 생성.
+// 새벽 대화가 만든 lazy 각본(어제 일기가 아직 없어 이틀 전 일기 참조)을 밤 정리가 교체할 수 있게 구분
+const planCols = db.prepare(`PRAGMA table_info(day_plans)`).all() as {
+  name: string;
+}[];
+if (!planCols.some((c) => c.name === "source"))
+  db.exec(
+    `ALTER TABLE day_plans ADD COLUMN source TEXT NOT NULL DEFAULT 'nightly'`,
+  );
 
 export interface CastMember {
   name: string;
@@ -533,6 +563,20 @@ export const recordSendAttempt = (id: number, error: string): void => {
   ).run(error.slice(0, 300), id);
 };
 
+// scheduled_sends 밖의 선톡(팔로업·자리비움 예고) 전송 실패 흔적. 이 메시지들은 순간에 묶여 있어
+// 유예·재시도가 없다 — 대신 실패했다는 사실만은 콘솔이 아니라 DB에 남겨 사후 추적이 되게 한다.
+export const recordSendFailure = (
+  chatId: string,
+  characterId: number,
+  kind: string,
+  error: string,
+): void => {
+  const ts = `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
+  db.prepare(
+    `INSERT INTO send_failures (chat_id, character_id, kind, error, ts) VALUES (?, ?, ?, ?, ?)`,
+  ).run(chatId, characterId, kind, error.slice(0, 300), ts);
+};
+
 export const hasUserMessageSince = (chatId: string, ts: string): boolean =>
   !!db
     .prepare(
@@ -551,6 +595,10 @@ export const lastMessage = (
     .get(chatId) as { ts: string; role: string } | undefined;
 
 // 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸(proactive) 발송 수 — 팔로업 총량 제한용
+// 하루 선제 발송 총량 상한(아침 안부·팔로업·자리비움 예고 합산). followup·presence가 공유한다 —
+// 채널별 상한만 있으면 합이 통제되지 않는다(각자 자기 몫을 다 쓰면 하루 ~10통까지 가능했다).
+export const PROACTIVE_DAILY_MAX = 6;
+
 export const proactiveCountToday = (chatId: string, since: string): number =>
   (
     db
@@ -702,15 +750,30 @@ export const getDayPlan = (
       .get(characterId, date) as { plan_json: string } | undefined
   )?.plan_json;
 
+// source: 밤 정리 정식 생성(nightly) vs 그날 첫 대화의 lazy 생성.
+// lazy 각본은 어제 일기가 아직 없을 때 만들어진 것이라 밤 정리가 교체할 수 있다.
 export const saveDayPlan = (
   characterId: number,
   date: string,
   planJson: string,
+  source: "nightly" | "lazy" = "nightly",
 ): void => {
   db.prepare(
-    `INSERT OR REPLACE INTO day_plans (character_id, date, plan_json) VALUES (?, ?, ?)`,
-  ).run(characterId, date, planJson);
+    `INSERT OR REPLACE INTO day_plans (character_id, date, plan_json, source) VALUES (?, ?, ?, ?)`,
+  ).run(characterId, date, planJson, source);
 };
+
+export const getDayPlanSource = (
+  characterId: number,
+  date: string,
+): string | undefined =>
+  (
+    db
+      .prepare(
+        `SELECT source FROM day_plans WHERE character_id = ? AND date = ?`,
+      )
+      .get(characterId, date) as { source: string } | undefined
+  )?.source;
 
 export const getRecentDiaries = (
   characterId: number,

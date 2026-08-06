@@ -6,14 +6,22 @@ import {
   getAttentionUntil,
   getDayPlan,
   lastMessage,
+  proactiveCountToday,
+  recordSendFailure,
   speechGuard,
+  PROACTIVE_DAILY_MAX,
   type CharacterRow,
 } from "./db.js";
 import type { Bible } from "./character.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory } from "./day-plan.js";
-import { sendProactive, logErr } from "./bot.js";
-import { kstClock, kstDateString } from "./kst.js";
+import {
+  sendProactive,
+  acquireProactive,
+  releaseProactive,
+  logErr,
+} from "./bot.js";
+import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
 
 // 자리 비움 예고(선-불가 선톡): 곧 한동안 답장이 어려운 일(운동·샤워·외출·회의 등)로
 // 들어가기 직전이면 조용히 사라지지 않고 "이제 ~하러 가요, 답 늦어요"를 먼저 남긴다.
@@ -96,7 +104,20 @@ ${renderUserBlock(chatId)}
 - 짧게 1~2개 말풍선(줄바꿈). 이모지 없음. 재촉·서운함 없음. 말투는 위 [말투] 지시대로.
 JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
 
+// 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
+let running = false;
+
 export const runPresenceTick = async (): Promise<void> => {
+  if (running) return;
+  running = true;
+  try {
+    await presenceTickBody();
+  } finally {
+    running = false;
+  }
+};
+
+const presenceTickBody = async (): Promise<void> => {
   const rows = db
     .prepare(`SELECT * FROM characters WHERE status = 'active'`)
     .all() as CharacterRow[];
@@ -123,7 +144,8 @@ export const runPresenceTick = async (): Promise<void> => {
     if (lc && ageMin(lc) < 5) continue;
 
     // 하루 예고 상한(안전장치) — 자리 비움이 많은 날도 과하지 않게.
-    const dayStart = `${kstDateString()} 05:00:00`;
+    // dayStart는 논리일(새벽 5시 컷오프) 기준 — 달력일 기준이면 자정~새벽에 카운트가 리셋된다.
+    const dayStart = logicalDayStartTs();
     const cnt = (
       db
         .prepare(
@@ -132,6 +154,9 @@ export const runPresenceTick = async (): Promise<void> => {
         .get(c.chat_id, dayStart, '%"kind":"presence"%') as { c: number }
     ).c;
     if (cnt >= 4) continue;
+    // 하루 선제 발송 총량(전 채널 합산)도 확인 — 자기 몫만 세면 followup과 합이 통제되지 않는다.
+    if (proactiveCountToday(c.chat_id, dayStart) >= PROACTIVE_DAILY_MAX)
+      continue;
 
     // 복귀 알림: 예고하고 들어간 불가 일정이 방금 끝났는데 그 사이 유저가 답이 없었으면,
     // 돌아왔음을 먼저 알린다("이제 끝났어"). 유저가 그 사이 답했으면 일반 답장이 자연스럽게 잇는다.
@@ -158,6 +183,8 @@ export const runPresenceTick = async (): Promise<void> => {
         )
         .get(c.chat_id, dayStart, `%"return":"${ended.start}"%`);
       if (announced && !returned && last.role === "char") {
+        // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
+        if (!acquireProactive(c.chat_id)) continue;
         try {
           const bible = JSON.parse(c.bible_json) as Bible;
           const draft = await chatJson<{ send: boolean; text?: string }>(
@@ -166,7 +193,12 @@ export const runPresenceTick = async (): Promise<void> => {
             400,
             config.model,
           );
-          if (draft.send && draft.text) {
+          // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나 다른 경로가 보냈으면 접는다
+          if (
+            draft.send &&
+            draft.text &&
+            lastMessage(c.chat_id)?.ts === last.ts
+          ) {
             await sendProactive(c.chat_id, c.id, draft.text, "presence", {
               return: ended.start,
             });
@@ -174,6 +206,14 @@ export const runPresenceTick = async (): Promise<void> => {
           }
         } catch (e) {
           logErr("[presence] 복귀 알림 전송 실패:", e);
+          recordSendFailure(
+            c.chat_id,
+            c.id,
+            "presence",
+            e instanceof Error ? e.message : String(e),
+          );
+        } finally {
+          releaseProactive(c.chat_id);
         }
         continue;
       }
@@ -223,6 +263,8 @@ export const runPresenceTick = async (): Promise<void> => {
     }
     if (!target) continue;
 
+    // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
+    if (!acquireProactive(c.chat_id)) continue;
     try {
       const bible = JSON.parse(c.bible_json) as Bible;
       const draft = await chatJson<{ send: boolean; text?: string }>(
@@ -240,7 +282,8 @@ export const runPresenceTick = async (): Promise<void> => {
         400,
         config.model, // 실시간성이라 대화 모델(sonnet)
       );
-      if (draft.send && draft.text) {
+      // 발송 직전 재확인 — LLM을 기다리는 사이 대화 상태가 바뀌었으면(유저 추가 발화·다른 발송) 접는다
+      if (draft.send && draft.text && lastMessage(c.chat_id)?.ts === last.ts) {
         await sendProactive(c.chat_id, c.id, draft.text, "presence", {
           block: target.start,
         });
@@ -250,6 +293,14 @@ export const runPresenceTick = async (): Promise<void> => {
       }
     } catch (e) {
       logErr("[presence] 전송 실패:", e);
+      recordSendFailure(
+        c.chat_id,
+        c.id,
+        "presence",
+        e instanceof Error ? e.message : String(e),
+      );
+    } finally {
+      releaseProactive(c.chat_id);
     }
   }
 };

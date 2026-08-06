@@ -161,8 +161,10 @@ const scheduleSection = (characterId: number): string => {
 
 // 주변 인물 관계도 — 캐릭터의 사람들 + 상대(유저)가 언급한 상대의 사람들 (밤 정리가 추가)
 const castSection = (characterId: number): string => {
-  const mine = getCast(characterId, "char");
-  const theirs = getCast(characterId, "user");
+  // 관계도도 무제한으로 자란다(이름 중복만 방지) — 최근에 등장한 인물 위주로 상한을 걸어 주입.
+  // DB는 전부 보존. 상한은 현재 규모보다 넉넉하게(당장 행동 불변, 장기 팽창만 차단).
+  const mine = getCast(characterId, "char").slice(-20);
+  const theirs = getCast(characterId, "user").slice(-20);
   if (!mine.length && !theirs.length) return "";
   const fmt = (c: { name: string; relation: string; note: string | null }) =>
     `- ${c.name} (${c.relation})${c.note ? `: ${c.note}` : ""}`;
@@ -278,6 +280,16 @@ export const buildSystemPrompt = (
     : "";
 
   const coldStart = state.open_loops.length === 0 ? COLD_START_SEED : "";
+
+  // 관계 상태는 DB에 무제한으로 쌓인다(사실·오픈 루프에 캡·해소 로직이 아직 없다 — 장기 기억
+  // 관리는 로드맵 몫). 프롬프트에는 최근 것 위주로 상한을 걸어 주입한다: DB는 전부 보존, 주입만
+  // 자른다. 상한은 현재 데이터보다 넉넉하게 잡아 당장의 행동은 안 바뀌고, 장기 팽창만 막는다.
+  const promptState: RelationshipState = {
+    ...state,
+    user_facts: state.user_facts.slice(-50),
+    char_facts: (state.char_facts ?? []).slice(-40),
+    open_loops: state.open_loops.filter((l) => l.status === "open").slice(-12),
+  };
   const firstMeeting =
     metAt.slice(0, 10) === kstDateString()
       ? "[관계] 오늘은 이 사람과 처음 만난 날이다."
@@ -305,7 +317,7 @@ export const buildSystemPrompt = (
     scheduleSection(characterId),
     arcsSection(characterId),
     castSection(characterId),
-    `[상대에 대해 아는 것]\n${JSON.stringify(state, null, 2)}`,
+    `[상대에 대해 아는 것]\n${JSON.stringify(promptState, null, 2)}`,
     coldStart,
     diarySection,
     FINAL_CHECK,

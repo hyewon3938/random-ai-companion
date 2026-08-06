@@ -251,16 +251,18 @@ export const sendProactive = async (
 // LLM이 답장 맨 앞에 붙인 응답 속도 태그를 읽어 지연을 정하고, 태그는 떼어낸다.
 // [한참후]=운동·운전 등 자리 비움, [잠시후]=근무 중 짬짬이, [즉시]=여유
 const parsePresence = (reply: string): { delayMs: number; text: string } => {
-  // 앞머리 대괄호는 어떤 형태든 태그로 보고 떼어낸다(유저에게 노출 방지)
-  const m = reply.match(/^\s*\[([^\]\n]{1,8})\]\s*/);
-  if (!m) return { delayMs: 0, text: reply.trim() };
-  const tag = m[1];
-  const delayMs = tag.includes("한참")
-    ? rand(60000, 150000)
-    : tag.includes("잠시")
-      ? rand(15000, 45000)
-      : 0;
-  return { delayMs, text: reply.slice(m[0].length).trim() };
+  // 앞머리 대괄호는 어떤 형태든 태그로 보고 전부 떼어낸다(유저에게 노출 방지).
+  // [남음][즉시]처럼 태그 두 개가 겹쳐 나오면 하나만 벗기던 버그가 있어 연속으로 벗긴다.
+  let text = reply;
+  let delayMs = 0;
+  let m: RegExpMatchArray | null;
+  while ((m = text.match(/^\s*\[([^\]\n]{1,8})\]\s*/))) {
+    const tag = m[1];
+    if (tag.includes("한참")) delayMs = rand(60000, 150000);
+    else if (tag.includes("잠시")) delayMs = rand(15000, 45000);
+    text = text.slice(m[0].length);
+  }
+  return { delayMs, text: text.trim() };
 };
 
 // 연속 동일 role 메시지 병합 (API는 user/assistant 교대를 기대)
@@ -306,6 +308,21 @@ const WAIT_CEIL_MS = 40000; // 길게 치는 사람도 이 이상은 응답이 �
 const pending = new Map<string, ReturnType<typeof setTimeout>>();
 const responding = new Set<string>();
 
+// 선톡 틱(dispatch·followup·presence) 간 chat 단위 상호 배제.
+// 크론 주기상 매 15분(디스패치+팔로업)·매 30분(3종 전부)마다 같은 분에 발화하는데, 각 틱은
+// 조건 확인과 발송 사이가 LLM 호출·타이핑 시뮬레이션으로 수십 초 벌어져 있어 서로의 미기록
+// 발송을 못 본다 — 락 없이는 같은 chat에 선톡 두 개가 겹쳐 나갈 수 있다(구조적으로 확정 재현).
+// 답장(respond)이 진행 중일 때도 선톡은 접는다 — 방금 말 건 유저에게 근황톡을 얹지 않게.
+const proactiveBusy = new Set<string>();
+export const acquireProactive = (chatId: string): boolean => {
+  if (proactiveBusy.has(chatId) || responding.has(chatId)) return false;
+  proactiveBusy.add(chatId);
+  return true;
+};
+export const releaseProactive = (chatId: string): void => {
+  proactiveBusy.delete(chatId);
+};
+
 // 지금 각본 블록 + 관계 나이 + 시간대로 답장 지연을 정한다.
 // 핵심 원칙(서비스): '찾을 때 있어준다'가 사람다움보다 우선 — 특히 밤.
 //   · 밤 대화(저녁~취침 전)는 즉답: 유저가 누워서 우진과만 대화하는 몰입 시간.
@@ -316,12 +333,18 @@ const toMin = (hhmm: string): number => {
   const [h, m] = hhmm.split(":").map(Number);
   return (h ?? 0) * 60 + (m ?? 0);
 };
-// 오늘의 특정 분(minute-of-day)을 KST 타임스탬프 문자열로 (override 만료 시각용)
+// 오늘의 특정 분(minute-of-day)을 KST 타임스탬프 문자열로 (override 만료 시각용).
+// 1439(23:59)를 넘으면 다음날로 넘긴다 — 자정 직전에 붙잡힌 "최소 30분"이 잘리지 않게.
 const kstStampAt = (min: number): string => {
-  const mm = Math.min(1439, Math.max(0, min));
+  const total = Math.max(0, min);
+  const dayOffset = Math.floor(total / 1440);
+  const mm = total % 1440;
+  const date = kstDateString(
+    new Date(getKstNow().getTime() + dayOffset * 24 * 3600_000),
+  );
   const hh = String(Math.floor(mm / 60)).padStart(2, "0");
   const m2 = String(mm % 60).padStart(2, "0");
-  return `${kstDateString()} ${hh}:${m2}:00`;
+  return `${date} ${hh}:${m2}:00`;
 };
 // '취침 준비'는 아직 깨어 있는 것. 실제로 깊이 자는 블록만 잠으로 본다.
 const isDeepSleep = (b: {

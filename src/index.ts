@@ -64,9 +64,14 @@ cron.schedule(
 
 // 답장 전송이 네트워크 블립으로 실패하면(프로세스는 살아 있어 부팅 복구가 안 걸린다) 그 답장이 유실된다.
 // 2분마다 놓친 답장을 점검해, 네트워크가 돌아오면 이어서 보낸다. 처리 중이거나 이미 답한 건 스킵(워터마크로 중복 방지).
-cron.schedule("*/2 * * * *", () => {
-  recoverMissedReplies().catch((e) => logErr("[recover] tick error:", e));
-});
+cron.schedule(
+  "*/2 * * * *",
+  () => {
+    recoverMissedReplies().catch((e) => logErr("[recover] tick error:", e));
+  },
+  // 매 2분이라 지금은 시간대 무관하지만, 다른 크론과 같은 기준으로 명시(패턴 바뀔 때 함정 방지)
+  { timezone: "Asia/Seoul" },
+);
 
 console.log("[bot] starting (long polling)...");
 void bot.start();

@@ -2,6 +2,7 @@ import { chatJson } from "./llm.js";
 import { config } from "./config.js";
 import {
   getDayPlan,
+  getDayPlanSource,
   saveDayPlan,
   getUpcomingSchedules,
   getArcs,
@@ -118,12 +119,19 @@ ${diary || "(없음)"}
 [JSON 형식 — 이 구조 그대로]
 {"date":"${date}","blocks":[{"start":"00:00","end":"06:03","activity":"잠","responsiveness":"불가","advance_known":true,"category":"개인"},{"start":"08:00","end":"09:00","activity":"팀 회의","responsiveness":"불가","advance_known":true,"category":"공적"},{"start":"12:00","end":"13:10","activity":"동기들과 점심 겸 수다","responsiveness":"짬짬이","advance_known":false,"category":"사회"},{"start":"19:00","end":"20:00","activity":"저녁 러닝","responsiveness":"불가","advance_known":false,"category":"개인"}, ...]}`;
 
+// nightly=true는 밤 정리 경로: 어제 일기가 확정된 뒤의 정식 생성이라, 새벽 대화가 미리 만든
+// lazy 각본(어제 일기 없이 이틀 전 일기를 참조한 것)이 있으면 교체한다. 기본(false)은 대화 중
+// lazy 생성 — 이미 각본이 있으면 무엇이든 그대로 둔다.
 export const ensureTodayPlan = async (
   characterId: number,
   bible: Bible,
+  nightly = false,
 ): Promise<void> => {
   const date = kstDateString();
-  if (getDayPlan(characterId, date)) return; // 이미 있으면 비용 없이 종료(런웨이 확인도 생략)
+  const existing = getDayPlan(characterId, date);
+  // 이미 있으면 비용 없이 종료(런웨이 확인도 생략). 단 밤 정리 경로는 lazy분이면 다시 만든다.
+  if (existing && !(nightly && getDayPlanSource(characterId, date) === "lazy"))
+    return;
   // 오늘의 컨디션 시드가 담긴 이번 달 리듬을 확보(이미 있으면 no-op). 실패해도 각본은 계속
   await ensureRhythmRunway(characterId, bible, date).catch((e) =>
     console.error("[day-plan] rhythm runway error:", e),
@@ -152,5 +160,10 @@ export const ensureTodayPlan = async (
     3000,
     config.modelDeep,
   );
-  saveDayPlan(characterId, date, JSON.stringify(plan));
+  saveDayPlan(
+    characterId,
+    date,
+    JSON.stringify(plan),
+    nightly ? "nightly" : "lazy",
+  );
 };

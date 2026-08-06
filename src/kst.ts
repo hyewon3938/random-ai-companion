@@ -8,6 +8,15 @@ export const getKstNow = (): Date => new Date(Date.now() + KST_OFFSET_MS);
 export const kstDateString = (d: Date = getKstNow()): string =>
   d.toISOString().slice(0, 10);
 
+// '하루'의 경계는 자정이 아니라 새벽 5시다(밤 정리 컷오프와 동일 — 자정~04:59는 전날에 속한다).
+// 하루 단위 판단(팔로업 대상·선제 발송 카운트)은 달력일(kstDateString)이 아니라 이 논리일을 쓴다.
+// 달력일로 "오늘 05:00:00"을 만들면 자정~새벽엔 미래 시각이 되어 비교 가드가 전부 죽는다.
+export const kstLogicalDate = (): string =>
+  kstDateString(new Date(getKstNow().getTime() - 5 * 3600_000));
+
+// 논리일의 시작 타임스탬프 — messages.ts(KST 벽시계 "YYYY-MM-DD HH:MM:SS")와 사전순 비교용
+export const logicalDayStartTs = (): string => `${kstLogicalDate()} 05:00:00`;
+
 export const kstDescription = (): string => {
   const now = getKstNow();
   const day = DAYS[now.getUTCDay()];

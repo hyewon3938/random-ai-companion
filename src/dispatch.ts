@@ -4,7 +4,12 @@ import {
   recordSendAttempt,
   hasUserMessageSince,
 } from "./db.js";
-import { sendProactive, logErr } from "./bot.js";
+import {
+  sendProactive,
+  acquireProactive,
+  releaseProactive,
+  logErr,
+} from "./bot.js";
 import { getKstNow, kstClock, kstDateString } from "./kst.js";
 
 // 선톡 디스패처: LLM 콜 없이, 밤 정리가 준비해둔 문안을 발송 창 안에서 내보내는 틱.
@@ -36,7 +41,9 @@ const hardCap = (windowStart: string): string =>
 const graceUntil = (windowStart: string, windowEnd: string): string => {
   const soft = addMin(windowEnd, GRACE_MIN);
   const cap = hardCap(windowStart);
-  return soft < cap ? soft : cap;
+  const d = soft < cap ? soft : cap;
+  // 디스패처 크론은 6시부터 돈다 — 아주 이른 기상 문안(새벽 창)이 첫 틱 전에 만료되지 않게 하한
+  return d < "06:30" ? "06:30" : d;
 };
 
 // 틱이 겹치지 않게 — 재시도 봉투를 넓히면서 한 틱이 최대 ~100초까지 붙잡힐 수 있게 됐고,
@@ -75,6 +82,8 @@ export const runDispatchTick = async (): Promise<void> => {
       }
 
       const late = now > r.window_end;
+      // 다른 선톡 틱·답장이 이 chat에 진행 중이면 다음 틱으로 미룬다(겹쳐 나가지 않게)
+      if (!acquireProactive(r.chat_id)) continue;
       try {
         const { delivered, total } = await sendProactive(
           r.chat_id,
@@ -100,6 +109,8 @@ export const runDispatchTick = async (): Promise<void> => {
         // 상태는 pending 그대로 — 마감 전이면 다음 틱이 다시 시도한다. 실패 흔적만 행에 남긴다.
         recordSendAttempt(r.id, e instanceof Error ? e.message : String(e));
         logErr(`[dispatch] send error #${r.id}:`, e);
+      } finally {
+        releaseProactive(r.chat_id);
       }
     }
   } finally {
