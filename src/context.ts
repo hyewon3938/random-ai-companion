@@ -16,6 +16,7 @@ import {
 import {
   kstDescription,
   kstDateString,
+  kstVerbalTime,
   workdayContext,
   kstClock,
 } from "./kst.js";
@@ -256,9 +257,11 @@ const nowSection = (chatId: string, characterId: number): string => {
       : lv === "존댓말"
         ? "존댓말."
         : "아직 정해지는 중 — 최근 대화 흐름을 그대로 따른다.";
+  // 시각은 숫자 표기와 말 표현을 함께 준다 — "12:30"만 주면 모델이 분을 흘리고 시 토큰만 읽어
+  // "곧 12시" 같은 오인이 난다(12시 반인데). 반올림·상대 표현은 코드가 계산한 값을 그대로 쓰게 한다.
   const nowLine = cur
-    ? `- 지금: ${kstDescription()} — 너는 지금 "${cur.activity}" 중이다(답장 여건 ${cur.responsiveness}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
-    : `- 지금: ${kstDescription()}. 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
+    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). 너는 지금 "${cur.activity}" 중이다(답장 여건 ${cur.responsiveness}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
+    : `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지). 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
   return `[지금 — 답장 전에 이 사실들과 어긋나지 않는지 확인한다]
 ${nowLine}
 - 말투: ${speech}`;

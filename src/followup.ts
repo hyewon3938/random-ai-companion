@@ -22,7 +22,7 @@ import {
 } from "./bot.js";
 import { currentBlock } from "./context.js";
 import { proactiveAllowed } from "./proactive-policy.js";
-import { kstClock, logicalDayStartTs } from "./kst.js";
+import { kstClock, kstVerbalTime, logicalDayStartTs } from "./kst.js";
 
 // 침묵 팔로업: 대화 중 유저가 한동안 조용하고, 지금 우진의 각본이 '자기 삶을 한 마디 흘릴 만한
 // 전환점'이면(점심 가기·퇴근·운동 등), 우진이 먼저 근황을 남긴다. 밤에 계획된 아침 안부와 다른 채널.
@@ -73,7 +73,7 @@ const followupPrompt = (
   chatId: string,
 ): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}
 ${renderUserBlock(chatId)}
-지금 시각 ${kstClock()}, 너는 지금 "${block.activity}" 참이다.
+지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다. 너는 지금 "${block.activity}" 참이다.
 
 마지막으로 오간 말: ${lastLine || "(없음)"}
 아직 이어가지 못한 것: ${openLoops.join(" / ") || "(없음)"}
