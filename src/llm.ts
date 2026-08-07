@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config.js";
+import { recordLlmUsage } from "./db.js";
 
 const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
@@ -51,11 +52,23 @@ export const chat = async (
     system: sys,
     messages: turns,
   });
-  // 캐시 효과 관측: cw=캐시 쓰기(1회성), cr=캐시 읽기(절감분), in=전액 과금분
+  // 캐시 효과 관측: cw=캐시 쓰기(1회성), cr=캐시 읽기(절감분), in=전액 과금분.
+  // 로그와 별개로 논리일 단위 DB 누적(llm_usage) — 사람이 로그를 뒤지지 않아도 확인 가능하게.
   const u = response.usage;
   console.log(
     `[llm] ${model} in=${u.input_tokens} cw=${u.cache_creation_input_tokens ?? 0} cr=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`,
   );
+  try {
+    recordLlmUsage(
+      model,
+      u.input_tokens,
+      u.cache_creation_input_tokens ?? 0,
+      u.cache_read_input_tokens ?? 0,
+      u.output_tokens,
+    );
+  } catch {
+    /* 사용량 기록 실패가 대화를 막지 않는다 */
+  }
   return textOf(response.content).trim();
 };
 

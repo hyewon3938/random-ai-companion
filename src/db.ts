@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "./config.js";
-import { getKstNow, kstDateString } from "./kst.js";
+import { getKstNow, kstDateString, kstLogicalDate } from "./kst.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
@@ -124,6 +124,16 @@ CREATE TABLE IF NOT EXISTS send_failures (
   kind TEXT NOT NULL,
   error TEXT NOT NULL,
   ts TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS llm_usage (
+  date TEXT NOT NULL,
+  model TEXT NOT NULL,
+  calls INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (date, model)
 );
 `);
 
@@ -583,6 +593,34 @@ export const recordSendFailure = (
   db.prepare(
     `INSERT INTO send_failures (chat_id, character_id, kind, error, ts) VALUES (?, ?, ?, ?, ?)`,
   ).run(chatId, characterId, kind, error.slice(0, 300), ts);
+};
+
+// LLM 사용량을 논리일×모델 단위로 누적한다 — 캐시 절감이 실제로 작동하는지 로그를 뒤지지 않고
+// DB 질의 한 줄로 확인할 수 있게(cache_read가 input보다 훨씬 크게 유지되는 것이 정상 상태).
+export const recordLlmUsage = (
+  model: string,
+  inputTokens: number,
+  cacheWriteTokens: number,
+  cacheReadTokens: number,
+  outputTokens: number,
+): void => {
+  db.prepare(
+    `INSERT INTO llm_usage (date, model, calls, input_tokens, cache_write_tokens, cache_read_tokens, output_tokens)
+     VALUES (?, ?, 1, ?, ?, ?, ?)
+     ON CONFLICT(date, model) DO UPDATE SET
+       calls = calls + 1,
+       input_tokens = input_tokens + excluded.input_tokens,
+       cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+       cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+       output_tokens = output_tokens + excluded.output_tokens`,
+  ).run(
+    kstLogicalDate(),
+    model,
+    inputTokens,
+    cacheWriteTokens,
+    cacheReadTokens,
+    outputTokens,
+  );
 };
 
 export const hasUserMessageSince = (chatId: string, ts: string): boolean =>
