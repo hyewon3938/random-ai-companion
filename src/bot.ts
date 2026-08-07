@@ -4,7 +4,7 @@ import { inspect } from "node:util";
 import { config } from "./config.js";
 import { createDaepyoCharacter, type Bible } from "./character.js";
 import { ensureTodayPlan, blockCategory } from "./day-plan.js";
-import { buildSystemPrompt, currentBlock } from "./context.js";
+import { buildSystemBlocks, currentBlock } from "./context.js";
 import { maybeCaptureFacts } from "./capture.js";
 import { chat, type ChatTurn } from "./llm.js";
 import {
@@ -453,7 +453,8 @@ const respond = async (
       logErr("[bot] day plan error:", e),
     );
     const state = getRelationshipState(character.id);
-    const system = buildSystemPrompt(character.id, bible, state, chatId);
+    // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다
+    const system = buildSystemBlocks(character.id, bible, state, chatId);
     const turns = toTurns(getRecentMessages(chatId, 40));
     const reply = await chat(system, turns);
     // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음])면 주의집중을 켠다 — 그 블록 끝까지(최소 30분) 곁에.

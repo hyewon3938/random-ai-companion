@@ -8,6 +8,14 @@ export interface ChatTurn {
   content: string;
 }
 
+// 시스템 프롬프트를 안정도 층으로 나눠 받는다. cache=true인 블록 끝이 프롬프트 캐시 경계 —
+// 캐시는 프리픽스 매칭이라 안정적인 층(바이블·규칙, 하루 단위 데이터)을 앞에 두고 경계를 걸면
+// 그 앞부분 입력이 캐시 읽기(기본가의 ~0.1배)로 떨어진다. 시각처럼 매번 바뀌는 건 경계 뒤(꼬리)에.
+export interface SystemBlock {
+  text: string;
+  cache?: boolean;
+}
+
 const textOf = (blocks: Anthropic.ContentBlock[]): string =>
   blocks
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
@@ -15,17 +23,39 @@ const textOf = (blocks: Anthropic.ContentBlock[]): string =>
     .join("");
 
 export const chat = async (
-  system: string,
+  system: string | SystemBlock[],
   turns: ChatTurn[],
   maxTokens = 1024,
   model = config.model,
 ): Promise<string> => {
+  // TTL 1시간: 대화는 답장 텀이 10~30분씩 벌어지는 게 보통이라 5분 캐시는 그 사이 증발한다.
+  // 1시간 쓰기는 2배지만 저녁 대화 내내 읽기(0.1배)로 회수 — 3회 이상 재사용이면 이득.
+  const sys =
+    typeof system === "string"
+      ? system
+      : system.map((b) => ({
+          type: "text" as const,
+          text: b.text,
+          ...(b.cache
+            ? {
+                cache_control: {
+                  type: "ephemeral" as const,
+                  ttl: "1h" as const,
+                },
+              }
+            : {}),
+        }));
   const response = await client.messages.create({
     model,
     max_tokens: maxTokens,
-    system,
+    system: sys,
     messages: turns,
   });
+  // 캐시 효과 관측: cw=캐시 쓰기(1회성), cr=캐시 읽기(절감분), in=전액 과금분
+  const u = response.usage;
+  console.log(
+    `[llm] ${model} in=${u.input_tokens} cw=${u.cache_creation_input_tokens ?? 0} cr=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`,
+  );
   return textOf(response.content).trim();
 };
 
