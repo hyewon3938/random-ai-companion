@@ -8,13 +8,21 @@ import {
   lastMessage,
   proactiveCountToday,
   proactiveSinceLastUser,
+  recordSendFailure,
   speechGuard,
+  PROACTIVE_DAILY_MAX,
   type CharacterRow,
 } from "./db.js";
 import type { Bible } from "./character.js";
-import { sendProactive } from "./bot.js";
+import {
+  sendProactive,
+  acquireProactive,
+  releaseProactive,
+  logErr,
+} from "./bot.js";
 import { currentBlock } from "./context.js";
-import { kstClock, kstDateString } from "./kst.js";
+import { proactiveAllowed } from "./proactive-policy.js";
+import { kstClock, kstVerbalTime, logicalDayStartTs } from "./kst.js";
 
 // 침묵 팔로업: 대화 중 유저가 한동안 조용하고, 지금 우진의 각본이 '자기 삶을 한 마디 흘릴 만한
 // 전환점'이면(점심 가기·퇴근·운동 등), 우진이 먼저 근황을 남긴다. 밤에 계획된 아침 안부와 다른 채널.
@@ -28,9 +36,11 @@ const hashInt = (s: string): number => {
   return Math.abs(h);
 };
 
-const dayStart = (): string => `${kstDateString()} 05:00:00`;
-// 하루 절대 상한(안전장치). 실제 조절은 아래 '연속 무응답 taper'가 한다.
-const DAILY_MAX = 6;
+// '오늘'의 시작 = 논리일(새벽 5시 컷오프). 달력일 기준 "오늘 05:00"으로 만들면 자정~새벽엔
+// 미래 시각이 되어 아래 가드들이 전부 죽는 버그가 있었다(밤 정리의 하루 정의와 통일).
+const dayStart = (): string => logicalDayStartTs();
+// 하루 절대 상한(안전장치, 전 채널 합산 — presence와 공유). 실제 조절은 '연속 무응답 taper'가 한다.
+const DAILY_MAX = PROACTIVE_DAILY_MAX;
 // 연속 무응답이 이 수에 닿으면 그날은 물러난다 — 침묵에 대고 계속 보내면 매달림이 되므로.
 const TAPER = 2;
 // 이 침묵 구간의 임계: 약 2시간(100~139분, 마지막 메시지 시각마다 조금씩 다르게).
@@ -63,7 +73,7 @@ const followupPrompt = (
   chatId: string,
 ): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}
 ${renderUserBlock(chatId)}
-지금 시각 ${kstClock()}, 너는 지금 "${block.activity}" 참이다.
+지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다. 너는 지금 "${block.activity}" 참이다.
 
 마지막으로 오간 말: ${lastLine || "(없음)"}
 아직 이어가지 못한 것: ${openLoops.join(" / ") || "(없음)"}
@@ -77,7 +87,20 @@ ${renderUserBlock(chatId)}
 
 JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
 
+// 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
+let running = false;
+
 export const runFollowupTick = async (): Promise<void> => {
+  if (running) return;
+  running = true;
+  try {
+    await followupTickBody();
+  } finally {
+    running = false;
+  }
+};
+
+const followupTickBody = async (): Promise<void> => {
   const rows = db
     .prepare(`SELECT * FROM characters WHERE status = 'active'`)
     .all() as CharacterRow[];
@@ -89,6 +112,9 @@ export const runFollowupTick = async (): Promise<void> => {
     const last = lastMessage(c.chat_id);
     // 조건: 대화가 있었고 + 마지막이 '캐릭터' 차례(유저가 답 안 한 상태)
     if (!last || last.role !== "char") continue;
+
+    // 침묵 백오프(관제탑): 무응답이 길어진 유저에겐 팔로업도 접는다
+    if (!proactiveAllowed(c.chat_id, c.id)) continue;
 
     // 밤 굿나잇: 새벽(2~5시)에 대화하다 유저가 '잔다'는 말 없이 1시간+ 잠수하면, 잠든 듯 여겨 다정한
     // 굿나잇을 한 번 남긴다(아침에 보면 설렘). 이미 굿나잇을 주고받았으면 보내지 않는다.
@@ -112,6 +138,8 @@ export const runFollowupTick = async (): Promise<void> => {
       minutesSince(last.ts) >= 60 &&
       proactiveSinceLastUser(c.chat_id) < 1
     ) {
+      // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
+      if (!acquireProactive(c.chat_id)) continue;
       try {
         const bible = JSON.parse(c.bible_json) as Bible;
         const g = await chatJson<{ text: string }>(
@@ -120,12 +148,22 @@ export const runFollowupTick = async (): Promise<void> => {
           300,
           config.model,
         );
-        if (g.text) {
+        // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 굿나잇은 필요 없다)
+        // 다른 경로가 뭔가 보냈으면(마지막 메시지가 바뀜) 접는다.
+        if (g.text && lastMessage(c.chat_id)?.ts === last.ts) {
           await sendProactive(c.chat_id, c.id, g.text, "followup");
           console.log(`[followup] goodnight to ${c.chat_id}`);
         }
       } catch (e) {
-        console.error("[followup] goodnight error:", e);
+        logErr("[followup] 굿나잇 전송 실패:", e);
+        recordSendFailure(
+          c.chat_id,
+          c.id,
+          "followup",
+          e instanceof Error ? e.message : String(e),
+        );
+      } finally {
+        releaseProactive(c.chat_id);
       }
       continue;
     }
@@ -153,6 +191,8 @@ export const runFollowupTick = async (): Promise<void> => {
         .get(c.chat_id) as { text: string } | undefined
     )?.text;
 
+    // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
+    if (!acquireProactive(c.chat_id)) continue;
     try {
       const draft = await chatJson<{ send: boolean; text?: string }>(
         FOLLOWUP_SYSTEM,
@@ -168,12 +208,22 @@ export const runFollowupTick = async (): Promise<void> => {
         500,
         config.model, // 실시간성이라 대화 모델(sonnet)
       );
-      if (draft.send && draft.text) {
+      // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 말을 걸었으면(답장이 담당) 근황톡을 접고,
+      // 다른 경로가 이미 보냈으면(마지막 메시지가 바뀜) 겹쳐 보내지 않는다.
+      if (draft.send && draft.text && lastMessage(c.chat_id)?.ts === last.ts) {
         await sendProactive(c.chat_id, c.id, draft.text, "followup");
         console.log(`[followup] sent to ${c.chat_id} @ ${block.activity}`);
       }
     } catch (e) {
-      console.error("[followup] error:", e);
+      logErr("[followup] 전송 실패:", e);
+      recordSendFailure(
+        c.chat_id,
+        c.id,
+        "followup",
+        e instanceof Error ? e.message : String(e),
+      );
+    } finally {
+      releaseProactive(c.chat_id);
     }
   }
 };

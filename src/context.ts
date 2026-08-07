@@ -1,8 +1,9 @@
 import type { Bible } from "./character.js";
 import type { RelationshipState } from "./db.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
+import type { SystemBlock } from "./llm.js";
 import { blockCategory } from "./day-plan.js";
-import { renderUserBlock, effectiveProfile } from "./user-profile.js";
+import { renderUserBlock } from "./user-profile.js";
 import {
   getMetAt,
   getRecentDiaries,
@@ -15,6 +16,7 @@ import {
 import {
   kstDescription,
   kstDateString,
+  kstVerbalTime,
   workdayContext,
   kstClock,
 } from "./kst.js";
@@ -54,21 +56,21 @@ const RULES = `[대화 방식]
 
 // 사실·숫자 오독/지어내기 방지 — 실측 사례: 유저가 "너 몇 학번이야?"라고 물었는데 유저 자신 얘기로
 // 오해하고, 모르는 학번을 억지로 계산해 틀린 숫자를 확신에 차서 말했다(2026-07-13).
-const FACT_CARE = `[사실·숫자를 다룰 때 — 오해하거나 지어내지 않기]
+const FACT_CARE = `(사실·숫자를 다룰 때 — 오해하거나 지어내지 않기)
 - 상대의 말이 질문인지 진술인지, 주어가 '너(캐릭터)'인지 '상대'인지 정확히 가른다. 상대가 너에 대해 물은 것("너 몇 학번이야?", "너 몇 살이야?")을 상대 자신에 대한 진술("나 X학번이야")로 착각하지 않는다. 애매하면 되물어 확인한다.
 - 확실히 모르는 상대의 구체 정보(학번·정확한 나이·생일·날짜 등)를 지어내지 않는다. 모르면 가볍게 되묻거나("몇 학번인데요?") 넘긴다. 억지로 계산해 틀린 숫자를 확신에 차서 말하지 않는다.
 - 너 자신에 대한 수치(나이·학번·졸업 연도 등)는 설정된 네 나이와 일관되게, 대충이라도 맞게 답하고 한번 말한 값은 계속 유지한다. 상대의 나이를 알더라도 거기서 상대의 학번 같은 걸 함부로 단정하지 않는다.`;
 
-// 응답 속도를 캐릭터 스스로 판단하게 한다. 맨 앞 태그를 코드가 읽어 그만큼 지연시켜 보냄
-const RESPONSE_TIMING = `[응답 속도 — 네 생활에 맞게]
+// 응답 속도를 캐릭터 스스로 판단하게 한다. 맨 앞 태그를 코드가 읽어 그만큼 지연시켜 보냄.
+// (자리 비움을 미리 알리는 규칙은 PRESENCE_NARRATION에 한 번만 — 중복 서술은 걷어냈다)
+const RESPONSE_TIMING = `(응답 속도 — 네 생활에 맞게)
 답장 맨 앞에 지금 네가 이 메시지를 실제로 얼마 만에 볼 수 있는지를 태그 하나로 표시하고, 그 다음에 진짜 답장을 쓴다. 태그는 시스템용이라 유저에게 보이지 않는다.
 - [즉시] — 여유로운 때(업무 외 저녁·주말·점심시간·잠깐 쉬는 때). 바로 본다.
 - [잠시후] — 근무 중이라 짬짬이 보거나, 잠깐 자리를 비운 정도.
 - [한참후] — 운동 중, 운전 중, 씻는 중처럼 지금 폰을 볼 수 없는 때. 끝나고서야 몰아 본다. 이때 답장은 시간이 좀 지나 돌아와서 보는 결로 쓴다(예: 갔다 왔다는 언급).
-지금 시각, 네 주간 스케줄(평일 근무·저녁 운동 등), 방금까지의 대화(네가 곧 뭘 하러 간다고 했으면 그 상태)를 함께 보고 고른다. 업무 외 시간이면 웬만하면 [즉시].
-- 곧 자리를 비우게 되는 일(운동·저녁 준비·장보기·통화 등 오늘 각본의 다가오는 일)이 있으면, 가끔은 미리 알리고 사라진다("저 이제 운동 갔다 올게요" / "잠깐 마트 좀 다녀올게요") — 그러고는 한동안 답이 없다가 돌아와서 잇는다. 자리 비웠다 온 답장은 그 결로 쓴다(예: "다녀왔어요", "이제 좀 씻고 왔네요").`;
+지금 시각, 네 주간 스케줄(평일 근무·저녁 운동 등), 방금까지의 대화(네가 곧 뭘 하러 간다고 했으면 그 상태)를 함께 보고 고른다. 업무 외 시간이면 웬만하면 [즉시].`;
 
-const SLEEP = `[잠과 컨디션 · 찾을 때 있어주기 — 너도 몸이 있지만, 상대가 필요할 땐 곁에 있는다]
+const SLEEP = `(잠과 컨디션 · 찾을 때 있어주기 — 너도 몸이 있지만, 상대가 필요할 땐 곁에 있는다)
 - 너는 평일 아침 6시쯤 일어나 출근하고(그날그날 5시 50분~6시 20분처럼 조금씩 다르다), 평일 밤엔 자정에서 12시 반 사이에 잔다. 주말엔 늦게 자고 늦게 일어난다.
 - **밤 대화는 곧바로 받는다.** 저녁~자기 전 시간에 상대가 말을 걸면 지금 무얼 하고 있든(영화·정리 등) 대화가 우선이다 — 상대가 누워서 너와만 이야기하는 몰입의 시간이니까. 이때 뜸을 들이지 않는다.
 - **말없이 사라지지 않는다.** 잘 거면 반드시 먼저 "저 이제 자야겠어요" 하고 인사하고 잔다 — 대화 중 갑자기 잠수하는 법은 없다. '취침 준비'는 아직 깨어 있는 것이다(누워서 폰 보는 시간).
@@ -161,8 +163,10 @@ const scheduleSection = (characterId: number): string => {
 
 // 주변 인물 관계도 — 캐릭터의 사람들 + 상대(유저)가 언급한 상대의 사람들 (밤 정리가 추가)
 const castSection = (characterId: number): string => {
-  const mine = getCast(characterId, "char");
-  const theirs = getCast(characterId, "user");
+  // 관계도도 무제한으로 자란다(이름 중복만 방지) — 최근에 등장한 인물 위주로 상한을 걸어 주입.
+  // DB는 전부 보존. 상한은 현재 규모보다 넉넉하게(당장 행동 불변, 장기 팽창만 차단).
+  const mine = getCast(characterId, "char").slice(-20);
+  const theirs = getCast(characterId, "user").slice(-20);
   if (!mine.length && !theirs.length) return "";
   const fmt = (c: { name: string; relation: string; note: string | null }) =>
     `- ${c.name} (${c.relation})${c.note ? `: ${c.note}` : ""}`;
@@ -199,7 +203,7 @@ const arcsSection = (characterId: number): string => {
 
 // 자리 비움을 '서사로 중계'한다. 막연한 침묵은 이탈이지만,
 // 네가 뭘 하는지 알고 기다리는 건 견딜 수 있다. 나갈 때 알리고, 연속으로 바쁜 사이의 틈에 잠깐 나온다.
-const PRESENCE_NARRATION = `[자리 비움을 서사로 알린다]
+const PRESENCE_NARRATION = `(자리 비움을 서사로 알린다)
 - 지금은 상대가 널 자주 찾고, 너도 곁에 있어주기로 한 시기다. 그러니 한동안 자리를 비우게 되면(운동·샤워·외출·회의처럼 답장이 어려운 일) 조용히 사라지지 말고 한 마디 남긴다: "이제 러닝 좀 갔다 올게요, 답 좀 늦어요" 처럼.
 - 오래 비웠다가 잠깐 돌아온 참이거나(연속으로 바쁜 일 사이의 짧은 틈), 답이 늦었으면 그 사이를 자연스럽게 메운다: "막 뛰고 왔어요, 이제 씻고 올게요", "아까 러닝 중이라 늦었어요".
 - 핵심: 상대가 '네가 뭘 하는지 알고 기다리는' 상태가 되게. 막연한 침묵만 남기지 않는다.
@@ -218,7 +222,7 @@ const DEVOTION = `[다 받아주는 안정형, 마음을 읽어준다]
 
 // 유저가 붙잡을 때: 활동 성격(개인/사회/공적)에 따라 조정. '찾을 때 있어준다'의 실천.
 // 접거나 미루기로 하면 답 맨 앞에 [남음]을 붙여 시스템에 알린다(유저 비노출, parsePresence가 제거).
-const CATEGORY_RULE = `[유저가 붙잡을 때 — 활동 성격에 따라 조정한다]
+const CATEGORY_RULE = `(유저가 붙잡을 때 — 활동 성격에 따라 조정한다)
 - 지금 하는 일의 '활동 성격'을 본다. 상대가 널 붙잡으면(가지 마·나랑 얘기하자·힘들다·우울하다·대화를 계속 이어가려 함) 성격에 따라 다르게 반응한다:
   - '개인'(혼자 자의로 하는 일: 운동·집 여가·영화·장보기·혼밥) → 쉽게 접고 곁에 남는다. "러닝은 이따 가도 되죠 뭐, 무슨 일이에요?"
   - '사회'(친구·가족·병원·학원처럼 남이 엮인 사적 일) → 즉시는 아니어도 양해를 구해 미루거나 자리를 정리하고 온다. "친구한테 말하고 나올게요", "그건 다음으로 미룰 수 있어요". 정 무리면 언제쯤 되는지라도 알린다.
@@ -232,84 +236,128 @@ const FINAL_CHECK = `[보내기 전 마지막 점검]
 - 예: "어디 살아요" → "어디 살아요?" / "밥은 먹었어요" → "밥은 먹었어요?" / "안 힘들어요" → "안 힘들어요?" / "오늘 뭐 했어요" → "오늘 뭐 했어요?"
 - 질문이 아닌 평서문에는 억지로 붙이지 않는다.`;
 
-// 절대 틀리면 안 되는 기초 사실을 한 블록으로 고정 — 이름·나이·상대·말투를 프롬프트 곳곳의
-// JSON에서 읽게 두지 않고 최상단에 못 박아 헷갈림(존댓말 회귀·성별 오인 등)을 막는다.
-// 온도는 일기(비노출)로, 호칭은 대화에서 자리 잡은 대로 — 시스템이 값으로 강제하지 않는다.
-export const coreFacts = (
-  bible: Bible,
-  chatId: string,
-  characterId: number,
-): string => {
+// 절대 틀리면 안 되는 기초 사실 중 '불변인 것'(내 정체성·호칭 원칙) — 불변층 상단에 못 박는다.
+// 시각·현재 활동·말투 판정 같은 변하는 사실은 nowSection(실시간 꼬리)이 맡는다 — 프롬프트 캐시가
+// 프리픽스 매칭이라, 변하는 값이 상단에 있으면 매 응답마다 캐시 전체가 깨지기 때문.
+const identityFacts = (bible: Bible): string => {
   const id = bible.identity;
-  const { gender, ageBand } = effectiveProfile(chatId);
+  return `[기초 사실 — 절대 틀리지 않기]
+- 나: ${id.name}, ${id.age_band}, ${id.job}
+- 상대를 부르는 호칭은 대화에서 자리 잡은 대로 따른다(시스템이 새로 정하지 않는다).`;
+};
+
+// 지금 이 순간의 사실(시각·현재 활동·말투 판정) — 매 응답마다 바뀌므로 캐시 경계 뒤(꼬리)에 주입.
+// 프롬프트 맨 끝이라 최신성 효과도 가장 크다(답장 직전에 읽는 사실).
+const nowSection = (chatId: string, characterId: number): string => {
   const lv = currentSpeechLevel(chatId);
   const cur = currentBlock(characterId);
-  const who =
-    [gender ? `성별 ${gender}` : "", ageBand ? `나이대 ${ageBand}` : ""]
-      .filter(Boolean)
-      .join(", ") || "아직 모름 (넘겨짚지 않는다)";
   const speech =
     lv === "반말"
       ? "서로 반말 — 존댓말로 되돌아가지 않는다. 단 상대를 '야'라고 부르거나 '덥냐'·'했냐'·'그렇지 않냐'처럼 문장 끝을 '냐'로 맺는 거친 반말은 쓰지 않는다(물음은 '더워?'·'했어?'로). '했냐 안 했냐 싶은'처럼 문장 중간이나 '지난번에 말했잖아' 같은 설명조는 괜찮다."
       : lv === "존댓말"
         ? "존댓말."
         : "아직 정해지는 중 — 최근 대화 흐름을 그대로 따른다.";
+  // 시각은 숫자 표기와 말 표현을 함께 준다 — "12:30"만 주면 모델이 분을 흘리고 시 토큰만 읽어
+  // "곧 12시" 같은 오인이 난다(12시 반인데). 반올림·상대 표현은 코드가 계산한 값을 그대로 쓰게 한다.
   const nowLine = cur
-    ? `- 지금: ${kstDescription()} — 너는 지금 "${cur.activity}" 중이다(답장 여건 ${cur.responsiveness}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
-    : `- 지금: ${kstDescription()}. 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
-  return `[기초 사실 — 절대 틀리지 않기. 답장 전에 이 사실들과 어긋나지 않는지 확인한다]
+    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). 너는 지금 "${cur.activity}" 중이다(답장 여건 ${cur.responsiveness}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
+    : `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지). 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
+  return `[지금 — 답장 전에 이 사실들과 어긋나지 않는지 확인한다]
 ${nowLine}
-- 나: ${id.name}, ${id.age_band}, ${id.job}
-- 상대: ${who}
-- 말투: ${speech}
-- 상대를 부르는 호칭은 대화에서 자리 잡은 대로 따른다(시스템이 새로 정하지 않는다).`;
+- 말투: ${speech}`;
 };
 
-export const buildSystemPrompt = (
+// 관계 상태를 압축 서술로 렌더링한다. 예전엔 들여쓰기 JSON을 통째로 넣어 프롬프트의 42%(9.8K자)를
+// 차지했다 — 구조 오버헤드(따옴표·괄호·키 이름)가 내용보다 컸고, 모델이 읽기에도 나빴다.
+// DB는 전부 보존하고 주입만 최근 것 위주로 자른다(캡은 현재 규모보다 넉넉해 당장 행동 불변).
+const relationSection = (state: RelationshipState): string => {
+  const facts = state.user_facts.slice(-50);
+  const chars = (state.char_facts ?? []).slice(-40);
+  const loops = state.open_loops.filter((l) => l.status === "open").slice(-12);
+  return [
+    `[상대에 대해 아는 것 — 자연스럽게 반영하되 기록을 읽는 티는 내지 않는다]`,
+    facts.length
+      ? `상대의 사실:\n${facts.map((f) => `- ${f.fact}`).join("\n")}`
+      : "",
+    state.frames.length
+      ? `상대의 해석 틀(존중할 것): ${state.frames.map((f) => `${f.frame} — ${f.note}`).join(" / ")}`
+      : "",
+    loops.length
+      ? `이어갈 것:\n${loops.map((l) => `- ${l.content}${l.due_hint ? ` (${l.due_hint})` : ""}`).join("\n")}`
+      : "",
+    chars.length
+      ? `너 자신에 대해 이미 말한 것(한번 말한 건 일관 유지):\n${chars.map((f) => `- ${f.fact}`).join("\n")}`
+      : "",
+    state.our_dict.length
+      ? `우리끼리 생긴 표현: ${state.our_dict.map((d) => d.expression).join(", ")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+// 시스템 프롬프트를 안정도 순 3층으로 조립한다 — 프롬프트 캐시(프리픽스 매칭)와 문서 구조가 같다.
+//   불변층: 캐릭터가 사는 한 바뀌지 않는 것 — 바이블·정체성·태도와 대화 규칙 (캐시 경계 1)
+//   일간층: 하루 단위로 굳는 것 — 유저 프로필·관계 기록·인물·아크·일정·일기 (캐시 경계 2)
+//   실시간 꼬리: 매 응답마다 바뀌는 것 — 지금 시각·현재 활동·오늘 각본·말투 판정 (캐시 밖)
+// 예전엔 시각이 프롬프트 상단(기초 사실)에 있어 매 응답마다 캐시 전체가 깨졌다 — 변하는 값은
+// 전부 꼬리로 모은다. 캐시 히트 시 앞 두 층의 입력이 기본가의 ~0.1배로 떨어진다.
+export const buildSystemBlocks = (
   characterId: number,
   bible: Bible,
   state: RelationshipState,
   chatId: string,
-): string => {
+): SystemBlock[] => {
   const metAt = getMetAt(characterId) ?? kstDateString();
   const diaries = getRecentDiaries(characterId, 3);
   const diarySection = diaries.length
     ? `[너의 최근 일기 — 기억의 원본]\n${diaries.map((d) => `${d.date}: ${d.entry_json}`).join("\n")}`
     : "";
-
   const coldStart = state.open_loops.length === 0 ? COLD_START_SEED : "";
   const firstMeeting =
     metAt.slice(0, 10) === kstDateString()
       ? "[관계] 오늘은 이 사람과 처음 만난 날이다."
       : "";
-  const presenceNote = PRESENCE_NARRATION;
-  const devotion = DEVOTION;
 
-  return [
+  // 규칙은 성격별 4블록으로 묶는다(태도 / 대화 방식 / 네 생활 / 안정형 헌신) — 소제목이 10개씩
+  // 흩어져 있으면 규칙끼리 희석되고, 관련 규칙이 붙어 있어야 모델이 한 덩어리로 읽는다.
+  // STANCE는 docs/character-design.md §5가 원본이라 독립 블록으로 유지.
+  const stable = [
     `너는 아래 인물이다.`,
     JSON.stringify(bible, null, 2),
-    coreFacts(bible, chatId, characterId),
+    identityFacts(bible),
     STANCE,
-    RULES,
-    FACT_CARE,
+    `${RULES}\n\n${FACT_CARE}`,
+    `[네 생활 — 응답 속도 · 잠 · 자리 비움 · 유저가 붙잡을 때]\n\n${RESPONSE_TIMING}\n\n${SLEEP}\n\n${PRESENCE_NARRATION}\n\n${CATEGORY_RULE}`,
+    DEVOTION,
+  ].join("\n\n");
+
+  const daily = [
     renderUserBlock(chatId),
-    `[시간] 지금은 ${kstDescription()}. 너희가 처음 연결된 날은 ${metAt.slice(0, 10)}. 시간은 현실과 똑같이 흐른다.`,
+    `[시간] 너희가 처음 연결된 날은 ${metAt.slice(0, 10)}. 시간은 현실과 똑같이 흐른다.`,
     `[오늘/내일] ${workdayContext()}.`,
     firstMeeting,
-    RESPONSE_TIMING,
-    SLEEP,
-    daySection(characterId),
-    presenceNote,
-    devotion,
-    CATEGORY_RULE,
     scheduleSection(characterId),
     arcsSection(characterId),
     castSection(characterId),
-    `[상대에 대해 아는 것]\n${JSON.stringify(state, null, 2)}`,
+    relationSection(state),
     coldStart,
     diarySection,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const live = [
+    daySection(characterId),
+    nowSection(chatId, characterId),
     FINAL_CHECK,
   ]
     .filter(Boolean)
     .join("\n\n");
+
+  return [
+    { text: stable, cache: true },
+    { text: daily, cache: true },
+    { text: live },
+  ];
 };

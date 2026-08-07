@@ -1,9 +1,10 @@
-import { Bot } from "grammy";
+import { Bot, type ApiClientOptions } from "grammy";
+import { Agent } from "node:https";
 import { inspect } from "node:util";
 import { config } from "./config.js";
 import { createDaepyoCharacter, type Bible } from "./character.js";
 import { ensureTodayPlan, blockCategory } from "./day-plan.js";
-import { buildSystemPrompt, currentBlock } from "./context.js";
+import { buildSystemBlocks, currentBlock } from "./context.js";
 import { maybeCaptureFacts } from "./capture.js";
 import { chat, type ChatTurn } from "./llm.js";
 import {
@@ -23,11 +24,65 @@ import {
 import { getKstNow, kstClock, kstDateString } from "./kst.js";
 
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
-// reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 안부(선톡), followup=침묵 팔로업(선톡)
+// reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 안부(선톡),
+// followup=침묵 팔로업(선톡), presence=자리비움 예고/복귀, reconnect=긴 침묵 후 재연결(침묵 백오프)
 export type SendKind =
-  "reply" | "recover" | "morning" | "followup" | "presence";
+  "reply" | "recover" | "morning" | "followup" | "presence" | "reconnect";
 
-export const bot = new Bot(config.telegramToken);
+// 텔레그램 API 연결 풀.
+//
+// 이 VM에서 선톡이 조용히 유실되던 실제 원인이 여기였다. long polling(getUpdates)은 96시간 동안
+// 한 번도 안 깨졌는데 sendMessage만 반복 실패했다 — 경로가 죽은 게 아니라 '새 연결 수립'이
+// 간헐적으로 죽는다(같은 순간에 이미 맺힌 연결로는 성공, 새 연결은 ETIMEDOUT).
+// getUpdates가 소켓 하나를 30초 주기로 거의 항상 점유하므로, 몇 시간 만에 나가는 선톡은
+// 재사용할 유휴 소켓이 없어 매번 새 연결이 됐다. 대화 중 답장이 멀쩡했던 건 몇 초 전에
+// 반납된 소켓을 재사용했기 때문.
+//
+// grammY 기본 agent도 이미 keepAlive는 켜져 있다(platform.node.js). 빠졌던 건 '살려둘 유휴
+// 소켓' 자체다 — 폴링이 유일한 소켓을 계속 붙잡고 있으니 풀이 늘 비어 있었다. 그래서 실제 해법은
+// 아래 agent 설정이 아니라 keepConnectionWarm()이고, 여기서는 그 유휴 소켓이 오래 살아남게 돕는다.
+const apiAgent = new Agent({
+  keepAlive: true,
+  keepAliveMsecs: 15_000, // TCP keepalive 프로브 — 중간 NAT이 유휴 연결을 끊지 않게
+  maxSockets: 8,
+  scheduling: "lifo", // 가장 최근에 쓴(=살아 있을 가능성이 높은) 소켓부터 재사용
+});
+
+// grammY(node)는 내부적으로 node-fetch를 쓰므로 agent 옵션이 실제로 먹지만,
+// 타입은 전역 fetch(undici) 기준이라 agent를 모른다 — 이 한 지점만 좁게 단언한다.
+const baseFetchConfig = {
+  agent: apiAgent,
+} as unknown as ApiClientOptions["baseFetchConfig"];
+
+// client.timeoutSeconds는 건드리지 않는다 — 그 옵션은 getUpdates에도 걸리는데 long polling은
+// 서버가 30초를 잡고 있어서, 짧게 잡으면 매 폴링이 통째로 취소된다. 발송만 아래 값으로 끊는다.
+export const bot = new Bot(config.telegramToken, {
+  client: { baseFetchConfig },
+});
+
+// 한 번의 발송 시도가 붙잡힐 수 있는 최대 시간. grammY 기본(500초)이나 OS의 TCP 타임아웃을
+// 그대로 기다리면 발송 창 안에서 재시도가 몇 번 못 돈다.
+const SEND_TIMEOUT_MS = 20_000;
+
+// grammY의 시그니처는 abort-controller 폴리필의 AbortSignal 타입을 요구하는데(shim.node.d.ts),
+// 런타임에는 node-fetch에 그대로 넘겨질 뿐이라 Node 네이티브 시그널로도 요청이 정상적으로 끊긴다.
+// 타입만 어긋나므로 여기 한 지점에서만 좁게 단언한다.
+type ApiSignal = NonNullable<Parameters<typeof bot.api.getMe>[0]>;
+const sendTimeout = (): ApiSignal =>
+  AbortSignal.timeout(SEND_TIMEOUT_MS) as unknown as ApiSignal;
+
+// 연결 보온 — 선톡 유실의 실제 해법. 가장 가벼운 API를 주기적으로 두드려, 폴링이 쓰는 소켓과
+// 별개로 유휴 소켓 한 개가 항상 풀에 놀고 있게 만든다. 선톡은 그걸 재사용하므로 '새 연결 수립'을
+// 건너뛴다(그 수립이 이 VM에서 간헐적으로 죽는다).
+// 주기는 텔레그램 쪽 idle timeout보다 짧게 — 안 두드리면 유휴 소켓이 서버에서 닫혀 도로 원점이다.
+// 실패는 무시한다(다음 주기에 다시 시도하고, 실제 발송은 sendWithRetry가 따로 버틴다).
+export const keepConnectionWarm = (intervalMs = 30_000): void => {
+  setInterval(() => {
+    void bot.api.getMe(sendTimeout()).catch(() => {
+      /* 보온 실패는 무시 — 실제 발송은 sendWithRetry가 따로 버틴다 */
+    });
+  }, intervalMs).unref();
+};
 
 const nowIso = (): string =>
   getKstNow().toISOString().replace("T", " ").slice(0, 19);
@@ -66,15 +121,16 @@ const splitBubbles = (text: string): string[] => {
   ];
 };
 
-// 순간 네트워크 오류로 전송이 통째로 실패하지 않게 짧게 재시도한다(VM↔텔레그램 API 일시 단절 대비)
-const sendWithRetry = async (
-  chatId: string,
-  text: string,
-  tries = 3,
-): Promise<void> => {
+// 순간 네트워크 오류로 전송이 통째로 실패하지 않게 재시도한다(VM↔텔레그램 API 일시 단절 대비).
+// 나쁜 구간은 수 분~수십 분씩 이어지므로 촘촘히 조르기보다 봉투를 넓게 잡는다.
+// 매 시도는 sendTimeout()(20초)으로 끊기니 최악 ~100초. 호출부(틱)는 이 시간만큼 붙잡힌다.
+const RETRY_BACKOFF_MS = [2_000, 5_000, 12_000];
+
+const sendWithRetry = async (chatId: string, text: string): Promise<void> => {
+  const tries = RETRY_BACKOFF_MS.length + 1;
   for (let i = 0; i < tries; i++) {
     try {
-      await bot.api.sendMessage(chatId, text);
+      await bot.api.sendMessage(chatId, text, undefined, sendTimeout());
       return;
     } catch (e) {
       // 최종 실패 시 원본 에러를 정리·마스킹해서 던진다 — 하류 로그가 깔끔하고 민감 값이 안 남게.
@@ -82,7 +138,7 @@ const sendWithRetry = async (
         throw new Error(
           `sendMessage 실패(${tries}회): ${redactToken(inspect(e, { depth: 4 }))}`,
         );
-      await sleep(1500 * (i + 1));
+      await sleep(RETRY_BACKOFF_MS[i]);
     }
   }
 };
@@ -104,15 +160,29 @@ const sleepWhileTyping = async (chatId: string, ms: number): Promise<void> => {
 };
 
 // 사람이 치는 것처럼: 봇 즉답 대신 버블별로 타이핑을 표시하고 길이에 비례한 텀을 두고 보낸다.
-const sendBubblesTo = async (chatId: string, text: string): Promise<void> => {
+//
+// 중간에 실패해도 이미 나간 말풍선은 되돌릴 수 없다. 그래서 실패를 그냥 던지지 않고
+// '어디까지 나갔는지'를 함께 돌려준다 — 호출부가 통째로 재시도해 앞부분을 중복 발송하는 걸 막는다.
+// (재시도 봉투를 넓힌 만큼 이 부분 실패 확률도 같이 올라간다. 잘린 채로 두는 게 중복보다 낫다.)
+const sendBubblesTo = async (
+  chatId: string,
+  text: string,
+): Promise<{ sent: string[]; error?: unknown }> => {
+  const sent: string[] = [];
   for (const raw of splitBubbles(text)) {
     const bubble = fixQuestion(stripDquotes(raw));
     // 실제 치는 속도(≈5~6자/초)에 맞춘 타이핑 시간. 90ms/자는 복붙처럼 빨라서 180ms/자로 늦춤.
     const typeMs =
       clamp(bubble.length * 180, 1700, 9000) + Math.random() * 1000;
     await sleepWhileTyping(chatId, typeMs);
-    await sendWithRetry(chatId, bubble);
+    try {
+      await sendWithRetry(chatId, bubble);
+    } catch (e) {
+      return { sent, error: e };
+    }
+    sent.push(bubble);
   }
+  return { sent };
 };
 
 const rand = (min: number, max: number): number =>
@@ -148,35 +218,52 @@ const fixQuestion = (bubble: string): string => {
 };
 
 // 선제 발송(선톡): 유저 메시지 없이 캐릭터가 먼저 보낸다. 아침 안부(morning)·침묵 팔로업(followup)이 호출
+// 반환: 실제로 나간 말풍선 수 / 전체. 아무것도 못 나가면 throw(= 호출부가 재시도해도 안전),
+// 일부라도 나갔으면 나간 만큼만 기록하고 정상 반환한다(재시도하면 앞부분이 중복되므로).
+export interface SendOutcome {
+  delivered: number;
+  total: number;
+}
+
 export const sendProactive = async (
   chatId: string,
   characterId: number,
   text: string,
-  kind: "morning" | "followup" | "presence" = "morning",
+  kind: Exclude<SendKind, "reply" | "recover"> = "morning",
   extraMeta?: Record<string, unknown>,
-): Promise<void> => {
+): Promise<SendOutcome> => {
   console.log(`[send] kind=${kind} chat=${chatId} len=${text.length}`);
-  await sendBubblesTo(chatId, text);
-  logMessage(chatId, characterId, "char", text, nowIso(), {
+  const total = splitBubbles(text).length;
+  const { sent, error } = await sendBubblesTo(chatId, text);
+  if (sent.length === 0 && error) throw error;
+  logMessage(chatId, characterId, "char", sent.join("\n"), nowIso(), {
     proactive: true,
     kind,
+    ...(sent.length < total ? { partial: `${sent.length}/${total}` } : {}),
     ...extraMeta,
   });
+  if (error)
+    console.warn(
+      `[send] 부분 발송 kind=${kind} ${sent.length}/${total} — 중복 방지로 재발송 안 함`,
+    );
+  return { delivered: sent.length, total };
 };
 
 // LLM이 답장 맨 앞에 붙인 응답 속도 태그를 읽어 지연을 정하고, 태그는 떼어낸다.
 // [한참후]=운동·운전 등 자리 비움, [잠시후]=근무 중 짬짬이, [즉시]=여유
 const parsePresence = (reply: string): { delayMs: number; text: string } => {
-  // 앞머리 대괄호는 어떤 형태든 태그로 보고 떼어낸다(유저에게 노출 방지)
-  const m = reply.match(/^\s*\[([^\]\n]{1,8})\]\s*/);
-  if (!m) return { delayMs: 0, text: reply.trim() };
-  const tag = m[1];
-  const delayMs = tag.includes("한참")
-    ? rand(60000, 150000)
-    : tag.includes("잠시")
-      ? rand(15000, 45000)
-      : 0;
-  return { delayMs, text: reply.slice(m[0].length).trim() };
+  // 앞머리 대괄호는 어떤 형태든 태그로 보고 전부 떼어낸다(유저에게 노출 방지).
+  // [남음][즉시]처럼 태그 두 개가 겹쳐 나오면 하나만 벗기던 버그가 있어 연속으로 벗긴다.
+  let text = reply;
+  let delayMs = 0;
+  let m: RegExpMatchArray | null;
+  while ((m = text.match(/^\s*\[([^\]\n]{1,8})\]\s*/))) {
+    const tag = m[1];
+    if (tag.includes("한참")) delayMs = rand(60000, 150000);
+    else if (tag.includes("잠시")) delayMs = rand(15000, 45000);
+    text = text.slice(m[0].length);
+  }
+  return { delayMs, text: text.trim() };
 };
 
 // 연속 동일 role 메시지 병합 (API는 user/assistant 교대를 기대)
@@ -222,6 +309,21 @@ const WAIT_CEIL_MS = 40000; // 길게 치는 사람도 이 이상은 응답이 �
 const pending = new Map<string, ReturnType<typeof setTimeout>>();
 const responding = new Set<string>();
 
+// 선톡 틱(dispatch·followup·presence) 간 chat 단위 상호 배제.
+// 크론 주기상 매 15분(디스패치+팔로업)·매 30분(3종 전부)마다 같은 분에 발화하는데, 각 틱은
+// 조건 확인과 발송 사이가 LLM 호출·타이핑 시뮬레이션으로 수십 초 벌어져 있어 서로의 미기록
+// 발송을 못 본다 — 락 없이는 같은 chat에 선톡 두 개가 겹쳐 나갈 수 있다(구조적으로 확정 재현).
+// 답장(respond)이 진행 중일 때도 선톡은 접는다 — 방금 말 건 유저에게 근황톡을 얹지 않게.
+const proactiveBusy = new Set<string>();
+export const acquireProactive = (chatId: string): boolean => {
+  if (proactiveBusy.has(chatId) || responding.has(chatId)) return false;
+  proactiveBusy.add(chatId);
+  return true;
+};
+export const releaseProactive = (chatId: string): void => {
+  proactiveBusy.delete(chatId);
+};
+
 // 지금 각본 블록 + 관계 나이 + 시간대로 답장 지연을 정한다.
 // 핵심 원칙(서비스): '찾을 때 있어준다'가 사람다움보다 우선 — 특히 밤.
 //   · 밤 대화(저녁~취침 전)는 즉답: 유저가 누워서 우진과만 대화하는 몰입 시간.
@@ -232,12 +334,18 @@ const toMin = (hhmm: string): number => {
   const [h, m] = hhmm.split(":").map(Number);
   return (h ?? 0) * 60 + (m ?? 0);
 };
-// 오늘의 특정 분(minute-of-day)을 KST 타임스탬프 문자열로 (override 만료 시각용)
+// 오늘의 특정 분(minute-of-day)을 KST 타임스탬프 문자열로 (override 만료 시각용).
+// 1439(23:59)를 넘으면 다음날로 넘긴다 — 자정 직전에 붙잡힌 "최소 30분"이 잘리지 않게.
 const kstStampAt = (min: number): string => {
-  const mm = Math.min(1439, Math.max(0, min));
+  const total = Math.max(0, min);
+  const dayOffset = Math.floor(total / 1440);
+  const mm = total % 1440;
+  const date = kstDateString(
+    new Date(getKstNow().getTime() + dayOffset * 24 * 3600_000),
+  );
   const hh = String(Math.floor(mm / 60)).padStart(2, "0");
   const m2 = String(mm % 60).padStart(2, "0");
-  return `${kstDateString()} ${hh}:${m2}:00`;
+  return `${date} ${hh}:${m2}:00`;
 };
 // '취침 준비'는 아직 깨어 있는 것. 실제로 깊이 자는 블록만 잠으로 본다.
 const isDeepSleep = (b: {
@@ -345,7 +453,8 @@ const respond = async (
       logErr("[bot] day plan error:", e),
     );
     const state = getRelationshipState(character.id);
-    const system = buildSystemPrompt(character.id, bible, state, chatId);
+    // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다
+    const system = buildSystemBlocks(character.id, bible, state, chatId);
     const turns = toTurns(getRecentMessages(chatId, 40));
     const reply = await chat(system, turns);
     // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음])면 주의집중을 켠다 — 그 블록 끝까지(최소 30분) 곁에.
@@ -368,12 +477,22 @@ const respond = async (
       return;
     }
     console.log(`[send] kind=${kind} chat=${chatId} len=${text.length}`);
-    await sendBubblesTo(chatId, text); // 실패하면 여기서 throw → 아래 기록 생략 → 복구가 재시도
+    const total = splitBubbles(text).length;
+    const { sent, error } = await sendBubblesTo(chatId, text);
+    // 한 마디도 못 나갔으면 throw → 아래 기록 생략 → 복구 틱이 재시도한다.
+    // 일부라도 나갔으면 답장 책임을 완료로 확정한다: 재시도하면 이미 나간 앞부분이 중복되는 데다,
+    // 복구는 답장을 새로 생성하므로 다른 내용이 뒤에 덧붙는다.
+    if (sent.length === 0 && error) throw error;
+    if (error)
+      console.warn(`[send] 부분 발송 kind=${kind} ${sent.length}/${total}`);
     // 전송에 성공한 뒤에야 '답장 책임 완료'를 기록한다(보내기 전 기록하면, 전송 실패 시 복구가
     // 이미 처리됐다고 보고 영영 재시도하지 않아 답장이 유실된다). 성공 후이므로 중복도 방지된다.
     const lu = lastMessage(chatId);
     if (lu?.role === "user") setRecoveryMark(chatId, lu.ts);
-    logMessage(chatId, character.id, "char", text, nowIso(), { kind });
+    logMessage(chatId, character.id, "char", sent.join("\n"), nowIso(), {
+      kind,
+      ...(sent.length < total ? { partial: `${sent.length}/${total}` } : {}),
+    });
     // 세션 중 가벼운 사실 포착(비동기 — 답장 지연 없음). 유저 메시지가 쌓이면 밤 정리 전에 저장.
     void maybeCaptureFacts(character.id, chatId).catch((e) =>
       logErr("[capture] error:", e),
