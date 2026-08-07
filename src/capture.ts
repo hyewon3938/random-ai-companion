@@ -15,7 +15,9 @@ import { kstDateString, kstClock } from "./kst.js";
 // 왜: 긴 세션에서 앞부분이 실시간 창(40개) 밖으로 밀려도, 또 다음 날로 넘어가기 전에도 핵심 사실이 남게.
 // 답장 경로에서 비동기로 fire-and-forget 호출한다(응답 지연 없음). sonnet, 세션당 소수 콜.
 
-const CAPTURE_EVERY = 10; // 유저 '턴'(연속 발화 묶음) 이만큼마다 한 번
+// 유저 '턴'(연속 발화 묶음) 이만큼마다 한 번. 밤 정리 추출과 이중 경로라 얇게 유지한다 —
+// 이 경로의 몫은 "긴 세션에서 실시간 창(40개) 밖으로 밀리기 전에 핵심만 미리 줍기"뿐이다.
+const CAPTURE_EVERY = 15;
 
 interface Captured {
   user_facts?: string[];

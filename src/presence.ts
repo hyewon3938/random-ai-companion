@@ -240,15 +240,9 @@ const presenceTickBody = async (): Promise<void> => {
       const b = blocks[i];
       if (!isAwayUnavail(b)) continue;
       const dur = toMin(b.end) - toMin(b.start);
-      if (dur < 10) continue; // 아주 짧은 건 예고 불필요
-      if (dur < 20) {
-        // 20분 미만은 대개 그냥 사라지되, 가끔(블록·날짜별 결정론적으로 ~1/4)은 미리 알린다
-        const seed = [...(c.chat_id + kstDateString() + b.start)].reduce(
-          (a, ch) => a + ch.charCodeAt(0),
-          0,
-        );
-        if (seed % 4 !== 0) continue;
-      }
+      // 20분 미만 짧은 자리 비움은 예고 없이 그냥 다녀온다 — 예전엔 결정론적 난수로 ~1/4만
+      // 알리는 마이크로 디테일이 있었지만, 리얼리즘 효용 대비 설명·유지 비용이 커서 접었다.
+      if (dur < 20) continue;
       const prev = i > 0 ? blocks[i - 1] : null;
       const prevAway = prev ? isAwayUnavail(prev) : false;
       const rel = toMin(b.start) - nowMin; // +면 아직 시작 전, -면 이미 시작

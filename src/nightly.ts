@@ -6,6 +6,7 @@ import {
   getDayPlan,
   getDayPlanSource,
   getDaySeed,
+  getRecentDiaries,
   getRelationshipState,
   saveRelationshipState,
   addSchedule,
@@ -629,11 +630,75 @@ export const ensureArcs = async (
   saveArc(characterId, "week", arcs.week);
 };
 
+// 흐름 갱신: ensureArcs는 최초 1회 부트스트랩뿐이라 아크가 생성 시점에 영구 고정되던 것을,
+// 달력 경계에서만 이어서 다시 쓴다 — 매주 월요일에 '이번 주', 매달 1일에 '이번 달'
+// (분기 시작 달엔 계절, 1월 1일엔 올해까지). 기존 흐름과 최근 일기를 주고 단절 없이 진행시킨다.
+const arcRefreshPrompt = (
+  g: NightlyGathered,
+  diaries: string,
+): string => `오늘은 ${g.today}다. 아래 인물의 삶의 큰 흐름을 이어서 갱신해줘. 기존 흐름과 단절되지 않게 — 진행 중인 사건은 자연스럽게 진행시키고, 매듭지어질 때가 된 것은 마무리하고, 새 흐름이 필요하면 이 인물답게 잔잔하게 연다.
+
+[인물]
+${JSON.stringify({ identity: g.bible.identity, life: g.bible.life }, null, 2)}
+
+[지금까지의 흐름]
+${
+  Object.entries(g.arcs)
+    .map(([h, c]) => `${h}: ${c}`)
+    .join("\n") || "(없음)"
+}
+
+[최근 일기 — 실제로 산 나날]
+${diaries || "(없음)"}
+
+{"year":"올해의 큰 진행 사건 1~2문장","season":"이 계절의 결 1~2문장","month":"이번 달의 상황 1~2문장","week":"이번 주의 특이사항 1문장 (없으면 '평범한 주')"}`;
+
+const refreshArcs = async (g: NightlyGathered): Promise<void> => {
+  const isFirst = g.today.endsWith("-01");
+  const isMonday = new Date(`${g.today}T00:00:00Z`).getUTCDay() === 1;
+  if (!isFirst && !isMonday) return;
+  const diaries = getRecentDiaries(g.characterId, 3)
+    .map((d) => {
+      try {
+        return `${d.date}: ${(JSON.parse(d.entry_json) as { diary?: string }).diary ?? ""}`;
+      } catch {
+        return "";
+      }
+    })
+    .filter(Boolean)
+    .join("\n");
+  const arcs = await chatJson<{
+    year: string;
+    season: string;
+    month: string;
+    week: string;
+  }>(ARC_SYSTEM, arcRefreshPrompt(g, diaries), 1000, config.modelDeep);
+  if (isMonday && arcs.week) saveArc(g.characterId, "week", arcs.week);
+  if (isFirst) {
+    if (arcs.month) saveArc(g.characterId, "month", arcs.month);
+    const m = Number(g.today.slice(5, 7));
+    if ([3, 6, 9, 12].includes(m) && arcs.season)
+      saveArc(g.characterId, "season", arcs.season);
+    if (m === 1 && arcs.year) saveArc(g.characterId, "year", arcs.year);
+  }
+  console.log(
+    `[nightly] 아크 갱신 (${isMonday ? "주" : ""}${isFirst ? " 월" : ""})`,
+  );
+};
+
 export const runNightly = async (character: CharacterRow): Promise<string> => {
   const g = gatherNightlyInput(character);
   await ensureArcs(g.characterId, g.bible);
   // 이번 달(+월말이면 다음 달) 리듬을 확보한다. ensureTodayPlan이 오늘 시드를 읽어 각본에 잇는다
   await ensureRhythmRunway(g.characterId, g.bible, g.today);
+  // 달력 경계 아크 갱신 — 침묵 중엔 생략(볼 사람이 없고, 복귀 후 다음 경계에 이어 쓴다)
+  if (g.silenceTier === "normal")
+    await refreshArcs(g).catch((e) =>
+      console.error(
+        "[nightly] 아크 갱신 실패:",
+        e instanceof Error ? e.message : String(e),
+      ),
+    );
 
   // 결번 백필: '어제'보다 오래된 미응고 날짜(대화는 있는데 일기가 없는 날)를 먼저 처리한다.
   // 밤 정리가 며칠 안 돌았어도 중간 날짜의 기억·일정 추출이 영구히 빠지지 않게. 각본·선톡은
