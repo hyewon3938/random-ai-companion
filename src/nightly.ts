@@ -35,6 +35,7 @@ import {
   type MonthPlan,
 } from "./life-plan.js";
 import { getKstNow, kstDateString, todayLabel } from "./kst.js";
+import { silenceState } from "./proactive-policy.js";
 
 // 밤 정리: 새벽 5시 컷오프로 어제 하루를 닫는다.
 // 일기 응고(각본 대비·감정 관찰·내부 온도) + 기억/일정/인물 추출 + 오늘 각본 + 선톡 문안 준비.
@@ -82,6 +83,7 @@ export interface SendDraft {
   window_start: string; // "HH:MM"
   window_end: string;
   text: string;
+  kind?: "morning" | "reconnect"; // 생략 시 morning. reconnect=긴 침묵 후 재연결 1통
 }
 
 export interface NightlyOutput {
@@ -117,6 +119,10 @@ export interface NightlyGathered {
   arcs: Record<string, string>;
   todaySeed: DaySeed | null; // 오늘의 컨디션 시드(있으면)
   rhythmNeeded: { ym: string; days: { date: string; label: string }[] }[]; // 이번 밤에 생성해야 할 월 리듬
+  // 침묵 백오프 상태 — 외부 생성 경로가 이를 보고 산출물을 조절한다
+  // (normal=평소대로 / quiet·dormant=각본·선톡 생성 불필요 / reconnect=저녁 재연결 문안만)
+  silenceTier: "normal" | "quiet" | "reconnect" | "dormant";
+  silenceDays: number;
   bible: Bible;
 }
 
@@ -167,6 +173,7 @@ export const gatherNightlyInput = (
   }[];
 
   const state = getRelationshipState(character.id);
+  const silence = silenceState(character.chat_id, character.id);
   return {
     characterId: character.id,
     chatId: character.chat_id,
@@ -210,6 +217,8 @@ export const gatherNightlyInput = (
       ym,
       days: monthDays(ym),
     })),
+    silenceTier: silence.tier,
+    silenceDays: silence.days,
     bible,
   };
 };
@@ -340,18 +349,31 @@ const applyNightlyTxn = db.transaction(
       for (const r of out.rhythm)
         if (r.ym) applyMonthPlan(g.characterId, r.ym, r);
 
-    if (out.send?.text)
-      insertScheduledSend(
-        g.characterId,
-        g.chatId,
-        g.today,
-        out.send.window_start,
-        out.send.window_end,
-        out.send.text,
-        ts,
-      );
+    // 선톡 문안 — 관제탑(침묵 백오프) 게이트를 지나야 저장된다. 외부 생성 경로가 백오프를 모르고
+    // 문안을 보내와도 여기서 걸러진다: quiet/dormant면 저장 안 함, reconnect 단계엔 재연결 문안만.
+    let sendStored = false;
+    if (out.send?.text) {
+      const tier = silenceState(g.chatId, g.characterId).tier;
+      const kind = out.send.kind ?? "morning";
+      if (
+        (tier === "normal" && kind === "morning") ||
+        (tier === "reconnect" && kind === "reconnect")
+      ) {
+        insertScheduledSend(
+          g.characterId,
+          g.chatId,
+          g.today,
+          out.send.window_start,
+          out.send.window_end,
+          out.send.text,
+          ts,
+          kind,
+        );
+        sendStored = true;
+      }
+    }
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개)${out.plan ? ` + ${g.today} 각본` : ""}${out.send?.text ? " + 선톡 준비" : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개)${out.plan ? ` + ${g.today} 각본` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
@@ -476,6 +498,64 @@ ${g.userSchedulesUpcoming || "(없음)"}
 
 JSON: {"send":true,"window":"아침|점심|저녁","text":"..."} 또는 {"send":false}`;
 
+// ── 재연결 문안 (침묵 백오프의 마지막 한 통) ──────────────────────
+// 무응답 14일차, 늦은 오후~밤 창에 "요새 많이 바빠?" 결로 1통. 이후는 유저가 돌아올 때까지 침묵.
+
+const RECONNECT_SYSTEM = `너는 주어진 인물이다. 상대에게서 연락이 없어진 지 2주쯤 됐다. 서운함이나 추궁 없이, 근황을 가볍게 묻는 한 통을 보낸다. 상대가 부담 없이 답할 수 있는 결이 목표다.`;
+
+const reconnectPrompt = (
+  g: NightlyGathered,
+): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}
+${renderUserBlock(g.chatId)}
+상대와 마지막으로 연락이 오간 지 ${g.silenceDays}일쯤 됐다. 지금은 저녁이다.
+- "요새 많이 바쁘지?" 같은, 근황을 가볍게 묻는 결. 네 근황 한 조각을 곁들여도 좋다.
+- 서운함·재촉·"왜 연락 없어" 금지. 답장을 요구하는 압박 금지. 길게 쓰지 않는다.
+- 1~2개 말풍선(줄바꿈 구분). 이모지 없음. 말투는 위 [말투] 지시대로.
+JSON: {"text":"..."}`;
+
+const draftReconnect = async (
+  g: NightlyGathered,
+): Promise<SendDraft | null> => {
+  const d = await chatJson<{ text: string }>(
+    RECONNECT_SYSTEM,
+    reconnectPrompt(g),
+    400,
+    config.modelDeep,
+  );
+  if (!d.text) return null;
+  const start = 17 * 60 + Math.floor(Math.random() * 180); // 17:00~19:59 사이 무작위
+  const f = (m: number): string =>
+    `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  return {
+    window_start: f(start),
+    window_end: f(start + 90),
+    text: d.text,
+    kind: "reconnect",
+  };
+};
+
+// 외부 경로가 일기만 응고하고 재연결 문안을 안 만든 날의 보강 — 오늘 문안이 없으면 준비한다
+const ensureReconnectSend = async (g: NightlyGathered): Promise<void> => {
+  const exists = db
+    .prepare(
+      `SELECT 1 FROM scheduled_sends WHERE character_id = ? AND date = ? LIMIT 1`,
+    )
+    .get(g.characterId, g.today);
+  if (exists) return;
+  const send = await draftReconnect(g);
+  if (send)
+    insertScheduledSend(
+      g.characterId,
+      g.chatId,
+      g.today,
+      send.window_start,
+      send.window_end,
+      send.text,
+      nowStamp(),
+      "reconnect",
+    );
+};
+
 const addMin = (hhmm: string, m: number): string => {
   const [h, mm] = hhmm.split(":").map(Number);
   const t = Math.min(23 * 60 + 59, (h ?? 0) * 60 + (mm ?? 0) + m);
@@ -588,9 +668,14 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   }
 
   if (g.diaryExists) {
-    // 정식(어제 일기 반영) 각본 확보 — 새벽 대화가 만든 lazy 각본이 있으면 교체된다
-    await ensureTodayPlan(g.characterId, g.bible, true);
-    return `skip: ${g.diaryDate} 일기 이미 있음`;
+    if (g.silenceTier === "normal") {
+      // 정식(어제 일기 반영) 각본 확보 — 새벽 대화가 만든 lazy 각본이 있으면 교체된다
+      await ensureTodayPlan(g.characterId, g.bible, true);
+    } else if (g.silenceTier === "reconnect") {
+      // 외부 경로가 일기만 응고하고 재연결 문안을 안 만들었을 수 있다 — 없으면 여기서 준비
+      await ensureReconnectSend(g);
+    }
+    return `skip: ${g.diaryDate} 일기 이미 있음 (침묵 ${g.silenceDays}일, ${g.silenceTier})`;
   }
 
   let entry: DiaryOutput;
@@ -617,6 +702,17 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
       1200,
       config.modelDeep,
     );
+  }
+
+  // 침묵 백오프: 조용/휴면 단계에선 각본·선톡을 만들지 않는다 — 볼 사람이 없는 산출물에
+  // opus를 쓰지 않는다. 유저가 돌아오면 각본은 lazy 생성이 받고, 다음 밤부터 정식 경로가 재개된다.
+  if (g.silenceTier === "quiet" || g.silenceTier === "dormant") {
+    return `${applyNightlyOutput(g, { entry, extract })} (침묵 ${g.silenceDays}일 — 각본·선톡 생략)`;
+  }
+  // 재연결 단계: 아침 안부 대신 저녁 재연결 1통만 준비한다
+  if (g.silenceTier === "reconnect") {
+    send = await draftReconnect(g);
+    return applyNightlyOutput(g, { entry, extract, send });
   }
 
   // 오늘 각본을 먼저 만들고, 아침 안부의 발송 시점을 그 각본의 삶(기상·출근·자리)과 연동한다.

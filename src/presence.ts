@@ -48,6 +48,15 @@ const lastCharTs = (chatId: string): string | undefined =>
       .get(chatId) as { ts: string } | undefined
   )?.ts;
 
+const lastUserTs = (chatId: string): string | undefined =>
+  (
+    db
+      .prepare(
+        `SELECT ts FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(chatId) as { ts: string } | undefined
+  )?.ts;
+
 const lastLineOf = (chatId: string): string =>
   (
     db
@@ -133,9 +142,13 @@ const presenceTickBody = async (): Promise<void> => {
     }
     const nowMin = toMin(kstClock());
 
-    // 대화가 최근(≤4h) 오갔을 때만 — 하루 종일 조용한 상대에게 뜬금없이 알리지 않는다.
+    // '유저의' 발화가 최근(≤4h)일 때만 — 하루 종일 조용한 상대에게 뜬금없이 알리지 않는다.
+    // 캐릭터 자기 발화까지 세면 아침 안부가 '최근 대화'가 되어 예고가 예고를 부르는 체인이 생겼다
+    // (실측: 침묵일에도 하루 최대 5통). 유저 기준 4시간은 침묵 백오프(3일)를 자연히 포함한다.
+    const lu = lastUserTs(c.chat_id);
+    if (!lu || ageMin(lu) > 240) continue;
     const last = lastMessage(c.chat_id);
-    if (!last || ageMin(last.ts) > 240) continue;
+    if (!last) continue;
     // 유저가 붙잡아 곁에 있는 중(주의집중)이면 자리 비움 예고를 하지 않는다.
     const ov = getAttentionUntil(c.chat_id);
     if (ov && ageMin(ov) < 0) continue;

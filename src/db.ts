@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS scheduled_sends (
   window_start TEXT NOT NULL,
   window_end TEXT NOT NULL,
   text TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'morning',
   status TEXT NOT NULL DEFAULT 'pending',
   reason TEXT,
   attempts INTEGER NOT NULL DEFAULT 0,
@@ -301,6 +302,11 @@ if (!sendCols.some((c) => c.name === "attempts"))
   );
 if (!sendCols.some((c) => c.name === "last_error"))
   db.exec(`ALTER TABLE scheduled_sends ADD COLUMN last_error TEXT`);
+// 문안의 종류: morning=아침 안부, reconnect=긴 침묵 후 재연결 1통 (침묵 백오프)
+if (!sendCols.some((c) => c.name === "kind"))
+  db.exec(
+    `ALTER TABLE scheduled_sends ADD COLUMN kind TEXT NOT NULL DEFAULT 'morning'`,
+  );
 
 // 하루 각본의 출처: 밤 정리 정식 생성(nightly) vs 그날 첫 대화의 lazy 생성.
 // 새벽 대화가 만든 lazy 각본(어제 일기가 아직 없어 이틀 전 일기 참조)을 밤 정리가 교체할 수 있게 구분
@@ -514,6 +520,7 @@ export interface ScheduledSendRow {
   window_start: string;
   window_end: string;
   text: string;
+  kind: string; // morning | reconnect
   attempts: number;
 }
 
@@ -525,6 +532,7 @@ export const insertScheduledSend = (
   windowEnd: string,
   text: string,
   now: string,
+  kind: "morning" | "reconnect" = "morning",
 ): void => {
   const dup = db
     .prepare(
@@ -533,14 +541,14 @@ export const insertScheduledSend = (
     .get(characterId, date);
   if (dup) return; // 하루 1통
   db.prepare(
-    `INSERT INTO scheduled_sends (character_id, chat_id, date, window_start, window_end, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(characterId, chatId, date, windowStart, windowEnd, text, now);
+    `INSERT INTO scheduled_sends (character_id, chat_id, date, window_start, window_end, text, created_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(characterId, chatId, date, windowStart, windowEnd, text, now, kind);
 };
 
 export const getPendingSends = (date: string): ScheduledSendRow[] =>
   db
     .prepare(
-      `SELECT id, character_id, chat_id, date, window_start, window_end, text, attempts FROM scheduled_sends WHERE status = 'pending' AND date = ?`,
+      `SELECT id, character_id, chat_id, date, window_start, window_end, text, kind, attempts FROM scheduled_sends WHERE status = 'pending' AND date = ?`,
     )
     .all(date) as ScheduledSendRow[];
 

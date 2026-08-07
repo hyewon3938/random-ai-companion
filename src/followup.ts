@@ -21,6 +21,7 @@ import {
   logErr,
 } from "./bot.js";
 import { currentBlock } from "./context.js";
+import { proactiveAllowed } from "./proactive-policy.js";
 import { kstClock, logicalDayStartTs } from "./kst.js";
 
 // 침묵 팔로업: 대화 중 유저가 한동안 조용하고, 지금 우진의 각본이 '자기 삶을 한 마디 흘릴 만한
@@ -111,6 +112,9 @@ const followupTickBody = async (): Promise<void> => {
     const last = lastMessage(c.chat_id);
     // 조건: 대화가 있었고 + 마지막이 '캐릭터' 차례(유저가 답 안 한 상태)
     if (!last || last.role !== "char") continue;
+
+    // 침묵 백오프(관제탑): 무응답이 길어진 유저에겐 팔로업도 접는다
+    if (!proactiveAllowed(c.chat_id, c.id)) continue;
 
     // 밤 굿나잇: 새벽(2~5시)에 대화하다 유저가 '잔다'는 말 없이 1시간+ 잠수하면, 잠든 듯 여겨 다정한
     // 굿나잇을 한 번 남긴다(아침에 보면 설렘). 이미 굿나잇을 주고받았으면 보내지 않는다.

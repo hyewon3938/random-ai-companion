@@ -24,9 +24,10 @@ import {
 import { getKstNow, kstClock, kstDateString } from "./kst.js";
 
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
-// reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 안부(선톡), followup=침묵 팔로업(선톡)
+// reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 안부(선톡),
+// followup=침묵 팔로업(선톡), presence=자리비움 예고/복귀, reconnect=긴 침묵 후 재연결(침묵 백오프)
 export type SendKind =
-  "reply" | "recover" | "morning" | "followup" | "presence";
+  "reply" | "recover" | "morning" | "followup" | "presence" | "reconnect";
 
 // 텔레그램 API 연결 풀.
 //
@@ -228,7 +229,7 @@ export const sendProactive = async (
   chatId: string,
   characterId: number,
   text: string,
-  kind: "morning" | "followup" | "presence" = "morning",
+  kind: Exclude<SendKind, "reply" | "recover"> = "morning",
   extraMeta?: Record<string, unknown>,
 ): Promise<SendOutcome> => {
   console.log(`[send] kind=${kind} chat=${chatId} len=${text.length}`);

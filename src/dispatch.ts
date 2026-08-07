@@ -10,6 +10,7 @@ import {
   releaseProactive,
   logErr,
 } from "./bot.js";
+import { silenceState } from "./proactive-policy.js";
 import { getKstNow, kstClock, kstDateString } from "./kst.js";
 
 // 선톡 디스패처: LLM 콜 없이, 밤 정리가 준비해둔 문안을 발송 창 안에서 내보내는 틱.
@@ -59,6 +60,22 @@ export const runDispatchTick = async (): Promise<void> => {
     for (const r of getPendingSends(today)) {
       if (now < r.window_start) continue;
 
+      // 침묵 백오프(관제탑): 무응답이 길어진 유저에겐 아침 안부를 보내지 않는다.
+      // 문안 생성 단계(밤 정리)에서 이미 걸러지지만, 경계일에 걸친 문안을 위한 이중 가드.
+      // 재연결(kind=reconnect) 문안은 백오프 그 자체이므로 이 게이트를 지나간다.
+      if (r.kind !== "reconnect") {
+        const st = silenceState(r.chat_id, r.character_id);
+        if (st.tier !== "normal") {
+          markScheduledSend(
+            r.id,
+            "skipped",
+            `침묵 백오프 (무응답 ${st.days}일, ${st.tier})`,
+            null,
+          );
+          continue;
+        }
+      }
+
       const deadline = graceUntil(r.window_start, r.window_end);
       if (now > deadline) {
         // 시도 흔적이 있으면 전송 실패로 죽은 것, 없으면 창 자체를 못 잡은 것 — 사유를 가른다.
@@ -89,7 +106,7 @@ export const runDispatchTick = async (): Promise<void> => {
           r.chat_id,
           r.character_id,
           r.text,
-          "morning",
+          r.kind === "reconnect" ? "reconnect" : "morning",
         );
         const notes = [
           late ? `유예 발송 (창 종료 ${r.window_end} 이후)` : null,
