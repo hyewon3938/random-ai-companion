@@ -15,3 +15,6 @@ data/
 assets/*.mov
 assets/*.jpg
 !assets/fig-*.jpg
+
+# 배포 rsync 제외 목록 (로컬 전용)
+.rsync-exclude
