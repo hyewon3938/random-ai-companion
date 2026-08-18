@@ -250,23 +250,29 @@ export const sendProactive = async (
   return { delivered: sent.length, total };
 };
 
-// LLM이 답장 맨 앞에 붙인 응답 속도 태그를 읽어 지연을 정하고, 태그는 떼어낸다.
-// [한참후]=운동·운전 등 자리 비움, [잠시후]=근무 중 짬짬이, [즉시]=여유
-const parsePresence = (reply: string): { delayMs: number; text: string } => {
-  // 앞머리 대괄호는 어떤 형태든 태그로 보고 전부 떼어낸다(유저에게 노출 방지).
-  // [남음][즉시]처럼 태그 두 개가 겹쳐 나오면 하나만 벗기던 버그가 있어 연속으로 벗긴다.
+// LLM이 답장 맨 앞에 붙인 시스템 태그를 전부 읽고 떼어낸다(유저에게 노출 방지).
+// 지금 값을 읽는 태그는 [남음] 하나 — 조정 가능한 자기 일정을 접거나 미루고 곁에 남기로 한 신호.
+// 응답 속도 태그([한참후]·[잠시후]·[즉시])는 지연을 각본 블록에서 계산하게 바뀐 뒤로 값을 쓰지
+// 않지만, 유저에게 보이면 안 되므로 떼어내는 대상에는 그대로 남는다.
+interface ReplyTags {
+  stay: boolean;
+  text: string;
+}
+
+// 앞머리 대괄호는 어떤 형태든 태그로 보고 전부 떼어낸다. [남음][즉시]처럼 겹쳐 나오면
+// 하나만 벗기던 버그가 있어 연속으로 벗기고, 종류 판정도 벗기는 자리에서 함께 한다 —
+// 맨 앞 하나만 정규식으로 따로 보면 태그가 겹친 순간 뒤쪽 신호를 통째로 놓친다.
+const parseReplyTags = (reply: string): ReplyTags => {
   let text = reply;
-  let delayMs = 0;
+  let stay = false;
   let m: RegExpMatchArray | null;
   // 길이 상한 20 — 응답 속도 태그(4자)뿐 아니라 대화 기록에 붙는 시간 마커를 모델이 흉내 내
   // 답장에 찍는 경우("3일 전(금) 21:40" = 14자)까지 덮는 값.
   while ((m = text.match(/^\s*\[([^\]\n]{1,20})\]\s*/))) {
-    const tag = m[1];
-    if (tag.includes("한참")) delayMs = rand(60000, 150000);
-    else if (tag.includes("잠시")) delayMs = rand(15000, 45000);
+    if (m[1].includes("남음")) stay = true;
     text = text.slice(m[0].length);
   }
-  return { delayMs, text: text.trim() };
+  return { stay, text: text.trim() };
 };
 
 // 연속 동일 role 메시지 병합 + 시간이 벌어진 지점에 시간 마커.
@@ -465,9 +471,18 @@ const respond = async (
     // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다
     const system = buildSystemBlocks(character.id, bible, state, chatId);
     const turns = toTurns(getRecentMessages(chatId, 40));
-    const reply = await chat(system, turns);
+    // 태그는 여기서 전부 떼어낸다(유저 비노출).
+    let { text, stay } = parseReplyTags(await chat(system, turns));
+    // 빈 답장 방어: LLM이 태그만 뱉거나 빈 문자열을 주는 경우가 있다 → 한 번 재생성, 그래도 비면 스킵.
+    // (빈 텍스트를 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.)
+    // 태그만 뱉은 답이 바로 이 경우라, 재생성분의 신호도 함께 살린다.
+    if (!text) {
+      const retry = parseReplyTags(await chat(system, turns));
+      text = retry.text;
+      stay = stay || retry.stay;
+    }
     // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음])면 주의집중을 켠다 — 그 블록 끝까지(최소 30분) 곁에.
-    if (/^\s*\[\s*남음\s*\]/.test(reply)) {
+    if (stay) {
       const cur = currentBlock(character.id);
       const nowMin = toMin(kstClock());
       const endMin = cur ? toMin(cur.end) : nowMin + 45;
@@ -476,11 +491,6 @@ const respond = async (
         `[attention] ${chatId} 유저 요청으로 일정 접음 (until ${cur?.end ?? "+30m"})`,
       );
     }
-    // 태그는 떼어낸다(유저 비노출). 자리 비움 지연은 이제 각본 블록 기반으로 arm에서 미리 적용된다.
-    let { text } = parsePresence(reply);
-    // 빈 답장 방어: LLM이 태그만 뱉거나 빈 문자열을 주는 경우가 있다 → 한 번 재생성, 그래도 비면 스킵.
-    // (빈 텍스트를 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.)
-    if (!text) text = parsePresence(await chat(system, turns)).text;
     if (!text) {
       console.warn(`[bot] empty reply — skip (chat=${chatId})`);
       return;
