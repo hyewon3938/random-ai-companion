@@ -85,3 +85,58 @@ export const kstVerbalTime = (): string => {
             : `거의 ${next}`;
   return `${cur} ${m}분 (${feel})`;
 };
+
+// messages.ts는 KST 벽시계 문자열("YYYY-MM-DD HH:MM:SS", bot.ts nowIso).
+// UTC 필드가 KST 값을 갖는 Date로 되돌린다 — getKstNow()와 같은 좌표계라 이후 계산이 일관된다.
+const kstDateOf = (ts: string): Date => new Date(`${ts.replace(" ", "T")}Z`);
+
+// 임의 시각의 논리일(새벽 5시 경계). kstLogicalDate()의 '지금' 전용 버전을 일반화한 것.
+export const logicalDateOf = (ts: string): string =>
+  kstDateString(new Date(kstDateOf(ts).getTime() - 5 * 3600_000));
+
+// 오늘(논리일)로부터 며칠 전인지. 자정이 아니라 새벽 5시가 경계라, 새벽 2시 대화는 아직 '오늘'이다.
+export const logicalDaysAgo = (
+  ts: string,
+  todayLogical: string = kstLogicalDate(),
+): number =>
+  Math.round(
+    (Date.parse(`${todayLogical}T00:00:00Z`) -
+      Date.parse(`${logicalDateOf(ts)}T00:00:00Z`)) /
+      86_400_000,
+  );
+
+// 마커를 새로 줄 만큼 시간이 벌어졌다고 보는 간격
+const MARKER_GAP_MS = 60 * 60 * 1000;
+
+// 대화 기록 턴 앞에 붙일 시간 표시. 앞 메시지와 시간이 벌어진 지점에만 준다(매 턴에 붙이면 노이즈).
+// null이면 붙이지 않는다. 며칠 전인지는 코드가 세어 말로 준다 — 모델에게 날짜 뺄셈을 시키지 않는다.
+export const timeMarkerFor = (
+  ts: string,
+  prevTs: string | null,
+  todayLogical: string = kstLogicalDate(),
+): string | null => {
+  const newBlock =
+    prevTs === null ||
+    logicalDateOf(prevTs) !== logicalDateOf(ts) ||
+    kstDateOf(ts).getTime() - kstDateOf(prevTs).getTime() >= MARKER_GAP_MS;
+  if (!newBlock) return null;
+  const clock = ts.slice(11, 16);
+  const ago = logicalDaysAgo(ts, todayLogical);
+  if (ago <= 0) return clock;
+  if (ago === 1) return `어제 ${clock}`;
+  if (ago === 2) return `그저께 ${clock}`;
+  return `${ago}일 전(${DAYS[kstDateOf(ts).getUTCDay()]}) ${clock}`;
+};
+
+// 시스템 프롬프트용 — 마지막으로 대화한 날을 사람 말로. 마커와 달리 날짜를 함께 준다.
+export const lastTalkedLabel = (
+  ts: string,
+  todayLogical: string = kstLogicalDate(),
+): string => {
+  const d = kstDateOf(ts);
+  const date = `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${DAYS[d.getUTCDay()]}`;
+  const ago = logicalDaysAgo(ts, todayLogical);
+  const rel =
+    ago <= 0 ? "오늘" : ago === 1 ? "어제" : ago === 2 ? "그저께" : `${ago}일 전`;
+  return `${rel}(${date}) ${ts.slice(11, 16)}`;
+};
