@@ -20,8 +20,9 @@ import {
   setAttentionOverride,
   setRecoveryMark,
   type CharacterRow,
+  type MessageRow,
 } from "./db.js";
-import { getKstNow, kstClock, kstDateString } from "./kst.js";
+import { getKstNow, kstClock, kstDateString, timeMarkerFor } from "./kst.js";
 
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
 // reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 안부(선톡),
@@ -257,7 +258,9 @@ const parsePresence = (reply: string): { delayMs: number; text: string } => {
   let text = reply;
   let delayMs = 0;
   let m: RegExpMatchArray | null;
-  while ((m = text.match(/^\s*\[([^\]\n]{1,8})\]\s*/))) {
+  // 길이 상한 20 — 응답 속도 태그(4자)뿐 아니라 대화 기록에 붙는 시간 마커를 모델이 흉내 내
+  // 답장에 찍는 경우("3일 전(금) 21:40" = 14자)까지 덮는 값.
+  while ((m = text.match(/^\s*\[([^\]\n]{1,20})\]\s*/))) {
     const tag = m[1];
     if (tag.includes("한참")) delayMs = rand(60000, 150000);
     else if (tag.includes("잠시")) delayMs = rand(15000, 45000);
@@ -266,14 +269,20 @@ const parsePresence = (reply: string): { delayMs: number; text: string } => {
   return { delayMs, text: text.trim() };
 };
 
-// 연속 동일 role 메시지 병합 (API는 user/assistant 교대를 기대)
-const toTurns = (rows: { role: string; text: string }[]): ChatTurn[] => {
+// 연속 동일 role 메시지 병합 + 시간이 벌어진 지점에 시간 마커.
+// 기록 자체에 시간이 없으면 모델이 며칠 전 대화를 방금 일로 읽는다(프롬프트가 전부 '지금' 기준이라
+// 날짜 없는 기록은 오늘로 수렴한다). 마커는 병합된 본문 안에 넣어 role 교대 규약을 건드리지 않는다.
+const toTurns = (rows: MessageRow[]): ChatTurn[] => {
   const turns: ChatTurn[] = [];
+  let prevTs: string | null = null;
   for (const row of rows) {
     const role = row.role === "user" ? "user" : "assistant";
+    const marker = timeMarkerFor(row.ts, prevTs);
+    const text = marker ? `[${marker}] ${row.text}` : row.text;
+    prevTs = row.ts;
     const last = turns[turns.length - 1];
-    if (last && last.role === role) last.content += `\n${row.text}`;
-    else turns.push({ role, content: row.text });
+    if (last && last.role === role) last.content += `\n${text}`;
+    else turns.push({ role, content: text });
   }
   if (turns[0]?.role === "assistant")
     turns.unshift({ role: "user", content: "(대화 시작)" });

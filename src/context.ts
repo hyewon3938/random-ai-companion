@@ -12,6 +12,7 @@ import {
   getCast,
   getArcs,
   currentSpeechLevel,
+  lastMessageBefore,
 } from "./db.js";
 import {
   kstDescription,
@@ -19,6 +20,8 @@ import {
   kstVerbalTime,
   workdayContext,
   kstClock,
+  logicalDayStartTs,
+  lastTalkedLabel,
 } from "./kst.js";
 
 // 전 캐릭터 공통 고정층. docs/character-design.md §5가 원본 — 어긋나면 문서 기준으로 수정
@@ -59,7 +62,8 @@ const RULES = `[대화 방식]
 const FACT_CARE = `(사실·숫자를 다룰 때 — 오해하거나 지어내지 않기)
 - 상대의 말이 질문인지 진술인지, 주어가 '너(캐릭터)'인지 '상대'인지 정확히 가른다. 상대가 너에 대해 물은 것("너 몇 학번이야?", "너 몇 살이야?")을 상대 자신에 대한 진술("나 X학번이야")로 착각하지 않는다. 애매하면 되물어 확인한다.
 - 확실히 모르는 상대의 구체 정보(학번·정확한 나이·생일·날짜 등)를 지어내지 않는다. 모르면 가볍게 되묻거나("몇 학번인데요?") 넘긴다. 억지로 계산해 틀린 숫자를 확신에 차서 말하지 않는다.
-- 너 자신에 대한 수치(나이·학번·졸업 연도 등)는 설정된 네 나이와 일관되게, 대충이라도 맞게 답하고 한번 말한 값은 계속 유지한다. 상대의 나이를 알더라도 거기서 상대의 학번 같은 걸 함부로 단정하지 않는다.`;
+- 너 자신에 대한 수치(나이·학번·졸업 연도 등)는 설정된 네 나이와 일관되게, 대충이라도 맞게 답하고 한번 말한 값은 계속 유지한다. 상대의 나이를 알더라도 거기서 상대의 학번 같은 걸 함부로 단정하지 않는다.
+- 대화 기록에서 말 앞에 붙은 [어제 22:10] 같은 표시는 그 말을 언제 했는지 시스템이 붙여준 것이다. 며칠 전 이야기를 오늘 일처럼(아까·방금) 말하지 않는 데 쓰고, 네 답장에는 절대 쓰지 않는다.`;
 
 // 응답 속도를 캐릭터 스스로 판단하게 한다. 맨 앞 태그를 코드가 읽어 그만큼 지연시켜 보냄.
 // (자리 비움을 미리 알리는 규칙은 PRESENCE_NARRATION에 한 번만 — 중복 서술은 걷어냈다)
@@ -347,7 +351,15 @@ export const buildSystemBlocks = (
     .filter(Boolean)
     .join("\n\n");
 
+  // 직전에 대화한 날 — 오늘 기록만 보면 모델이 공백 자체를 인지하지 못한다.
+  // 실시간 꼬리에 둔다(매일 바뀌는 값이라 캐시 경계 앞에 두면 캐시를 깬다).
+  const prev = lastMessageBefore(chatId, logicalDayStartTs());
+  const lastTalkSection = prev
+    ? `[직전 대화]\n마지막으로 대화한 날은 ${lastTalkedLabel(prev.ts)}다. 그 뒤로는 오늘 다시 연락이 닿았다.`
+    : "";
+
   const live = [
+    lastTalkSection,
     daySection(characterId),
     nowSection(chatId, characterId),
     FINAL_CHECK,
