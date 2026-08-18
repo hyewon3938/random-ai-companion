@@ -271,6 +271,17 @@ export const getRecentMessages = (
   return rows.reverse();
 };
 
+// 특정 시각 이전의 마지막 메시지 — '직전에 대화한 날'을 세는 데 쓴다.
+export const lastMessageBefore = (
+  chatId: string,
+  ts: string,
+): MessageRow | undefined =>
+  db
+    .prepare(
+      `SELECT id, role, text, ts FROM messages WHERE chat_id = ? AND role IN ('user','char') AND ts < ? ORDER BY id DESC LIMIT 1`,
+    )
+    .get(chatId, ts) as MessageRow | undefined;
+
 // 유저가 연속으로 이어 보낸 메시지 사이의 텀(ms). 봇 응답이 끼지 않은 '이어 보내기'만 센다
 // (봇 답장을 사이에 둔 건 새 턴이라 제외, 2분 넘는 텀도 새 턴으로 보고 제외).
 // 텀이 길수록 = 한 번에 길게 치는 사람 = 응답 대기를 더 길게 잡아 중간에 끊지 않게 한다.
