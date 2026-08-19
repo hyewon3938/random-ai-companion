@@ -26,6 +26,7 @@ import {
   type DaySeed,
 } from "./db.js";
 import type { Bible } from "./character.js";
+import { SPEECH_TEXTURE_COMPACT } from "./context.js";
 import type { DayPlan } from "./day-plan.js";
 import { ensureTodayPlan } from "./day-plan.js";
 import {
@@ -474,7 +475,7 @@ const SEND_SYSTEM = `너는 주어진 인물 그 자체로, 상대에게 먼저 
 const sendPrompt = (
   g: NightlyGathered,
   moment: string,
-): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}
+): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}${SPEECH_TEXTURE_COMPACT}
 오늘은 ${g.today} (${g.todayLabel}).
 
 ${renderUserBlock(g.chatId)}
@@ -506,7 +507,7 @@ const RECONNECT_SYSTEM = `너는 주어진 인물이다. 상대에게서 연락�
 
 const reconnectPrompt = (
   g: NightlyGathered,
-): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}
+): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}${SPEECH_TEXTURE_COMPACT}
 ${renderUserBlock(g.chatId)}
 상대와 마지막으로 연락이 오간 지 ${g.silenceDays}일쯤 됐다. 지금은 저녁이다.
 - "요새 많이 바쁘지?" 같은, 근황을 가볍게 묻는 결. 네 근황 한 조각을 곁들여도 좋다.
