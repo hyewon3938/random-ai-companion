@@ -13,6 +13,7 @@ import {
   type CharacterRow,
 } from "./db.js";
 import type { Bible } from "./character.js";
+import { SPEECH_TEXTURE_COMPACT } from "./context.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory } from "./day-plan.js";
 import {
@@ -21,7 +22,12 @@ import {
   releaseProactive,
   logErr,
 } from "./bot.js";
-import { kstClock, kstDateString, kstVerbalTime, logicalDayStartTs } from "./kst.js";
+import {
+  kstClock,
+  kstDateString,
+  kstVerbalTime,
+  logicalDayStartTs,
+} from "./kst.js";
 
 // 자리 비움 예고(선-불가 선톡): 곧 한동안 답장이 어려운 일(운동·샤워·외출·회의 등)로
 // 들어가기 직전이면 조용히 사라지지 않고 "이제 ~하러 가요, 답 늦어요"를 먼저 남긴다.
@@ -77,7 +83,7 @@ const presencePrompt = (
   lastLine: string,
   fixed: boolean,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}
 ${renderUserBlock(chatId)}
 지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다.
 ${
@@ -106,7 +112,7 @@ const returnPrompt = (
   bible: Bible,
   activity: string,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}
 ${renderUserBlock(chatId)}
 지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다. 너는 방금 ${activity} 을(를) 끝내고 돌아왔다. 그 사이 상대에게선 답이 없었다.
 - 돌아왔음을 가볍게 알린다(그 일이 이제 끝났고 돌아왔다는 결). 아까 하려던 안부를 자연스럽게 이어도 좋다.
