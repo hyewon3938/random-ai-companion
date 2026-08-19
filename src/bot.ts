@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { createDaepyoCharacter, type Bible } from "./character.js";
 import { ensureTodayPlan, blockCategory } from "./day-plan.js";
 import { buildSystemBlocks, currentBlock } from "./context.js";
+import { polishBubble } from "./bubble-polish.js";
 import { maybeCaptureFacts } from "./capture.js";
 import { chat, type ChatTurn } from "./llm.js";
 import {
@@ -171,7 +172,7 @@ const sendBubblesTo = async (
 ): Promise<{ sent: string[]; error?: unknown }> => {
   const sent: string[] = [];
   for (const raw of splitBubbles(text)) {
-    const bubble = fixQuestion(stripDquotes(raw));
+    const bubble = polishBubble(raw);
     // 실제 치는 속도(≈5~6자/초)에 맞춘 타이핑 시간. 90ms/자는 복붙처럼 빨라서 180ms/자로 늦춤.
     const typeMs =
       clamp(bubble.length * 180, 1700, 9000) + Math.random() * 1000;
@@ -192,31 +193,6 @@ const rand = (min: number, max: number): number =>
 // 대개 몇 분 내에 답하되 간헐적으로 텀이 길어지는 결. 회식은 span을 더 크게 줘 평균을 늘린다.
 const skewLow = (min: number, span: number): number =>
   min + Math.random() ** 2 * span;
-
-// 물음표 보정: 질문인데 물음표가 빠진 말풍선을 고친다(LLM이 자꾸 흘려서 코드가 최종 방어선).
-// 평서문 오탐이 나면 더 어색하므로 보수적으로 — 명백한 평서 종결은 건드리지 않고,
-// 의문사나 확정 의문어미가 있을 때만 물음표를 붙인다.
-const DECLARATIVE_END =
-  /(습니다|거든요?|더라고요?|더라구요?|네요|군요|구나|ㄹ게요?|을게요?|잖아요?|라고요?|답니다|던데요?|는데요?|던걸요?|걸요?|겠어요|겠네요|겠다|더라|드라|을게|ㄹ게)$/;
-const Q_ENDING =
-  /(나요|인가요|은가요|까요|을까요|ㄹ까요|을래요|ㄹ래요|래요|니|냐|디)$/;
-const Q_WORD =
-  /(뭐|무슨|무엇|뭘|어디|언제|누구|누가|왜|어떻게|어떤|어느|얼마|몇|어때)/;
-// 큰따옴표는 특유의 AI 느낌이라 발화에서 지운다(인용·강조 모두 따옴표 없이).
-const stripDquotes = (s: string): string => s.replace(/[“”„‟"]/gu, "");
-
-const fixQuestion = (bubble: string): string => {
-  const t = bubble.replace(/\s+$/u, "");
-  if (!t) return bubble;
-  // 평서 종결 어미 뒤에 LLM이 잘못 붙인 물음표는 뗀다(자기 설명을 확인 구하듯 끝내는 패턴 방지).
-  const q = t.match(/^(.*[^\s?？])[?？]+$/u);
-  if (q && DECLARATIVE_END.test(q[1])) return q[1] + ".";
-  if (/[?？!！~.…”"』」)\]]$/u.test(t)) return bubble; // 이미 종결부호
-  if (/[ㅋㅎ]$/u.test(t)) return bubble; // 웃음으로 끝나면 그대로
-  if (DECLARATIVE_END.test(t)) return bubble; // 명백한 평서
-  if (Q_ENDING.test(t) || Q_WORD.test(t)) return t + "?";
-  return bubble;
-};
 
 // 선제 발송(선톡): 유저 메시지 없이 캐릭터가 먼저 보낸다. 아침 안부(morning)·침묵 팔로업(followup)이 호출
 // 반환: 실제로 나간 말풍선 수 / 전체. 아무것도 못 나가면 throw(= 호출부가 재시도해도 안전),
