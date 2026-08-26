@@ -62,8 +62,8 @@ export const runDispatchTick = async (): Promise<void> => {
 
       // 침묵 백오프(관제탑): 무응답이 길어진 유저에겐 아침 안부를 보내지 않는다.
       // 문안 생성 단계(밤 정리)에서 이미 걸러지지만, 경계일에 걸친 문안을 위한 이중 가드.
-      // 재연결(kind=reconnect) 문안은 백오프 그 자체이므로 이 게이트를 지나간다.
-      if (r.kind !== "reconnect") {
+      // 안부 선톡(kind=checkin) 문안은 백오프 그 자체이므로 이 게이트를 지나간다.
+      if (r.kind !== "checkin") {
         const st = silenceState(r.chat_id, r.character_id);
         if (st.tier !== "normal") {
           markScheduledSend(
@@ -106,7 +106,7 @@ export const runDispatchTick = async (): Promise<void> => {
           r.chat_id,
           r.character_id,
           r.text,
-          r.kind === "reconnect" ? "reconnect" : "morning",
+          r.kind === "checkin" ? "checkin" : "morning",
         );
         const notes = [
           late ? `유예 발송 (창 종료 ${r.window_end} 이후)` : null,

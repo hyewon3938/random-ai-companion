@@ -15,7 +15,7 @@ const row = db
 if (!row) {
   console.log("no active character");
 } else {
-  const bible = JSON.parse(row.bible_json) as Bible;
+  const bible = JSON.parse(row.genesis_json) as Bible;
   const blocks = buildSystemBlocks(
     row.id,
     bible,

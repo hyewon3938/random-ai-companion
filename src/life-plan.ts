@@ -165,7 +165,7 @@ export const applyMonthPlan = (
         energy: s.energy || "보통",
         wake_hint: s.wake_hint || "보통",
         mood: s.mood || "",
-        note: s.note || null,
+        reason: s.note || null,
       });
 };
 

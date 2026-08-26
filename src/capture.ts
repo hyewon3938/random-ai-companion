@@ -44,14 +44,14 @@ export const maybeCaptureFacts = async (
   const mark = getCaptureMark(chatId);
   const fresh = db
     .prepare(
-      `SELECT id, role, text FROM messages WHERE chat_id = ? AND id > ? AND role IN ('user','char') ORDER BY id`,
+      `SELECT id, role, text FROM messages WHERE chat_id = ? AND id > ? ORDER BY id`,
     )
     .all(chatId, mark) as { id: number; role: string; text: string }[];
 
   // 말풍선(전송) 개수가 아니라 유저 '턴' 수로 센다 — 분할 전송을 한 턴으로 묶어,
   // 몰아 보내든 한 개씩 보내든 같은 기준이 되게(char 발화 뒤 처음 오는 user = 새 턴).
   let userTurns = 0;
-  let prevRole = "char";
+  let prevRole = "assistant";
   for (const m of fresh) {
     if (m.role === "user" && prevRole !== "user") userTurns++;
     prevRole = m.role;

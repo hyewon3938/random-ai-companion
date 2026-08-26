@@ -22,7 +22,7 @@ if (!row) {
 }
 
 const ym = process.argv[2] ?? kstDateString().slice(0, 7);
-const bible = JSON.parse(row.bible_json) as Bible;
+const bible = JSON.parse(row.genesis_json) as Bible;
 
 const made = await ensureMonthPlan(row.id, bible, ym);
 console.log(made ? `생성함: ${ym}` : `이미 있음: ${ym} (내용만 표시)`);
@@ -41,6 +41,6 @@ const eventDates = new Set(events.map((e) => e.date));
 for (const s of seeds) {
   const mark = eventDates.has(s.date) ? " ●이벤트" : "";
   console.log(
-    `  ${s.date}  기력:${s.energy}  기상:${s.wake_hint}  기분:${s.mood}${s.note ? `  (${s.note})` : ""}${mark}`,
+    `  ${s.date}  기력:${s.energy}  기상:${s.wake_hint}  기분:${s.mood}${s.reason ? `  (${s.reason})` : ""}${mark}`,
   );
 }

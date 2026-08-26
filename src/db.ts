@@ -9,78 +9,176 @@ mkdirSync(dirname(config.dbPath), { recursive: true });
 export const db = new Database(config.dbPath);
 db.pragma("journal_mode = WAL");
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS characters (
+// ── 스키마 ────────────────────────────────────────────────────────────────
+// 테이블 정의는 이 표 한 곳에만 둔다. 새 DB는 이 정의로 바로 만들고, 옛 DB는 아래
+// 마이그레이션이 같은 정의로 테이블을 다시 만들어 값을 옮긴다.
+// 값이 정해진 컬럼은 영어 식별자로 저장하고 CHECK로 막는다. 모델이 짓는 값(무엇·태그·
+// 저장하는 내용·영역 이름)은 한국어 그대로 들어간다.
+const TABLES: Record<string, string> = {
+  characters: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active',
-  bible_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS relationships (
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','ended')),
+  genesis_json TEXT NOT NULL,
+  created_at TEXT NOT NULL`,
+
+  relationships: `
   character_id INTEGER PRIMARY KEY REFERENCES characters(id),
   met_at TEXT NOT NULL,
-  state_json TEXT NOT NULL,
-  last_contact_at TEXT
-);
-CREATE TABLE IF NOT EXISTS user_preferences (
+  last_contact_at TEXT,
+  legacy_state_json TEXT`,
+
+  // 기억 한 건 = 저장 항목(item_type) + 누구 쪽(owner) + 영역(area) + 무엇(subject)이 키.
+  // 같은 키로 다시 들어오면 값을 덮어쓴다.
+  memory_items: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  item_type TEXT NOT NULL CHECK (item_type IN ('identity','user_fact','ongoing','relationship')),
+  owner TEXT NOT NULL CHECK (owner IN ('char','user')),
+  area TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  value TEXT NOT NULL,
+  origin TEXT NOT NULL DEFAULT 'accrued' CHECK (origin IN ('seed','accrued')),
+  user_knows TEXT NOT NULL DEFAULT 'unknown' CHECK (user_knows IN ('unknown','known','waiting')),
+  interest_level TEXT CHECK (interest_level IN ('asks_first','reacts_only','changes_topic')),
+  extra_json TEXT,
+  updated_at TEXT NOT NULL,
+  UNIQUE (character_id, item_type, owner, area, subject)`,
+
+  // 태그에서 데이터로 가는 방향의 표. 기억·일기·일정이 ref_id로 함께 들어온다.
+  tags: `
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  kind TEXT NOT NULL CHECK (kind IN ('memory','diary','schedule')),
+  ref_id INTEGER NOT NULL,
+  tag TEXT NOT NULL,
+  PRIMARY KEY (kind, ref_id, tag)`,
+
+  // 캐릭터마다 쓰는 영역 이름 목록. 새벽 정리가 키를 붙일 때 이 목록에서 고른다.
+  areas: `
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  name TEXT NOT NULL,
+  PRIMARY KEY (character_id, name)`,
+
+  // 오늘 메모: 대화 중에 나온 것을 판정 없이 그대로 적어 두고, 새벽 정리가 읽어 간다.
+  today_notes: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  created_at TEXT NOT NULL,
+  note TEXT NOT NULL,
+  message_id INTEGER`,
+
+  user_preferences: `
   chat_id TEXT PRIMARY KEY,
-  pref_json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS user_profile (
+  pref_json TEXT NOT NULL`,
+
+  // age_band는 옛 컬럼이다. 지금 프롬프트가 나이대를 여기서 읽고 있어 birth_year로
+  // 옮기는 온보딩을 고칠 때까지 함께 둔다.
+  user_profile: `
   chat_id TEXT PRIMARY KEY,
+  preferred_name TEXT,
   gender TEXT,
+  birth_year INTEGER,
+  job TEXT,
+  region TEXT,
   age_band TEXT,
-  updated_at TEXT
-);
-CREATE TABLE IF NOT EXISTS diary_entries (
+  updated_at TEXT`,
+
+  diary_entries: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER NOT NULL REFERENCES characters(id),
   date TEXT NOT NULL,
-  entry_json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS cast_members (
+  entry_json TEXT NOT NULL,
+  UNIQUE (character_id, date)`,
+
+  cast_members: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER NOT NULL REFERENCES characters(id),
-  who TEXT NOT NULL DEFAULT 'char',
+  owner TEXT NOT NULL DEFAULT 'char' CHECK (owner IN ('char','user')),
   name TEXT NOT NULL,
-  relation TEXT NOT NULL,
-  note TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS arcs (
+  relation_label TEXT NOT NULL,
+  area TEXT,
+  meet_pattern TEXT,
+  place TEXT,
+  recent_note TEXT,
+  user_knows TEXT NOT NULL DEFAULT 'unknown' CHECK (user_knows IN ('unknown','known','waiting')),
+  last_mentioned_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (character_id, name)`,
+
+  arcs: `
   character_id INTEGER NOT NULL REFERENCES characters(id),
-  horizon TEXT NOT NULL,
+  period TEXT NOT NULL CHECK (period IN ('year','season','month','week')),
   content TEXT NOT NULL,
-  PRIMARY KEY (character_id, horizon)
-);
-CREATE TABLE IF NOT EXISTS schedules (
+  PRIMARY KEY (character_id, period)`,
+
+  schedules: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER NOT NULL REFERENCES characters(id),
-  who TEXT NOT NULL,
+  owner TEXT NOT NULL CHECK (owner IN ('char','user')),
   date TEXT NOT NULL,
   time_hint TEXT,
   content TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active',
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS day_plans (
+  with_name TEXT,
+  area TEXT,
+  user_knows TEXT NOT NULL DEFAULT 'unknown' CHECK (user_knows IN ('unknown','known','waiting')),
+  origin TEXT NOT NULL DEFAULT 'conversation' CHECK (origin IN ('conversation','rhythm','ongoing')),
+  parent_kind TEXT CHECK (parent_kind IN ('memory','schedule')),
+  parent_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','cancelled','deferred')),
+  created_at TEXT NOT NULL`,
+
+  day_plans: `
   character_id INTEGER NOT NULL REFERENCES characters(id),
   date TEXT NOT NULL,
   plan_json TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'nightly',
-  PRIMARY KEY (character_id, date)
-);
-CREATE TABLE IF NOT EXISTS day_seeds (
+  made_by TEXT NOT NULL DEFAULT 'nightly' CHECK (made_by IN ('nightly','ondemand')),
+  PRIMARY KEY (character_id, date)`,
+
+  day_seeds: `
   character_id INTEGER NOT NULL REFERENCES characters(id),
   date TEXT NOT NULL,
   energy TEXT NOT NULL,
   wake_hint TEXT NOT NULL,
   mood TEXT NOT NULL,
-  note TEXT,
-  PRIMARY KEY (character_id, date)
-);
-CREATE TABLE IF NOT EXISTS scheduled_sends (
+  reason TEXT,
+  PRIMARY KEY (character_id, date)`,
+
+  // 각본과 달라진 시간만 남긴다. 하려던 것·어떻게 됐나·왜 셋이 한 줄이다.
+  day_actuals: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  date TEXT NOT NULL,
+  block_start TEXT,
+  intended TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  reason TEXT,
+  recorded_at TEXT NOT NULL`,
+
+  messages: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id TEXT NOT NULL,
+  character_id INTEGER,
+  sent_at TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('user','assistant')),
+  text TEXT NOT NULL,
+  meta_json TEXT`,
+
+  // 만들어 둔 답장을 보관했다가 정한 시각에 보낸다. 봇이 내려가도 보낼 것이 남는다.
+  pending_replies: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id TEXT NOT NULL,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  user_msg_at TEXT NOT NULL,
+  bubbles_json TEXT NOT NULL,
+  note_to_save TEXT,
+  send_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','sent','superseded','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT`,
+
+  scheduled_sends: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER NOT NULL REFERENCES characters(id),
   chat_id TEXT NOT NULL,
@@ -88,44 +186,27 @@ CREATE TABLE IF NOT EXISTS scheduled_sends (
   window_start TEXT NOT NULL,
   window_end TEXT NOT NULL,
   text TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'morning',
-  status TEXT NOT NULL DEFAULT 'pending',
-  reason TEXT,
+  kind TEXT NOT NULL DEFAULT 'morning' CHECK (kind IN ('morning','checkin')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','skipped')),
+  skip_reason TEXT,
   attempts INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
   created_at TEXT NOT NULL,
-  sent_at TEXT
-);
-CREATE TABLE IF NOT EXISTS messages (
+  sent_at TEXT`,
+
+  recovery_marks: `
+  chat_id TEXT PRIMARY KEY,
+  replied_up_to TEXT NOT NULL`,
+
+  send_failures: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id TEXT NOT NULL,
   character_id INTEGER,
-  ts TEXT NOT NULL,
-  role TEXT NOT NULL,
-  text TEXT NOT NULL,
-  meta_json TEXT
-);
-CREATE TABLE IF NOT EXISTS recovery_marks (
-  chat_id TEXT PRIMARY KEY,
-  user_ts TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS attention_override (
-  chat_id TEXT PRIMARY KEY,
-  until_ts TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS capture_marks (
-  chat_id TEXT PRIMARY KEY,
-  last_msg_id INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS send_failures (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  chat_id TEXT NOT NULL,
-  character_id INTEGER,
-  kind TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('away','catchup','goodnight')),
   error TEXT NOT NULL,
-  ts TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS llm_usage (
+  failed_at TEXT NOT NULL`,
+
+  llm_usage: `
   date TEXT NOT NULL,
   model TEXT NOT NULL,
   calls INTEGER NOT NULL DEFAULT 0,
@@ -133,15 +214,197 @@ CREATE TABLE IF NOT EXISTS llm_usage (
   cache_write_tokens INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (date, model)
-);
-`);
+  PRIMARY KEY (date, model)`,
+
+  // 아래 둘은 day_actuals와 오늘 메모가 대신하게 되어 있다. 읽는 코드를 걷어낼 때 같이 지운다.
+  attention_override: `
+  chat_id TEXT PRIMARY KEY,
+  until_ts TEXT NOT NULL`,
+
+  capture_marks: `
+  chat_id TEXT PRIMARY KEY,
+  last_msg_id INTEGER NOT NULL`,
+};
+
+const INDEXES = [
+  `CREATE INDEX IF NOT EXISTS idx_characters_chat ON characters (chat_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_memory_items_type ON memory_items (character_id, item_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_tags_lookup ON tags (character_id, tag)`,
+  `CREATE INDEX IF NOT EXISTS idx_today_notes_day ON today_notes (character_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_schedules_date ON schedules (character_id, date)`,
+  `CREATE INDEX IF NOT EXISTS idx_day_actuals_date ON day_actuals (character_id, date)`,
+  `CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages (chat_id, sent_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_replies_due ON pending_replies (status, send_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_replies_chat ON pending_replies (chat_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_scheduled_sends_due ON scheduled_sends (status, date)`,
+];
+
+const createSchema = (): void => {
+  for (const [name, columns] of Object.entries(TABLES))
+    db.exec(`CREATE TABLE IF NOT EXISTS ${name} (${columns}\n)`);
+  for (const sql of INDEXES) db.exec(sql);
+};
+
+const SCHEMA_VERSION = 1;
+
+const schemaVersion = (): number =>
+  db.pragma("user_version", { simple: true }) as number;
+
+// 옛 스키마는 user_version이 0인 채로 쌓여 왔다. 버전 대신 컬럼 이름으로 가른다.
+const hasLegacySchema = (): boolean => {
+  const exists = db
+    .prepare(
+      `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'characters'`,
+    )
+    .get();
+  if (!exists) return false;
+  const cols = db.prepare(`PRAGMA table_info(characters)`).all() as {
+    name: string;
+  }[];
+  return cols.some((c) => c.name === "bible_json");
+};
+
+// SQLite는 이미 있는 테이블에 CHECK·UNIQUE를 붙이지 못한다. 그래서 바뀌는 테이블은
+// 옛 이름으로 밀어 두고 새로 만든 다음 값을 옮기고 옛 테이블을 지운다. 이름 바꾸기와
+// 값 바꾸기가 한 번에 끝난다.
+const rebuild = (name: string, columns: string, select: string): void => {
+  db.exec(`ALTER TABLE ${name} RENAME TO ${name}__old`);
+  db.exec(`CREATE TABLE ${name} (${TABLES[name]}\n)`);
+  db.exec(`INSERT INTO ${name} (${columns}) SELECT ${select} FROM ${name}__old`);
+  db.exec(`DROP TABLE ${name}__old`);
+};
+
+const migrateToV1 = (): void => {
+  // 유저 프로필의 옛 이름 컬럼은 지금 DB에만 남아 있다 — 새로 만든 DB에는 없다.
+  const profileCols = db.prepare(`PRAGMA table_info(user_profile)`).all() as {
+    name: string;
+  }[];
+  const preferredName = profileCols.some((c) => c.name === "name")
+    ? "name"
+    : "NULL";
+
+  // 이름을 바꾸는 동안 자식 테이블의 REFERENCES 절을 건드리지 않게 legacy 모드로 둔다.
+  // 외래 키 검사는 옮기는 동안 꺼 두고 끝난 뒤 한 번에 확인한다. 두 pragma 모두
+  // 트랜잭션 안에서는 먹지 않아 밖에서 켜고 끈다.
+  db.pragma("foreign_keys = OFF");
+  db.pragma("legacy_alter_table = ON");
+
+  db.transaction(() => {
+    rebuild(
+      "characters",
+      "id, chat_id, status, genesis_json, created_at",
+      "id, chat_id, status, bible_json, created_at",
+    );
+    rebuild(
+      "relationships",
+      "character_id, met_at, last_contact_at, legacy_state_json",
+      "character_id, met_at, last_contact_at, state_json",
+    );
+    rebuild(
+      "user_profile",
+      "chat_id, preferred_name, gender, birth_year, job, region, age_band, updated_at",
+      `chat_id, ${preferredName}, gender, NULL, NULL, NULL, age_band, updated_at`,
+    );
+    rebuild(
+      "diary_entries",
+      "id, character_id, date, entry_json",
+      "id, character_id, date, entry_json",
+    );
+    // 요즘 어떻게 지내는지 적어 두던 note가 recent_note 자리로 간다.
+    rebuild(
+      "cast_members",
+      "id, character_id, owner, name, relation_label, recent_note, created_at",
+      "id, character_id, who, name, relation, note, created_at",
+    );
+    rebuild(
+      "arcs",
+      "character_id, period, content",
+      "character_id, horizon, content",
+    );
+    // 출처는 지금 값에서 알아낼 수 없어 전부 대화로 두고, 캐릭터를 옮길 때 바로잡는다.
+    rebuild(
+      "schedules",
+      "id, character_id, owner, date, time_hint, content, status, created_at",
+      "id, character_id, who, date, time_hint, content, status, created_at",
+    );
+    rebuild(
+      "day_plans",
+      "character_id, date, plan_json, made_by",
+      `character_id, date, plan_json, CASE source WHEN 'lazy' THEN 'ondemand' ELSE source END`,
+    );
+    rebuild(
+      "day_seeds",
+      "character_id, date, energy, wake_hint, mood, reason",
+      "character_id, date, energy, wake_hint, mood, note",
+    );
+    rebuild(
+      "scheduled_sends",
+      "id, character_id, chat_id, date, window_start, window_end, text, kind, status, skip_reason, attempts, last_error, created_at, sent_at",
+      `id, character_id, chat_id, date, window_start, window_end, text,
+       CASE kind WHEN 'reconnect' THEN 'checkin' ELSE kind END,
+       status, reason, attempts, last_error, created_at, sent_at`,
+    );
+    // 모델 API가 대화 기록을 받을 때 쓰는 이름에 맞춰 char를 assistant로 바꾼다.
+    rebuild(
+      "messages",
+      "id, chat_id, character_id, sent_at, role, text, meta_json",
+      `id, chat_id, character_id, ts,
+       CASE role WHEN 'char' THEN 'assistant' ELSE role END,
+       text,
+       CASE
+         WHEN json_extract(meta_json, '$.kind') = 'presence' THEN json_set(meta_json, '$.kind', 'away')
+         WHEN json_extract(meta_json, '$.kind') = 'reconnect' THEN json_set(meta_json, '$.kind', 'checkin')
+         WHEN json_extract(meta_json, '$.kind') = 'followup'
+           THEN json_set(meta_json, '$.kind', CASE WHEN CAST(substr(ts, 12, 2) AS INTEGER) < 5 THEN 'goodnight' ELSE 'catchup' END)
+         ELSE meta_json
+       END`,
+    );
+    rebuild(
+      "send_failures",
+      "id, chat_id, character_id, kind, error, failed_at",
+      // 팔로업은 보낸 시각으로 갈린다 — 새벽 5시 전이면 밤 인사, 나머지는 근황이다.
+      `id, chat_id, character_id,
+       CASE kind
+         WHEN 'presence' THEN 'away'
+         WHEN 'reconnect' THEN 'checkin'
+         WHEN 'followup' THEN CASE WHEN CAST(substr(ts, 12, 2) AS INTEGER) < 5 THEN 'goodnight' ELSE 'catchup' END
+         ELSE kind END,
+       error, ts`,
+    );
+    rebuild(
+      "recovery_marks",
+      "chat_id, replied_up_to",
+      "chat_id, user_ts",
+    );
+
+    createSchema();
+
+    const broken = db.pragma("foreign_key_check") as unknown[];
+    if (broken.length)
+      throw new Error(
+        `[db] 마이그레이션 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
+      );
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  })();
+
+  db.pragma("legacy_alter_table = OFF");
+  console.log(`[db] 스키마를 v${SCHEMA_VERSION}으로 옮겼다`);
+};
+
+if (hasLegacySchema() && schemaVersion() < SCHEMA_VERSION) migrateToV1();
+else {
+  createSchema();
+  if (schemaVersion() < SCHEMA_VERSION)
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+}
+
+db.pragma("foreign_keys = ON");
 
 export interface CharacterRow {
   id: number;
   chat_id: string;
   status: string;
-  bible_json: string;
+  genesis_json: string;
   created_at: string;
 }
 
@@ -149,7 +412,7 @@ export interface MessageRow {
   id: number;
   role: string;
   text: string;
-  ts: string;
+  sent_at: string;
 }
 
 // 관계 상태. 교체 시 이 레이어가 통째로 죽는다 — 스위칭 코스트의 실체
@@ -186,17 +449,17 @@ export const getActiveCharacter = (chatId: string): CharacterRow | undefined =>
 
 export const insertCharacter = (
   chatId: string,
-  bibleJson: string,
+  genesisJson: string,
   now: string,
 ): number => {
   const result = db
     .prepare(
-      `INSERT INTO characters (chat_id, status, bible_json, created_at) VALUES (?, 'active', ?, ?)`,
+      `INSERT INTO characters (chat_id, status, genesis_json, created_at) VALUES (?, 'active', ?, ?)`,
     )
-    .run(chatId, bibleJson, now);
+    .run(chatId, genesisJson, now);
   const characterId = Number(result.lastInsertRowid);
   db.prepare(
-    `INSERT INTO relationships (character_id, met_at, state_json) VALUES (?, ?, ?)`,
+    `INSERT INTO relationships (character_id, met_at, legacy_state_json) VALUES (?, ?, ?)`,
   ).run(characterId, now, JSON.stringify(emptyRelationshipState()));
   return characterId;
 };
@@ -205,17 +468,17 @@ export const getRelationshipState = (
   characterId: number,
 ): RelationshipState => {
   const row = db
-    .prepare(`SELECT state_json FROM relationships WHERE character_id = ?`)
-    .get(characterId) as { state_json: string } | undefined;
-  if (!row) return emptyRelationshipState();
+    .prepare(`SELECT legacy_state_json FROM relationships WHERE character_id = ?`)
+    .get(characterId) as { legacy_state_json: string | null } | undefined;
+  if (!row?.legacy_state_json) return emptyRelationshipState();
   try {
-    return JSON.parse(row.state_json) as RelationshipState;
+    return JSON.parse(row.legacy_state_json) as RelationshipState;
   } catch (e) {
     // 손상된 state_json 하나가 실시간 응답 경로 전체(buildSystemPrompt)를 죽이지 않게 빈 상태로
     // 강등한다. 원본 행은 건드리지 않지만, 이 상태에서 밤 정리·캡처가 save하면 빈 상태로 덮어써질
     // 수 있다 — 그래서 조용히 넘기지 않고 크게 로그를 남긴다(발견 즉시 행 복구가 우선).
     console.error(
-      `[db] state_json 파싱 실패 — 빈 상태로 강등 (character=${characterId}, len=${row.state_json.length}):`,
+      `[db] 관계 상태 파싱 실패 — 빈 상태로 강등 (character=${characterId}, len=${row.legacy_state_json.length}):`,
       e instanceof Error ? e.message : String(e),
     );
     return emptyRelationshipState();
@@ -228,7 +491,7 @@ export const saveRelationshipState = (
   now: string,
 ): void => {
   db.prepare(
-    `UPDATE relationships SET state_json = ?, last_contact_at = ? WHERE character_id = ?`,
+    `UPDATE relationships SET legacy_state_json = ?, last_contact_at = ? WHERE character_id = ?`,
   ).run(JSON.stringify(state), now, characterId);
 };
 
@@ -242,17 +505,17 @@ export const getMetAt = (characterId: number): string | undefined => {
 export const logMessage = (
   chatId: string,
   characterId: number | null,
-  role: "user" | "char" | "system",
+  role: "user" | "assistant",
   text: string,
-  ts: string,
+  sentAt: string,
   meta?: Record<string, unknown>,
 ): void => {
   db.prepare(
-    `INSERT INTO messages (chat_id, character_id, ts, role, text, meta_json) VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (chat_id, character_id, sent_at, role, text, meta_json) VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(
     chatId,
     characterId,
-    ts,
+    sentAt,
     role,
     text,
     meta ? JSON.stringify(meta) : null,
@@ -265,7 +528,7 @@ export const getRecentMessages = (
 ): MessageRow[] => {
   const rows = db
     .prepare(
-      `SELECT id, role, text, ts FROM messages WHERE chat_id = ? AND role IN ('user','char') ORDER BY id DESC LIMIT ?`,
+      `SELECT id, role, text, sent_at FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?`,
     )
     .all(chatId, limit) as MessageRow[];
   return rows.reverse();
@@ -274,13 +537,13 @@ export const getRecentMessages = (
 // 특정 시각 이전의 마지막 메시지 — '직전에 대화한 날'을 세는 데 쓴다.
 export const lastMessageBefore = (
   chatId: string,
-  ts: string,
+  before: string,
 ): MessageRow | undefined =>
   db
     .prepare(
-      `SELECT id, role, text, ts FROM messages WHERE chat_id = ? AND role IN ('user','char') AND ts < ? ORDER BY id DESC LIMIT 1`,
+      `SELECT id, role, text, sent_at FROM messages WHERE chat_id = ? AND sent_at < ? ORDER BY id DESC LIMIT 1`,
     )
-    .get(chatId, ts) as MessageRow | undefined;
+    .get(chatId, before) as MessageRow | undefined;
 
 // 유저가 연속으로 이어 보낸 메시지 사이의 텀(ms). 봇 응답이 끼지 않은 '이어 보내기'만 센다
 // (봇 답장을 사이에 둔 건 새 턴이라 제외, 2분 넘는 텀도 새 턴으로 보고 제외).
@@ -288,90 +551,57 @@ export const lastMessageBefore = (
 export const recentUserGaps = (chatId: string, limit = 80): number[] => {
   const rows = db
     .prepare(
-      `SELECT role, ts FROM messages WHERE chat_id = ? AND role IN ('user','char') ORDER BY id DESC LIMIT ?`,
+      `SELECT role, sent_at FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?`,
     )
-    .all(chatId, limit) as { role: string; ts: string }[];
+    .all(chatId, limit) as { role: string; sent_at: string }[];
   rows.reverse();
   const t = (s: string): number =>
     new Date(s.replace(" ", "T") + "+09:00").getTime();
   const gaps: number[] = [];
   for (let i = 1; i < rows.length; i++)
     if (rows[i].role === "user" && rows[i - 1].role === "user") {
-      const g = t(rows[i].ts) - t(rows[i - 1].ts);
+      const g = t(rows[i].sent_at) - t(rows[i - 1].sent_at);
       if (g > 0 && g < 120000) gaps.push(g);
     }
   return gaps;
 };
 
-// 주변 인물 관계도: 캐릭터의 사람들(who='char', 바이블 시드 + 등장 인물)과
-// 유저가 언급한 유저의 사람들(who='user')을 한 테이블에 소유자 구분으로 쌓는다
-const castCols = db.prepare(`PRAGMA table_info(cast_members)`).all() as {
-  name: string;
-}[];
-if (!castCols.some((c) => c.name === "who"))
-  db.exec(
-    `ALTER TABLE cast_members ADD COLUMN who TEXT NOT NULL DEFAULT 'char'`,
-  );
-
-// 선톡 발송 시도 흔적: 폐기된 문안이 '창을 놓쳤을 뿐'인지 '계속 전송에 실패했는지' 구분용
-const sendCols = db.prepare(`PRAGMA table_info(scheduled_sends)`).all() as {
-  name: string;
-}[];
-if (!sendCols.some((c) => c.name === "attempts"))
-  db.exec(
-    `ALTER TABLE scheduled_sends ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
-  );
-if (!sendCols.some((c) => c.name === "last_error"))
-  db.exec(`ALTER TABLE scheduled_sends ADD COLUMN last_error TEXT`);
-// 문안의 종류: morning=아침 안부, reconnect=긴 침묵 후 재연결 1통 (침묵 백오프)
-if (!sendCols.some((c) => c.name === "kind"))
-  db.exec(
-    `ALTER TABLE scheduled_sends ADD COLUMN kind TEXT NOT NULL DEFAULT 'morning'`,
-  );
-
-// 하루 각본의 출처: 밤 정리 정식 생성(nightly) vs 그날 첫 대화의 lazy 생성.
-// 새벽 대화가 만든 lazy 각본(어제 일기가 아직 없어 이틀 전 일기 참조)을 밤 정리가 교체할 수 있게 구분
-const planCols = db.prepare(`PRAGMA table_info(day_plans)`).all() as {
-  name: string;
-}[];
-if (!planCols.some((c) => c.name === "source"))
-  db.exec(
-    `ALTER TABLE day_plans ADD COLUMN source TEXT NOT NULL DEFAULT 'nightly'`,
-  );
-
+// 주변 인물 관계도: 캐릭터의 사람들(owner='char', 씨앗 정체성 + 등장 인물)과
+// 유저가 언급한 유저의 사람들(owner='user')을 한 테이블에 소유자 구분으로 쌓는다
 export interface CastMember {
   name: string;
-  relation: string;
-  note: string | null;
+  relation_label: string;
+  recent_note: string | null;
 }
 
 export const getCast = (
   characterId: number,
-  who: "char" | "user" = "char",
+  owner: "char" | "user" = "char",
 ): CastMember[] =>
   db
     .prepare(
-      `SELECT name, relation, note FROM cast_members WHERE character_id = ? AND who = ? ORDER BY id`,
+      `SELECT name, relation_label, recent_note FROM cast_members WHERE character_id = ? AND owner = ? ORDER BY id`,
     )
-    .all(characterId, who) as CastMember[];
+    .all(characterId, owner) as CastMember[];
 
 export const addCastMember = (
   characterId: number,
-  who: "char" | "user",
+  owner: "char" | "user",
   name: string,
-  relation: string,
-  note: string | null,
+  relationLabel: string,
+  recentNote: string | null,
   now: string,
 ): void => {
+  // 이름이 곧 키다 — 같은 이름이 캐릭터 쪽과 유저 쪽에 따로 서지 않게 소유자를 빼고 본다.
   const dup = db
     .prepare(
-      `SELECT 1 FROM cast_members WHERE character_id = ? AND who = ? AND name = ? LIMIT 1`,
+      `SELECT 1 FROM cast_members WHERE character_id = ? AND name = ? LIMIT 1`,
     )
-    .get(characterId, who, name);
+    .get(characterId, name);
   if (dup) return;
   db.prepare(
-    `INSERT INTO cast_members (character_id, who, name, relation, note, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(characterId, who, name, relation, note, now);
+    `INSERT INTO cast_members (character_id, owner, name, relation_label, recent_note, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(characterId, owner, name, relationLabel, recentNote, now);
 };
 
 // 지금 이 관계가 반말인지 존댓말인지 — 최근 캐릭터 발화의 종결어미로 판정한다.
@@ -384,7 +614,7 @@ export const currentSpeechLevel = (
   // 선톡이 존댓말로 잘못 나가면 그게 판정을 존댓말로 오염시켜 다음 선톡도 존댓말이 되는 악순환을 막는다.
   const rows = db
     .prepare(
-      `SELECT text FROM messages WHERE chat_id = ? AND role = 'char'
+      `SELECT text FROM messages WHERE chat_id = ? AND role = 'assistant'
        AND (meta_json IS NULL OR json_extract(meta_json,'$.kind') IN ('reply','recover'))
        ORDER BY id DESC LIMIT 14`,
     )
@@ -422,19 +652,19 @@ export const speechGuard = (chatId: string): string => {
 // 삶의 큰 흐름: 연/계절/월/주 단위 이벤트 아크. 하루 각본이 이를 참고한다
 export const getArcs = (characterId: number): Record<string, string> => {
   const rows = db
-    .prepare(`SELECT horizon, content FROM arcs WHERE character_id = ?`)
-    .all(characterId) as { horizon: string; content: string }[];
-  return Object.fromEntries(rows.map((r) => [r.horizon, r.content]));
+    .prepare(`SELECT period, content FROM arcs WHERE character_id = ?`)
+    .all(characterId) as { period: string; content: string }[];
+  return Object.fromEntries(rows.map((r) => [r.period, r.content]));
 };
 
 export const saveArc = (
   characterId: number,
-  horizon: "year" | "season" | "month" | "week",
+  period: "year" | "season" | "month" | "week",
   content: string,
 ): void => {
   db.prepare(
-    `INSERT OR REPLACE INTO arcs (character_id, horizon, content) VALUES (?, ?, ?)`,
-  ).run(characterId, horizon, content);
+    `INSERT OR REPLACE INTO arcs (character_id, period, content) VALUES (?, ?, ?)`,
+  ).run(characterId, period, content);
 };
 
 // 컨디션/기상 리듬 시드: 월 단위로 미리 깔아두는 하루의 성향(기력·기상·기분).
@@ -445,7 +675,7 @@ export interface DaySeed {
   energy: string; // 낮음 | 보통 | 높음
   wake_hint: string; // 이른 | 보통 | 늦잠
   mood: string; // 짧은 구
-  note: string | null; // 왜 이런지 (예: 어제 회식 여파)
+  reason: string | null; // 왜 이런지 (예: 어제 회식 여파)
 }
 
 export const getDaySeed = (
@@ -454,7 +684,7 @@ export const getDaySeed = (
 ): DaySeed | undefined =>
   db
     .prepare(
-      `SELECT date, energy, wake_hint, mood, note FROM day_seeds WHERE character_id = ? AND date = ?`,
+      `SELECT date, energy, wake_hint, mood, reason FROM day_seeds WHERE character_id = ? AND date = ?`,
     )
     .get(characterId, date) as DaySeed | undefined;
 
@@ -464,7 +694,7 @@ export const getMonthSeeds = (
 ): DaySeed[] =>
   db
     .prepare(
-      `SELECT date, energy, wake_hint, mood, note FROM day_seeds WHERE character_id = ? AND date LIKE ? ORDER BY date`,
+      `SELECT date, energy, wake_hint, mood, reason FROM day_seeds WHERE character_id = ? AND date LIKE ? ORDER BY date`,
     )
     .all(characterId, `${ym}-%`) as DaySeed[];
 
@@ -477,15 +707,15 @@ export const monthHasSeeds = (characterId: number, ym: string): boolean =>
 
 export const saveDaySeed = (characterId: number, s: DaySeed): void => {
   db.prepare(
-    `INSERT OR REPLACE INTO day_seeds (character_id, date, energy, wake_hint, mood, note) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(characterId, s.date, s.energy, s.wake_hint, s.mood, s.note ?? null);
+    `INSERT OR REPLACE INTO day_seeds (character_id, date, energy, wake_hint, mood, reason) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(characterId, s.date, s.energy, s.wake_hint, s.mood, s.reason ?? null);
 };
 
-// 일정 슬롯: 하루 각본보다 성긴 층. 캐릭터의 예정(who='char')과 유저에게 들은 예정(who='user')을
+// 일정 슬롯: 하루 각본보다 성긴 층. 캐릭터의 예정(owner='char')과 유저에게 들은 예정(owner='user')을
 // 캐릭터별로 보관한다. 대화에서 잡힌 약속의 추출·기록은 밤 정리 몫.
 export interface ScheduleRow {
   id: number;
-  who: string;
+  owner: string;
   date: string;
   time_hint: string | null;
   content: string;
@@ -498,7 +728,7 @@ export const getUpcomingSchedules = (
 ): ScheduleRow[] =>
   db
     .prepare(
-      `SELECT id, who, date, time_hint, content FROM schedules
+      `SELECT id, owner, date, time_hint, content FROM schedules
        WHERE character_id = ? AND status = 'active' AND date >= ?
        ORDER BY date, id LIMIT ?`,
     )
@@ -506,30 +736,30 @@ export const getUpcomingSchedules = (
 
 export const addSchedule = (
   characterId: number,
-  who: "char" | "user",
+  owner: "char" | "user",
   date: string,
   timeHint: string | null,
   content: string,
   now: string,
 ): void => {
   db.prepare(
-    `INSERT INTO schedules (character_id, who, date, time_hint, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(characterId, who, date, timeHint, content, now);
+    `INSERT INTO schedules (character_id, owner, date, time_hint, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(characterId, owner, date, timeHint, content, now);
 };
 
 export const getSchedulesInMonth = (
   characterId: number,
   ym: string, // "YYYY-MM"
-  who?: "char" | "user",
+  owner?: "char" | "user",
 ): ScheduleRow[] =>
   db
     .prepare(
-      `SELECT id, who, date, time_hint, content FROM schedules
-       WHERE character_id = ? AND status = 'active' AND date LIKE ?${who ? " AND who = ?" : ""}
+      `SELECT id, owner, date, time_hint, content FROM schedules
+       WHERE character_id = ? AND status = 'active' AND date LIKE ?${owner ? " AND owner = ?" : ""}
        ORDER BY date, id`,
     )
     .all(
-      ...(who ? [characterId, `${ym}-%`, who] : [characterId, `${ym}-%`]),
+      ...(owner ? [characterId, `${ym}-%`, owner] : [characterId, `${ym}-%`]),
     ) as ScheduleRow[];
 
 // 선톡: 밤 정리가 근거 있을 때만 하루 1통 문안을 준비해두고, 디스패처가 창 안에서 발송한다
@@ -541,7 +771,7 @@ export interface ScheduledSendRow {
   window_start: string;
   window_end: string;
   text: string;
-  kind: string; // morning | reconnect
+  kind: string; // morning | checkin
   attempts: number;
 }
 
@@ -553,7 +783,7 @@ export const insertScheduledSend = (
   windowEnd: string,
   text: string,
   now: string,
-  kind: "morning" | "reconnect" = "morning",
+  kind: "morning" | "checkin" = "morning",
 ): void => {
   const dup = db
     .prepare(
@@ -576,12 +806,12 @@ export const getPendingSends = (date: string): ScheduledSendRow[] =>
 export const markScheduledSend = (
   id: number,
   status: "sent" | "skipped",
-  reason: string | null,
+  skipReason: string | null,
   sentAt: string | null,
 ): void => {
   db.prepare(
-    `UPDATE scheduled_sends SET status = ?, reason = ?, sent_at = ? WHERE id = ?`,
-  ).run(status, reason, sentAt, id);
+    `UPDATE scheduled_sends SET status = ?, skip_reason = ?, sent_at = ? WHERE id = ?`,
+  ).run(status, skipReason, sentAt, id);
 };
 
 // 전송 실패를 행에 남긴다 — 로그를 뒤지지 않고도 "몇 번 시도했고 왜 못 갔는지"가 보이게.
@@ -597,13 +827,13 @@ export const recordSendAttempt = (id: number, error: string): void => {
 export const recordSendFailure = (
   chatId: string,
   characterId: number,
-  kind: string,
+  kind: "away" | "catchup" | "goodnight",
   error: string,
 ): void => {
-  const ts = `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
+  const failedAt = `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
   db.prepare(
-    `INSERT INTO send_failures (chat_id, character_id, kind, error, ts) VALUES (?, ?, ?, ?, ?)`,
-  ).run(chatId, characterId, kind, error.slice(0, 300), ts);
+    `INSERT INTO send_failures (chat_id, character_id, kind, error, failed_at) VALUES (?, ?, ?, ?, ?)`,
+  ).run(chatId, characterId, kind, error.slice(0, 300), failedAt);
 };
 
 // LLM 사용량을 논리일×모델 단위로 누적한다 — 캐시 절감이 실제로 작동하는지 로그를 뒤지지 않고
@@ -634,22 +864,22 @@ export const recordLlmUsage = (
   );
 };
 
-export const hasUserMessageSince = (chatId: string, ts: string): boolean =>
+export const hasUserMessageSince = (chatId: string, since: string): boolean =>
   !!db
     .prepare(
-      `SELECT 1 FROM messages WHERE chat_id = ? AND role = 'user' AND ts >= ? LIMIT 1`,
+      `SELECT 1 FROM messages WHERE chat_id = ? AND role = 'user' AND sent_at >= ? LIMIT 1`,
     )
-    .get(chatId, ts);
+    .get(chatId, since);
 
 // 마지막 메시지(유저·캐릭 무관)의 시각·역할 — 침묵 팔로업 판단용
 export const lastMessage = (
   chatId: string,
-): { ts: string; role: string } | undefined =>
+): { sent_at: string; role: string } | undefined =>
   db
     .prepare(
-      `SELECT ts, role FROM messages WHERE chat_id = ? AND role IN ('user','char') ORDER BY id DESC LIMIT 1`,
+      `SELECT sent_at, role FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
     )
-    .get(chatId) as { ts: string; role: string } | undefined;
+    .get(chatId) as { sent_at: string; role: string } | undefined;
 
 // 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸(proactive) 발송 수 — 팔로업 총량 제한용
 // 하루 선제 발송 총량 상한(아침 안부·팔로업·자리비움 예고 합산). followup·presence가 공유한다 —
@@ -660,7 +890,7 @@ export const proactiveCountToday = (chatId: string, since: string): number =>
   (
     db
       .prepare(
-        `SELECT count(*) c FROM messages WHERE chat_id = ? AND role = 'char' AND ts >= ? AND meta_json LIKE '%proactive%'`,
+        `SELECT count(*) c FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at >= ? AND meta_json LIKE '%proactive%'`,
       )
       .get(chatId, since) as { c: number }
   ).c;
@@ -730,7 +960,13 @@ export const saveUserProfile = (
   const gender = p.gender?.trim() || cur.gender;
   const ageBand = p.ageBand?.trim() || cur.ageBand;
   db.prepare(
-    `INSERT OR REPLACE INTO user_profile (chat_id, gender, age_band, updated_at) VALUES (?, ?, ?, ?)`,
+    // 이 함수가 맡은 컬럼만 고친다 — REPLACE로 행을 다시 넣으면 온보딩이 채우는
+    // 이름·생년·직업·사는 곳이 같이 지워진다.
+    `INSERT INTO user_profile (chat_id, gender, age_band, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET
+       gender = excluded.gender,
+       age_band = excluded.age_band,
+       updated_at = excluded.updated_at`,
   ).run(chatId, gender ?? null, ageBand ?? null, at);
 };
 
@@ -738,14 +974,14 @@ export const saveUserProfile = (
 export const proactiveSinceLastUser = (chatId: string): number => {
   const lastUser = db
     .prepare(
-      `SELECT ts FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
+      `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
     )
-    .get(chatId) as { ts: string } | undefined;
-  const since = lastUser?.ts ?? "0000-00-00 00:00:00";
+    .get(chatId) as { sent_at: string } | undefined;
+  const since = lastUser?.sent_at ?? "0000-00-00 00:00:00";
   return (
     db
       .prepare(
-        `SELECT count(*) c FROM messages WHERE chat_id = ? AND role = 'char' AND ts > ? AND meta_json LIKE '%proactive%'`,
+        `SELECT count(*) c FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at > ? AND meta_json LIKE '%proactive%'`,
       )
       .get(chatId, since) as { c: number }
   ).c;
@@ -756,14 +992,14 @@ export const proactiveSinceLastUser = (chatId: string): number => {
 export const getRecoveryMark = (chatId: string): string | undefined =>
   (
     db
-      .prepare(`SELECT user_ts FROM recovery_marks WHERE chat_id = ?`)
-      .get(chatId) as { user_ts: string } | undefined
-  )?.user_ts;
+      .prepare(`SELECT replied_up_to FROM recovery_marks WHERE chat_id = ?`)
+      .get(chatId) as { replied_up_to: string } | undefined
+  )?.replied_up_to;
 
-export const setRecoveryMark = (chatId: string, userTs: string): void => {
+export const setRecoveryMark = (chatId: string, repliedUpTo: string): void => {
   db.prepare(
-    `INSERT OR REPLACE INTO recovery_marks (chat_id, user_ts) VALUES (?, ?)`,
-  ).run(chatId, userTs);
+    `INSERT OR REPLACE INTO recovery_marks (chat_id, replied_up_to) VALUES (?, ?)`,
+  ).run(chatId, repliedUpTo);
 };
 
 // 주의 집중(attention override): 유저가 붙잡아 우진이 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 대화로 돌아온 상태.
@@ -807,30 +1043,30 @@ export const getDayPlan = (
       .get(characterId, date) as { plan_json: string } | undefined
   )?.plan_json;
 
-// source: 밤 정리 정식 생성(nightly) vs 그날 첫 대화의 lazy 생성.
-// lazy 각본은 어제 일기가 아직 없을 때 만들어진 것이라 밤 정리가 교체할 수 있다.
+// made_by: 밤 정리 정식 생성(nightly) vs 그날 첫 대화에서 만든 임시 각본(ondemand).
+// 임시 각본은 어제 일기가 아직 없을 때 만들어진 것이라 밤 정리가 교체할 수 있다.
 export const saveDayPlan = (
   characterId: number,
   date: string,
   planJson: string,
-  source: "nightly" | "lazy" = "nightly",
+  madeBy: "nightly" | "ondemand" = "nightly",
 ): void => {
   db.prepare(
-    `INSERT OR REPLACE INTO day_plans (character_id, date, plan_json, source) VALUES (?, ?, ?, ?)`,
-  ).run(characterId, date, planJson, source);
+    `INSERT OR REPLACE INTO day_plans (character_id, date, plan_json, made_by) VALUES (?, ?, ?, ?)`,
+  ).run(characterId, date, planJson, madeBy);
 };
 
-export const getDayPlanSource = (
+export const getDayPlanMadeBy = (
   characterId: number,
   date: string,
 ): string | undefined =>
   (
     db
       .prepare(
-        `SELECT source FROM day_plans WHERE character_id = ? AND date = ?`,
+        `SELECT made_by FROM day_plans WHERE character_id = ? AND date = ?`,
       )
-      .get(characterId, date) as { source: string } | undefined
-  )?.source;
+      .get(characterId, date) as { made_by: string } | undefined
+  )?.made_by;
 
 export const getRecentDiaries = (
   characterId: number,

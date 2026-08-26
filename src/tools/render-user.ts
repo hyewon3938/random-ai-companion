@@ -26,15 +26,15 @@ const state = getRelationshipState(row.id);
 const userCast = getCast(row.id, "user");
 const schedules = db
   .prepare(
-    `SELECT date, time_hint, content FROM schedules WHERE character_id = ? AND who = 'user' AND status = 'active' ORDER BY date`,
+    `SELECT date, time_hint, content FROM schedules WHERE character_id = ? AND owner = 'user' AND status = 'active' ORDER BY date`,
   )
   .all(row.id) as { date: string; time_hint: string | null; content: string }[];
 
 const msgs = db
   .prepare(
-    `SELECT ts, text FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id`,
+    `SELECT sent_at, text FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id`,
   )
-  .all(row.chat_id) as { ts: string; text: string }[];
+  .all(row.chat_id) as { sent_at: string; text: string }[];
 
 const prefs = getUserPreferences(row.chat_id);
 
@@ -53,14 +53,14 @@ type UTurn = {
 };
 const allWithText = db
   .prepare(
-    `SELECT role, ts, text FROM messages WHERE chat_id = ? AND role IN ('user','char') ORDER BY id`,
+    `SELECT role, sent_at, text FROM messages WHERE chat_id = ? ORDER BY id`,
   )
-  .all(row.chat_id) as { role: string; ts: string; text: string }[];
+  .all(row.chat_id) as { role: string; sent_at: string; text: string }[];
 const turns: UTurn[] = [];
 let lastCharText = "";
 for (let i = 0; i < allWithText.length; i++) {
   const m = allWithText[i];
-  if (m.role === "char") {
+  if (m.role === "assistant") {
     lastCharText = m.text;
     continue;
   }
@@ -72,7 +72,7 @@ for (let i = 0; i < allWithText.length; i++) {
     cur.text += " " + m.text;
   } else {
     turns.push({
-      ts: m.ts,
+      ts: m.sent_at,
       bubbles: 1,
       chars: m.text.length,
       text: m.text,
@@ -96,7 +96,7 @@ const dayOf = (ts: string): string =>
     .slice(0, 10);
 const perDay = new Map<string, number>();
 for (const m of msgs)
-  perDay.set(dayOf(m.ts), (perDay.get(dayOf(m.ts)) ?? 0) + 1);
+  perDay.set(dayOf(m.sent_at), (perDay.get(dayOf(m.sent_at)) ?? 0) + 1);
 const dayCounts = [...perDay.entries()].sort((a, b) =>
   a[0].localeCompare(b[0]),
 );
@@ -107,9 +107,9 @@ const avgPerDay = dayCounts.length
 // 유저가 '먼저 다가가는' 신호 — 호감의 핵심 지표
 const allMsgs = db
   .prepare(
-    `SELECT role, ts FROM messages WHERE chat_id = ? AND role IN ('user','char') ORDER BY id`,
+    `SELECT role, sent_at FROM messages WHERE chat_id = ? ORDER BY id`,
   )
-  .all(row.chat_id) as { role: string; ts: string }[];
+  .all(row.chat_id) as { role: string; sent_at: string }[];
 const ep = (ts: string): number =>
   new Date(ts.replace(" ", "T") + "+09:00").getTime();
 let initiations = 0; // 3시간+ 침묵 뒤 유저가 먼저 연 횟수
@@ -119,14 +119,20 @@ for (let i = 0; i < allMsgs.length; i++) {
   const m = allMsgs[i];
   if (m.role !== "user") continue;
   const prev = allMsgs[i - 1];
-  const hour = Number(m.ts.slice(11, 13));
+  const hour = Number(m.sent_at.slice(11, 13));
   if (!prev) {
     initiations++;
     initHours[hour]++;
-  } else if (prev.role === "char" && ep(m.ts) - ep(prev.ts) > 3 * 3600_000) {
+  } else if (
+    prev.role === "assistant" &&
+    ep(m.sent_at) - ep(prev.sent_at) > 3 * 3600_000
+  ) {
     initiations++;
     initHours[hour]++;
-  } else if (prev.role === "user" && ep(m.ts) - ep(prev.ts) > 30 * 60_000) {
+  } else if (
+    prev.role === "user" &&
+    ep(m.sent_at) - ep(prev.sent_at) > 30 * 60_000
+  ) {
     reReaches++;
     initHours[hour]++;
   }
@@ -154,7 +160,7 @@ const emotionHits = msgs.reduce(
 
 // 활동 시간대 히스토그램 (0~23시)
 const hourCount = new Array(24).fill(0) as number[];
-for (const m of msgs) hourCount[Number(m.ts.slice(11, 13))]++;
+for (const m of msgs) hourCount[Number(m.sent_at.slice(11, 13))]++;
 const hourMax = Math.max(1, ...hourCount);
 
 const esc = (s: string): string =>
@@ -197,7 +203,7 @@ const userGraph = [
   ),
   ...uNodes.map(
     (n) =>
-      `<g><circle cx="${n.x}" cy="${n.y}" r="34" fill="#eef2f6" stroke="#b9c6d4" stroke-width="1.5"/><text x="${n.x}" y="${n.y - 2}" text-anchor="middle" font-size="13" font-weight="600" fill="#3a5a80">${esc(n.name)}</text><text x="${n.x}" y="${n.y + 14}" text-anchor="middle" font-size="10" fill="#8a8272">${esc(n.relation)}</text></g>`,
+      `<g><circle cx="${n.x}" cy="${n.y}" r="34" fill="#eef2f6" stroke="#b9c6d4" stroke-width="1.5"/><text x="${n.x}" y="${n.y - 2}" text-anchor="middle" font-size="13" font-weight="600" fill="#3a5a80">${esc(n.name)}</text><text x="${n.x}" y="${n.y + 14}" text-anchor="middle" font-size="10" fill="#8a8272">${esc(n.relation_label)}</text></g>`,
   ),
   `<g><circle cx="${ucx}" cy="${ucy}" r="46" fill="#3a5a80" stroke="#3a5a80"/><text x="${ucx}" y="${ucy + 1}" text-anchor="middle" font-size="14" font-weight="700" fill="#fff">당신</text><text x="${ucx}" y="${ucy + 18}" text-anchor="middle" font-size="9" fill="#cdd8e4">유저</text></g>`,
 ].join("");

@@ -15,16 +15,16 @@ if (!chatId || !Number.isFinite(boundary)) {
 
 const rows = db
   .prepare(
-    `SELECT id, role, substr(text, 1, 40) AS preview, ts FROM messages WHERE chat_id = ? AND id > ? ORDER BY id`,
+    `SELECT id, role, substr(text, 1, 40) AS preview, sent_at FROM messages WHERE chat_id = ? AND id > ? ORDER BY id`,
   )
   .all(chatId, boundary) as {
   id: number;
   role: string;
   preview: string;
-  ts: string;
+  sent_at: string;
 }[];
 
-for (const r of rows) console.log(`  #${r.id} ${r.role} ${r.ts} ${r.preview}`);
+for (const r of rows) console.log(`  #${r.id} ${r.role} ${r.sent_at} ${r.preview}`);
 console.log(
   `[demo-undo] 대상 ${rows.length}건 (chat=${chatId}, id>${boundary})`,
 );

@@ -4,7 +4,7 @@ import { renderUserBlock } from "./user-profile.js";
 import {
   db,
   getDayPlan,
-  getDayPlanSource,
+  getDayPlanMadeBy,
   getDaySeed,
   getRecentDiaries,
   getRelationshipState,
@@ -85,7 +85,7 @@ export interface SendDraft {
   window_start: string; // "HH:MM"
   window_end: string;
   text: string;
-  kind?: "morning" | "reconnect"; // 생략 시 morning. reconnect=긴 침묵 후 재연결 1통
+  kind?: "morning" | "checkin"; // 생략 시 morning. checkin=긴 침묵 뒤 안부 1통
 }
 
 export interface NightlyOutput {
@@ -123,7 +123,7 @@ export interface NightlyGathered {
   rhythmNeeded: { ym: string; days: { date: string; label: string }[] }[]; // 이번 밤에 생성해야 할 월 리듬
   // 침묵 백오프 상태 — 외부 생성 경로가 이를 보고 산출물을 조절한다
   // (normal=평소대로 / quiet·dormant=각본·선톡 생성 불필요 / reconnect=저녁 재연결 문안만)
-  silenceTier: "normal" | "quiet" | "reconnect" | "dormant";
+  silenceTier: "normal" | "quiet" | "checkin" | "dormant";
   silenceDays: number;
   bible: Bible;
 }
@@ -147,7 +147,7 @@ export const gatherNightlyInput = (
   character: CharacterRow,
   targetDiaryDate?: string,
 ): NightlyGathered => {
-  const bible = JSON.parse(character.bible_json) as Bible;
+  const bible = JSON.parse(character.genesis_json) as Bible;
   const now = getKstNow();
   const shifted = new Date(now.getTime() - 5 * 3600_000);
   const today = kstDateString(shifted);
@@ -162,7 +162,7 @@ export const gatherNightlyInput = (
   );
   const msgs = db
     .prepare(
-      `SELECT role, ts, text FROM messages WHERE chat_id = ? AND role IN ('user','char') AND ts >= ? AND ts < ? ORDER BY id`,
+      `SELECT role, sent_at, text FROM messages WHERE chat_id = ? AND sent_at >= ? AND sent_at < ? ORDER BY id`,
     )
     .all(
       character.chat_id,
@@ -170,7 +170,7 @@ export const gatherNightlyInput = (
       `${diaryNext} 05:00:00`,
     ) as {
     role: string;
-    ts: string;
+    sent_at: string;
     text: string;
   }[];
 
@@ -190,7 +190,7 @@ export const gatherNightlyInput = (
     convo: msgs
       .map(
         (m) =>
-          `[${m.ts.slice(11, 16)}] ${m.role === "user" ? "상대" : "나"}: ${m.text.replace(/\n/g, " ")}`,
+          `[${m.sent_at.slice(11, 16)}] ${m.role === "user" ? "상대" : "나"}: ${m.text.replace(/\n/g, " ")}`,
       )
       .join("\n"),
     msgsCount: msgs.length,
@@ -199,16 +199,18 @@ export const gatherNightlyInput = (
     knownUserFacts: state.user_facts.map((f) => f.fact).join(" / "),
     speechLevel: currentSpeechLevel(character.chat_id),
     knownCast: [
-      ...getCast(character.id, "char").map((c) => `${c.name}(${c.relation})`),
+      ...getCast(character.id, "char").map(
+        (c) => `${c.name}(${c.relation_label})`,
+      ),
       ...getCast(character.id, "user").map(
-        (c) => `${c.name}(상대의 ${c.relation})`,
+        (c) => `${c.name}(상대의 ${c.relation_label})`,
       ),
     ].join(", "),
     openLoops: state.open_loops
       .filter((l) => l.status === "open")
       .map((l) => l.content),
     userSchedulesUpcoming: getUpcomingSchedules(character.id, today)
-      .filter((s) => s.who === "user")
+      .filter((s) => s.owner === "user")
       .map(
         (s) => `${s.date}${s.time_hint ? ` ${s.time_hint}` : ""} ${s.content}`,
       )
@@ -332,13 +334,13 @@ const applyNightlyTxn = db.transaction(
     saveRelationshipState(g.characterId, state, ts);
 
     // 그날 각본: 없으면 저장하고, 있어도 새벽 대화가 만든 lazy 각본이면 정식 각본으로 교체한다.
-    // lazy 각본은 어제 일기가 아직 없을 때(이틀 전 일기 참조) 만들어진 것 — 그대로 두면
+    // 임시 각본은 어제 일기가 아직 없을 때(이틀 전 일기 참조) 만들어진 것 — 그대로 두면
     // "어제 여파가 시드보다 우선" 설계가 정확히 새벽까지 대화한 날마다 무력화된다.
     // (교체에 쓰는 정식 각본은 그 새벽 대화가 담긴 어제 일기를 반영하므로 모순 위험은 작다.)
     if (
       out.plan &&
       (!getDayPlan(g.characterId, g.today) ||
-        getDayPlanSource(g.characterId, g.today) === "lazy")
+        getDayPlanMadeBy(g.characterId, g.today) === "ondemand")
     )
       saveDayPlan(g.characterId, g.today, JSON.stringify(out.plan), "nightly");
 
@@ -359,7 +361,7 @@ const applyNightlyTxn = db.transaction(
       const kind = out.send.kind ?? "morning";
       if (
         (tier === "normal" && kind === "morning") ||
-        (tier === "reconnect" && kind === "reconnect")
+        (tier === "checkin" && kind === "checkin")
       ) {
         insertScheduledSend(
           g.characterId,
@@ -408,7 +410,7 @@ export const missingDiaryDates = (
     if (hasDiary) continue;
     const hasMsgs = !!db
       .prepare(
-        `SELECT 1 FROM messages WHERE chat_id = ? AND role IN ('user','char') AND ts >= ? AND ts < ? LIMIT 1`,
+        `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND sent_at < ? LIMIT 1`,
       )
       .get(chatId, `${d} 05:00:00`, `${next} 05:00:00`);
     if (hasMsgs) out.push(d);
@@ -532,7 +534,7 @@ const draftReconnect = async (
     window_start: f(start),
     window_end: f(start + 90),
     text: d.text,
-    kind: "reconnect",
+    kind: "checkin",
   };
 };
 
@@ -554,7 +556,7 @@ const ensureReconnectSend = async (g: NightlyGathered): Promise<void> => {
       send.window_end,
       send.text,
       nowStamp(),
-      "reconnect",
+      "checkin",
     );
 };
 
@@ -737,7 +739,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
     if (g.silenceTier === "normal") {
       // 정식(어제 일기 반영) 각본 확보 — 새벽 대화가 만든 lazy 각본이 있으면 교체된다
       await ensureTodayPlan(g.characterId, g.bible, true);
-    } else if (g.silenceTier === "reconnect") {
+    } else if (g.silenceTier === "checkin") {
       // 외부 경로가 일기만 응고하고 재연결 문안을 안 만들었을 수 있다 — 없으면 여기서 준비
       await ensureReconnectSend(g);
     }
@@ -776,7 +778,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
     return `${applyNightlyOutput(g, { entry, extract })} (침묵 ${g.silenceDays}일 — 각본·선톡 생략)`;
   }
   // 재연결 단계: 아침 안부 대신 저녁 재연결 1통만 준비한다
-  if (g.silenceTier === "reconnect") {
+  if (g.silenceTier === "checkin") {
     send = await draftReconnect(g);
     return applyNightlyOutput(g, { entry, extract, send });
   }
