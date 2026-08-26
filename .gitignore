@@ -2,7 +2,9 @@ node_modules/
 dist/
 .env
 LOCAL-CONTEXT.md
-docs/
+docs/*
+# 설계 판단 기록만 공개한다
+!docs/adr/
 *.db
 *.db-shm
 *.db-wal

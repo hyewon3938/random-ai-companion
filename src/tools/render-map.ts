@@ -28,7 +28,7 @@ if (!row) {
   process.exit(0);
 }
 
-const bible = JSON.parse(row.bible_json) as Bible;
+const bible = JSON.parse(row.genesis_json) as Bible;
 const cast = getCast(row.id, "char");
 const userCast = getCast(row.id, "user");
 const state = getRelationshipState(row.id);
@@ -85,7 +85,7 @@ const diaries = db
   .all(row.id) as { date: string; entry_json: string }[];
 const msgStats = db
   .prepare(
-    `SELECT count(*) total, sum(role='user') u, sum(role='char') c FROM messages WHERE chat_id = ? AND role IN ('user','char')`,
+    `SELECT count(*) total, sum(role='user') u, sum(role='assistant') c FROM messages WHERE chat_id = ?`,
   )
   .get(row.chat_id) as { total: number; u: number; c: number };
 
@@ -133,7 +133,7 @@ const castSvg = [
   <g>
     <circle cx="${n.x}" cy="${n.y}" r="34" fill="#f4f1ea" stroke="#c9c2b2" stroke-width="1.5"/>
     <text x="${n.x}" y="${n.y - 2}" text-anchor="middle" font-size="13" font-weight="600" fill="#3d3a33">${esc(n.name)}</text>
-    <text x="${n.x}" y="${n.y + 14}" text-anchor="middle" font-size="10" fill="#8a8272">${esc(n.relation)}</text>
+    <text x="${n.x}" y="${n.y + 14}" text-anchor="middle" font-size="10" fill="#8a8272">${esc(n.relation_label)}</text>
   </g>`,
   ),
   `
@@ -197,7 +197,7 @@ for (let d = 1; d <= daysInMonth; d++) {
   const tip =
     `<b>${date} (${dow})</b>` +
     (s
-      ? `<br>기력 <b>${s.energy}</b> · 기상 ${s.wake_hint} (${wakeApprox(s.wake_hint)})<br>${esc(s.mood)}${s.note ? `<br><span class="tnote">${esc(s.note)}</span>` : ""}`
+      ? `<br>기력 <b>${s.energy}</b> · 기상 ${s.wake_hint} (${wakeApprox(s.wake_hint)})<br>${esc(s.mood)}${s.reason ? `<br><span class="tnote">${esc(s.reason)}</span>` : ""}`
       : "<br>(리듬 없음)") +
     (ev ? `<br><span class="tev">일정 · ${esc(ev)}</span>` : "");
   calCells.push(
@@ -298,8 +298,8 @@ const html = `<!doctype html>
   <div class="card"><h2 style="margin-top:0">상대(유저)에 대해 기억하는 것</h2><ul>${li(state.user_facts.map((f) => `${f.fact} — ${f.learned_at}`))}</ul></div>
   <div class="card"><h2 style="margin-top:0">자기에 대해 새로 말한 것 (누적 정체성)</h2><ul>${li((state.char_facts ?? []).map((f) => `${f.fact} — ${f.learned_at}`))}</ul></div>
   <div class="card"><h2 style="margin-top:0">이어갈 이야기 (오픈 루프)</h2><ul>${li(state.open_loops.filter((l) => l.status === "open").map((l) => l.content))}</ul></div>
-  <div class="card"><h2 style="margin-top:0">알고 있는 일정</h2><ul class="sched">${schedules.length ? schedules.map((s) => `<li><span class="who ${s.who === "user" ? "wu" : "wc"}">${s.who === "user" ? "상대" : "우진"}</span> ${esc(s.date)}${s.time_hint ? ` ${esc(s.time_hint)}` : ""} ${esc(s.content)}</li>`).join("") : "<li class='empty'>(아직 없음)</li>"}</ul></div>
-  <div class="card"><h2 style="margin-top:0">상대의 주변 사람들 (들은 것)</h2><ul>${li(userCast.map((c) => `${c.name} (${c.relation})${c.note ? ` — ${c.note}` : ""}`))}</ul></div>
+  <div class="card"><h2 style="margin-top:0">알고 있는 일정</h2><ul class="sched">${schedules.length ? schedules.map((s) => `<li><span class="who ${s.owner === "user" ? "wu" : "wc"}">${s.owner === "user" ? "상대" : "우진"}</span> ${esc(s.date)}${s.time_hint ? ` ${esc(s.time_hint)}` : ""} ${esc(s.content)}</li>`).join("") : "<li class='empty'>(아직 없음)</li>"}</ul></div>
+  <div class="card"><h2 style="margin-top:0">상대의 주변 사람들 (들은 것)</h2><ul>${li(userCast.map((c) => `${c.name} (${c.relation_label})${c.recent_note ? ` — ${c.recent_note}` : ""}`))}</ul></div>
 </div>
 
 <h2>관계의 온도 — 매일 밤 내부에 기록되는 한 줄 (유저에겐 보이지 않음)</h2>

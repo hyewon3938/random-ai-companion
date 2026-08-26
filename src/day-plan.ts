@@ -2,7 +2,7 @@ import { chatJson } from "./llm.js";
 import { config } from "./config.js";
 import {
   getDayPlan,
-  getDayPlanSource,
+  getDayPlanMadeBy,
   saveDayPlan,
   getUpcomingSchedules,
   getArcs,
@@ -61,7 +61,7 @@ const PLAN_SYSTEM = `너는 한 인물의 하루 흐름을 짜는 작가다. 과
 
 const seedLine = (seed: DaySeed | undefined): string => {
   if (!seed) return "(없음 — 평범한 컨디션으로)";
-  return `기력=${seed.energy}, 기상 성향=${seed.wake_hint}, 기분=${seed.mood}${seed.note ? ` (이유: ${seed.note})` : ""}`;
+  return `기력=${seed.energy}, 기상 성향=${seed.wake_hint}, 기분=${seed.mood}${seed.reason ? ` (이유: ${seed.reason})` : ""}`;
 };
 
 const planPrompt = (
@@ -130,7 +130,7 @@ export const ensureTodayPlan = async (
   const date = kstDateString();
   const existing = getDayPlan(characterId, date);
   // 이미 있으면 비용 없이 종료(런웨이 확인도 생략). 단 밤 정리 경로는 lazy분이면 다시 만든다.
-  if (existing && !(nightly && getDayPlanSource(characterId, date) === "lazy"))
+  if (existing && !(nightly && getDayPlanMadeBy(characterId, date) === "ondemand"))
     return;
   // 오늘의 컨디션 시드가 담긴 이번 달 리듬을 확보(이미 있으면 no-op). 실패해도 각본은 계속
   await ensureRhythmRunway(characterId, bible, date).catch((e) =>
@@ -139,7 +139,7 @@ export const ensureTodayPlan = async (
   const seed = getDaySeed(characterId, date);
   // 일정 슬롯에서 이 날의 캐릭터 예정을 가져와 각본에 반영한다
   const todays = getUpcomingSchedules(characterId, date)
-    .filter((s) => s.date === date && s.who === "char")
+    .filter((s) => s.date === date && s.owner === "char")
     .map((s) => `${s.time_hint ? `${s.time_hint} ` : ""}${s.content}`)
     .join(" / ");
   const arcs = Object.entries(getArcs(characterId))
@@ -164,6 +164,6 @@ export const ensureTodayPlan = async (
     characterId,
     date,
     JSON.stringify(plan),
-    nightly ? "nightly" : "lazy",
+    nightly ? "nightly" : "ondemand",
   );
 };

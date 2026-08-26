@@ -111,7 +111,7 @@ const followupTickBody = async (): Promise<void> => {
 
     const last = lastMessage(c.chat_id);
     // 조건: 대화가 있었고 + 마지막이 '캐릭터' 차례(유저가 답 안 한 상태)
-    if (!last || last.role !== "char") continue;
+    if (!last || last.role !== "assistant") continue;
 
     // 침묵 백오프(관제탑): 무응답이 길어진 유저에겐 팔로업도 접는다
     if (!proactiveAllowed(c.chat_id, c.id)) continue;
@@ -135,13 +135,13 @@ const followupTickBody = async (): Promise<void> => {
     if (
       isNight &&
       !alreadyGoodnight &&
-      minutesSince(last.ts) >= 60 &&
+      minutesSince(last.sent_at) >= 60 &&
       proactiveSinceLastUser(c.chat_id) < 1
     ) {
       // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
       if (!acquireProactive(c.chat_id)) continue;
       try {
-        const bible = JSON.parse(c.bible_json) as Bible;
+        const bible = JSON.parse(c.genesis_json) as Bible;
         const g = await chatJson<{ text: string }>(
           GOODNIGHT_SYSTEM,
           goodnightPrompt(bible, c.chat_id),
@@ -150,8 +150,8 @@ const followupTickBody = async (): Promise<void> => {
         );
         // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 굿나잇은 필요 없다)
         // 다른 경로가 뭔가 보냈으면(마지막 메시지가 바뀜) 접는다.
-        if (g.text && lastMessage(c.chat_id)?.ts === last.ts) {
-          await sendProactive(c.chat_id, c.id, g.text, "followup");
+        if (g.text && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+          await sendProactive(c.chat_id, c.id, g.text, "goodnight");
           console.log(`[followup] goodnight to ${c.chat_id}`);
         }
       } catch (e) {
@@ -159,7 +159,7 @@ const followupTickBody = async (): Promise<void> => {
         recordSendFailure(
           c.chat_id,
           c.id,
-          "followup",
+          "goodnight",
           e instanceof Error ? e.message : String(e),
         );
       } finally {
@@ -170,9 +170,9 @@ const followupTickBody = async (): Promise<void> => {
 
     // (이하 낮의 전환점 팔로업)
     // 침묵 임계는 이 구간마다 약 2시간(100~139분)으로 조금씩 달라진다
-    if (minutesSince(last.ts) < silenceThreshold(last.ts)) continue;
+    if (minutesSince(last.sent_at) < silenceThreshold(last.sent_at)) continue;
     // 오늘 시작 이후에 오간 대화여야 (어제 끊긴 건 아침 안부가 담당)
-    if (last.ts < dayStart()) continue;
+    if (last.sent_at < dayStart()) continue;
     // 하루 절대 상한(안전장치)
     if (proactiveCountToday(c.chat_id, dayStart()) >= DAILY_MAX) continue;
     // taper: 마지막 유저 메시지 이후 이미 TAPER회 먼저 보냈는데도 답이 없으면 그날은 물러난다
@@ -181,12 +181,12 @@ const followupTickBody = async (): Promise<void> => {
     const block = currentBlock(c.id);
     if (!block || block.responsiveness === "불가") continue; // 운전·잠 등엔 못 보냄
 
-    const bible = JSON.parse(c.bible_json) as Bible;
+    const bible = JSON.parse(c.genesis_json) as Bible;
     const state = getRelationshipState(c.id);
     const lastLine = (
       db
         .prepare(
-          `SELECT text FROM messages WHERE chat_id = ? AND role IN ('user','char') ORDER BY id DESC LIMIT 1`,
+          `SELECT text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
         )
         .get(c.chat_id) as { text: string } | undefined
     )?.text;
@@ -210,8 +210,8 @@ const followupTickBody = async (): Promise<void> => {
       );
       // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 말을 걸었으면(답장이 담당) 근황톡을 접고,
       // 다른 경로가 이미 보냈으면(마지막 메시지가 바뀜) 겹쳐 보내지 않는다.
-      if (draft.send && draft.text && lastMessage(c.chat_id)?.ts === last.ts) {
-        await sendProactive(c.chat_id, c.id, draft.text, "followup");
+      if (draft.send && draft.text && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+        await sendProactive(c.chat_id, c.id, draft.text, "catchup");
         console.log(`[followup] sent to ${c.chat_id} @ ${block.activity}`);
       }
     } catch (e) {
@@ -219,7 +219,7 @@ const followupTickBody = async (): Promise<void> => {
       recordSendFailure(
         c.chat_id,
         c.id,
-        "followup",
+        "catchup",
         e instanceof Error ? e.message : String(e),
       );
     } finally {

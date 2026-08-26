@@ -170,8 +170,8 @@ const daySection = (characterId: number): string => {
 const scheduleSection = (characterId: number): string => {
   const rows = getUpcomingSchedules(characterId, kstDateString());
   if (!rows.length) return "";
-  const mine = rows.filter((r) => r.who === "char");
-  const theirs = rows.filter((r) => r.who === "user");
+  const mine = rows.filter((r) => r.owner === "char");
+  const theirs = rows.filter((r) => r.owner === "user");
   const fmt = (r: (typeof rows)[number]): string =>
     `${r.date}${r.time_hint ? ` ${r.time_hint}` : ""} ${r.content}`;
   return [
@@ -191,8 +191,12 @@ const castSection = (characterId: number): string => {
   const mine = getCast(characterId, "char").slice(-20);
   const theirs = getCast(characterId, "user").slice(-20);
   if (!mine.length && !theirs.length) return "";
-  const fmt = (c: { name: string; relation: string; note: string | null }) =>
-    `- ${c.name} (${c.relation})${c.note ? `: ${c.note}` : ""}`;
+  const fmt = (c: {
+    name: string;
+    relation_label: string;
+    recent_note: string | null;
+  }) =>
+    `- ${c.name} (${c.relation_label})${c.recent_note ? `: ${c.recent_note}` : ""}`;
   return [
     mine.length ? `[네 주변 사람들]` : "",
     ...mine.map(fmt),
@@ -374,7 +378,7 @@ export const buildSystemBlocks = (
   // 실시간 꼬리에 둔다(매일 바뀌는 값이라 캐시 경계 앞에 두면 캐시를 깬다).
   const prev = lastMessageBefore(chatId, logicalDayStartTs());
   const lastTalkSection = prev
-    ? `[직전 대화]\n마지막으로 대화한 날은 ${lastTalkedLabel(prev.ts)}다. 그 뒤로는 오늘 다시 연락이 닿았다.`
+    ? `[직전 대화]\n마지막으로 대화한 날은 ${lastTalkedLabel(prev.sent_at)}다. 그 뒤로는 오늘 다시 연락이 닿았다.`
     : "";
 
   const live = [

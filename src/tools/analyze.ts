@@ -17,12 +17,12 @@ if (!row) {
 
 interface Msg {
   role: string;
-  ts: string;
+  sent_at: string;
   text: string;
 }
 const msgs = db
   .prepare(
-    `SELECT role, ts, text FROM messages WHERE chat_id = ? AND role IN ('user','char') ORDER BY id`,
+    `SELECT role, sent_at, text FROM messages WHERE chat_id = ? ORDER BY id`,
   )
   .all(row.chat_id) as Msg[];
 
@@ -75,7 +75,7 @@ interface DayStat {
 const days = new Map<string, DayStat>();
 let prev: Msg | null = null;
 for (const m of msgs) {
-  const d = dayOf(m.ts);
+  const d = dayOf(m.sent_at);
   if (!days.has(d))
     days.set(d, {
       date: d,
@@ -94,16 +94,17 @@ for (const m of msgs) {
   if (m.role === "user") {
     s.userMsgs++;
     s.userChars += m.text.length;
-    s.activeHours.add(m.ts.slice(11, 13));
+    s.activeHours.add(m.sent_at.slice(11, 13));
     s.emotionHits += (m.text.match(EMOTION) ?? []).length;
     if (isSpike(m.text.length)) {
       s.lengthSpikes++;
-      spikes.push({ ts: m.ts, text: m.text, len: m.text.length });
+      spikes.push({ ts: m.sent_at, text: m.text, len: m.text.length });
     }
     s.userTexts.push(m.text);
-    if (!s.firstUser) s.firstUser = m.ts.slice(11, 16);
-    s.lastUser = m.ts.slice(11, 16);
-    if (!prev || epoch(m.ts) - epoch(prev.ts) > 3 * 3600_000) s.userInitiated++;
+    if (!s.firstUser) s.firstUser = m.sent_at.slice(11, 16);
+    s.lastUser = m.sent_at.slice(11, 16);
+    if (!prev || epoch(m.sent_at) - epoch(prev.sent_at) > 3 * 3600_000)
+      s.userInitiated++;
   } else {
     s.charMsgs++;
   }
@@ -118,12 +119,12 @@ const sends = db
   .all(row.id) as { date: string; sent_at: string }[];
 const sendReact = sends.map((snd) => {
   const reply = msgs.find(
-    (m) => m.role === "user" && snd.sent_at && m.ts > snd.sent_at,
+    (m) => m.role === "user" && snd.sent_at && m.sent_at > snd.sent_at,
   );
   return {
     date: snd.date,
     minutes: reply
-      ? Math.round((epoch(reply.ts) - epoch(snd.sent_at)) / 60000)
+      ? Math.round((epoch(reply.sent_at) - epoch(snd.sent_at)) / 60000)
       : null,
   };
 });

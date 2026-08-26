@@ -10,13 +10,13 @@ import { kstDateString } from "./kst.js";
 //
 //   normal    무응답 0~2일  — 현행 그대로 (낮 팔로업은 taper가 이미 조인다)
 //   quiet     3~13일        — 전면 조용. 문안 생성도 발송도 하지 않는다
-//   reconnect 14일~         — "요새 많이 바빠?" 결의 저녁 재연결 1통만
+//   checkin 14일~           — "요새 많이 바빠?" 결의 저녁 안부 선톡 1통만
 //   dormant   재연결도 무응답 — 유저가 돌아올 때까지 완전 침묵
 //
 // 유저 메시지가 오는 순간 어느 단계든 normal로 돌아간다(매번 새로 계산하므로 자동).
 // 캐릭터 서사와도 맞다: 안정형·매달리지 않음 stance의 자연스러운 행동.
 
-export type SilenceTier = "normal" | "quiet" | "reconnect" | "dormant";
+export type SilenceTier = "normal" | "quiet" | "checkin" | "dormant";
 
 export interface SilenceState {
   tier: SilenceTier;
@@ -45,12 +45,12 @@ export const silenceState = (
 ): SilenceState => {
   const lastUser = db
     .prepare(
-      `SELECT ts FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
+      `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
     )
-    .get(chatId) as { ts: string } | undefined;
+    .get(chatId) as { sent_at: string } | undefined;
   // 유저 메시지가 아직 없으면 관계 시작 시점을 기준으로 센다(첫 인사 후 무응답도 백오프 대상)
   const anchor =
-    lastUser?.ts ??
+    lastUser?.sent_at ??
     (
       db
         .prepare(`SELECT created_at FROM characters WHERE id = ?`)
@@ -65,13 +65,13 @@ export const silenceState = (
 
   if (days < QUIET_AFTER_DAYS) return { tier: "normal", days };
   if (days < RECONNECT_AT_DAYS) return { tier: "quiet", days };
-  // 재연결이 실제로 나갔는가 — 마지막 유저 메시지 이후 kind=reconnect 발화가 있으면 dormant
+  // 안부 선톡이 실제로 나갔는가 — 마지막 유저 메시지 이후 kind=checkin 발화가 있으면 dormant
   const sent = db
     .prepare(
-      `SELECT 1 FROM messages WHERE chat_id = ? AND ts > ? AND meta_json LIKE '%"kind":"reconnect"%' LIMIT 1`,
+      `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at > ? AND meta_json LIKE '%"kind":"checkin"%' LIMIT 1`,
     )
     .get(chatId, anchor);
-  return { tier: sent ? "dormant" : "reconnect", days };
+  return { tier: sent ? "dormant" : "checkin", days };
 };
 
 // 팔로업·자리비움 예고 등 일반 선제 발화가 허용되는가 — normal일 때만

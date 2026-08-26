@@ -89,7 +89,7 @@ export const createCharacter = async (
 };
 
 // PoC 대표 캐릭터 — 랜덤 생성 대신 이 고정 인물로 진행. 자세한 묘사: docs/character-profile.md
-// 바이블은 생성 시 캐릭터 row에 저장된다. 대화 중 다듬을 땐 저장된 bible_json을 갱신하면
+// 바이블은 생성 시 캐릭터 row에 저장된다. 대화 중 다듬을 땐 저장된 genesis_json을 갱신하면
 // 다음 메시지부터 반영된다(관계 히스토리·경과 시간 보존, 재배포 불필요).
 export const DAEPYO_BIBLE: Bible = {
   identity: {

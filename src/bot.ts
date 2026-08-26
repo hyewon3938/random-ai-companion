@@ -26,10 +26,17 @@ import {
 import { getKstNow, kstClock, kstDateString, timeMarkerFor } from "./kst.js";
 
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
-// reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 안부(선톡),
-// followup=침묵 팔로업(선톡), presence=자리비움 예고/복귀, reconnect=긴 침묵 후 재연결(침묵 백오프)
+// reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 선톡,
+// checkin=긴 침묵 뒤 안부 선톡, away=자리비움 선톡(나갈 때·돌아왔을 때),
+// catchup=낮의 근황 선톡, goodnight=밤 인사 선톡
 export type SendKind =
-  "reply" | "recover" | "morning" | "followup" | "presence" | "reconnect";
+  | "reply"
+  | "recover"
+  | "morning"
+  | "checkin"
+  | "away"
+  | "catchup"
+  | "goodnight";
 
 // 텔레그램 API 연결 풀.
 //
@@ -213,7 +220,7 @@ export const sendProactive = async (
   const total = splitBubbles(text).length;
   const { sent, error } = await sendBubblesTo(chatId, text);
   if (sent.length === 0 && error) throw error;
-  logMessage(chatId, characterId, "char", sent.join("\n"), nowIso(), {
+  logMessage(chatId, characterId, "assistant", sent.join("\n"), nowIso(), {
     proactive: true,
     kind,
     ...(sent.length < total ? { partial: `${sent.length}/${total}` } : {}),
@@ -259,9 +266,9 @@ const toTurns = (rows: MessageRow[]): ChatTurn[] => {
   let prevTs: string | null = null;
   for (const row of rows) {
     const role = row.role === "user" ? "user" : "assistant";
-    const marker = timeMarkerFor(row.ts, prevTs);
+    const marker = timeMarkerFor(row.sent_at, prevTs);
     const text = marker ? `[${marker}] ${row.text}` : row.text;
-    prevTs = row.ts;
+    prevTs = row.sent_at;
     const last = turns[turns.length - 1];
     if (last && last.role === role) last.content += `\n${text}`;
     else turns.push({ role, content: text });
@@ -282,7 +289,7 @@ bot.command("start", async (ctx) => {
   // PoC: 랜덤 생성 대신 고정 대표 캐릭터(정우진). 카드 온보딩·랜덤 매칭은 이후.
   const { id, bible } = createDaepyoCharacter(chatId);
   await sendBubblesTo(chatId, bible.first_greeting);
-  logMessage(chatId, id, "char", bible.first_greeting, nowIso(), {
+  logMessage(chatId, id, "assistant", bible.first_greeting, nowIso(), {
     first: true,
   });
 });
@@ -350,10 +357,10 @@ const lastCharTs = (chatId: string): string | undefined =>
   (
     db
       .prepare(
-        `SELECT ts FROM messages WHERE chat_id = ? AND role = 'char' ORDER BY id DESC LIMIT 1`,
+        `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`,
       )
-      .get(chatId) as { ts: string } | undefined
-  )?.ts;
+      .get(chatId) as { sent_at: string } | undefined
+  )?.sent_at;
 // 유저가 붙잡아 우진이 (개인·사회) 일정을 접거나 미루고 곁에 있기로 한 상태가 아직 유효한가.
 const attentionActive = (chatId: string): boolean => {
   const until = getAttentionUntil(chatId);
@@ -438,7 +445,7 @@ const respond = async (
   try {
     const character = getActiveCharacter(chatId);
     if (!character) return;
-    const bible = JSON.parse(character.bible_json) as Bible;
+    const bible = JSON.parse(character.genesis_json) as Bible;
     // 오늘의 하루 각본이 없으면 생성(그날 첫 대화 때 한 번). 실패해도 대화는 계속
     await ensureTodayPlan(character.id, bible).catch((e) =>
       logErr("[bot] day plan error:", e),
@@ -483,8 +490,8 @@ const respond = async (
     // 전송에 성공한 뒤에야 '답장 책임 완료'를 기록한다(보내기 전 기록하면, 전송 실패 시 복구가
     // 이미 처리됐다고 보고 영영 재시도하지 않아 답장이 유실된다). 성공 후이므로 중복도 방지된다.
     const lu = lastMessage(chatId);
-    if (lu?.role === "user") setRecoveryMark(chatId, lu.ts);
-    logMessage(chatId, character.id, "char", sent.join("\n"), nowIso(), {
+    if (lu?.role === "user") setRecoveryMark(chatId, lu.sent_at);
+    logMessage(chatId, character.id, "assistant", sent.join("\n"), nowIso(), {
       kind,
       ...(sent.length < total ? { partial: `${sent.length}/${total}` } : {}),
     });
@@ -542,19 +549,19 @@ export const recoverMissedReplies = async (): Promise<void> => {
     // 최근(3시간 내) 놓친 것만 복구한다 — 그보다 오래된 건 아침 안부·팔로업이 담당.
     // (예전엔 "오늘 새벽 5시 이후"로 걸렀는데, 자정~새벽 대화가 통째로 걸러지는 버그가 있었다.)
     const ageMin =
-      (Date.now() - new Date(last.ts.replace(" ", "T") + "+09:00").getTime()) /
+      (Date.now() - new Date(last.sent_at.replace(" ", "T") + "+09:00").getTime()) /
       60000;
     if (ageMin > 180) continue;
     if (pending.has(c.chat_id) || responding.has(c.chat_id)) continue; // 이미 처리 중
-    if (getRecoveryMark(c.chat_id) === last.ts) {
+    if (getRecoveryMark(c.chat_id) === last.sent_at) {
       console.log(
-        `[recover] 이미 답장한 메시지 — 건너뜀: ${c.chat_id} (${last.ts})`,
+        `[recover] 이미 답장한 메시지 — 건너뜀: ${c.chat_id} (${last.sent_at})`,
       );
       continue;
     }
     const prev = getRecoveryMark(c.chat_id);
-    setRecoveryMark(c.chat_id, last.ts); // 보내기 전에 책임 표시(재부팅 중복 방지)
-    console.log(`[recover] 놓친 답장 복구: ${c.chat_id} (마지막 ${last.ts})`);
+    setRecoveryMark(c.chat_id, last.sent_at); // 보내기 전에 책임 표시(재부팅 중복 방지)
+    console.log(`[recover] 놓친 답장 복구: ${c.chat_id} (마지막 ${last.sent_at})`);
     try {
       await respond(c.chat_id, "recover");
     } catch (e) {

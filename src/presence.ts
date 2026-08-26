@@ -49,25 +49,25 @@ const lastCharTs = (chatId: string): string | undefined =>
   (
     db
       .prepare(
-        `SELECT ts FROM messages WHERE chat_id = ? AND role = 'char' ORDER BY id DESC LIMIT 1`,
+        `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`,
       )
-      .get(chatId) as { ts: string } | undefined
-  )?.ts;
+      .get(chatId) as { sent_at: string } | undefined
+  )?.sent_at;
 
 const lastUserTs = (chatId: string): string | undefined =>
   (
     db
       .prepare(
-        `SELECT ts FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
+        `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
       )
-      .get(chatId) as { ts: string } | undefined
-  )?.ts;
+      .get(chatId) as { sent_at: string } | undefined
+  )?.sent_at;
 
 const lastLineOf = (chatId: string): string =>
   (
     db
       .prepare(
-        `SELECT text FROM messages WHERE chat_id = ? AND role IN ('user','char') ORDER BY id DESC LIMIT 1`,
+        `SELECT text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
       )
       .get(chatId) as { text: string } | undefined
   )?.text ?? "";
@@ -168,9 +168,9 @@ const presenceTickBody = async (): Promise<void> => {
     const cnt = (
       db
         .prepare(
-          `SELECT count(*) c FROM messages WHERE chat_id = ? AND ts >= ? AND meta_json LIKE ?`,
+          `SELECT count(*) c FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ?`,
         )
-        .get(c.chat_id, dayStart, '%"kind":"presence"%') as { c: number }
+        .get(c.chat_id, dayStart, '%"kind":"away"%') as { c: number }
     ).c;
     if (cnt >= 4) continue;
     // 하루 선제 발송 총량(전 채널 합산)도 확인 — 자기 몫만 세면 followup과 합이 통제되지 않는다.
@@ -188,24 +188,24 @@ const presenceTickBody = async (): Promise<void> => {
     if (ended) {
       const announced = db
         .prepare(
-          `SELECT 1 FROM messages WHERE chat_id = ? AND ts >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
+          `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
         )
         .get(
           c.chat_id,
           dayStart,
-          '%"kind":"presence"%',
+          '%"kind":"away"%',
           `%"block":"${ended.start}"%`,
         );
       const returned = db
         .prepare(
-          `SELECT 1 FROM messages WHERE chat_id = ? AND ts >= ? AND meta_json LIKE ? LIMIT 1`,
+          `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ? LIMIT 1`,
         )
         .get(c.chat_id, dayStart, `%"return":"${ended.start}"%`);
-      if (announced && !returned && last.role === "char") {
+      if (announced && !returned && last.role === "assistant") {
         // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
         if (!acquireProactive(c.chat_id)) continue;
         try {
-          const bible = JSON.parse(c.bible_json) as Bible;
+          const bible = JSON.parse(c.genesis_json) as Bible;
           const draft = await chatJson<{ send: boolean; text?: string }>(
             RETURN_SYSTEM,
             returnPrompt(bible, ended.activity, c.chat_id),
@@ -216,9 +216,9 @@ const presenceTickBody = async (): Promise<void> => {
           if (
             draft.send &&
             draft.text &&
-            lastMessage(c.chat_id)?.ts === last.ts
+            lastMessage(c.chat_id)?.sent_at === last.sent_at
           ) {
-            await sendProactive(c.chat_id, c.id, draft.text, "presence", {
+            await sendProactive(c.chat_id, c.id, draft.text, "away", {
               return: ended.start,
             });
             console.log(`[presence] return @ ${ended.activity} → ${c.chat_id}`);
@@ -228,7 +228,7 @@ const presenceTickBody = async (): Promise<void> => {
           recordSendFailure(
             c.chat_id,
             c.id,
-            "presence",
+            "away",
             e instanceof Error ? e.message : String(e),
           );
         } finally {
@@ -260,12 +260,12 @@ const presenceTickBody = async (): Promise<void> => {
       if (!eligible) continue;
       const dup = db
         .prepare(
-          `SELECT 1 FROM messages WHERE chat_id = ? AND ts >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
+          `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
         )
         .get(
           c.chat_id,
           dayStart,
-          '%"kind":"presence"%',
+          '%"kind":"away"%',
           `%"block":"${b.start}"%`,
         );
       if (dup) continue;
@@ -279,7 +279,7 @@ const presenceTickBody = async (): Promise<void> => {
     // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
     if (!acquireProactive(c.chat_id)) continue;
     try {
-      const bible = JSON.parse(c.bible_json) as Bible;
+      const bible = JSON.parse(c.genesis_json) as Bible;
       const draft = await chatJson<{ send: boolean; text?: string }>(
         PRESENCE_SYSTEM,
         presencePrompt(
@@ -296,8 +296,8 @@ const presenceTickBody = async (): Promise<void> => {
         config.model, // 실시간성이라 대화 모델(sonnet)
       );
       // 발송 직전 재확인 — LLM을 기다리는 사이 대화 상태가 바뀌었으면(유저 추가 발화·다른 발송) 접는다
-      if (draft.send && draft.text && lastMessage(c.chat_id)?.ts === last.ts) {
-        await sendProactive(c.chat_id, c.id, draft.text, "presence", {
+      if (draft.send && draft.text && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+        await sendProactive(c.chat_id, c.id, draft.text, "away", {
           block: target.start,
         });
         console.log(
@@ -309,7 +309,7 @@ const presenceTickBody = async (): Promise<void> => {
       recordSendFailure(
         c.chat_id,
         c.id,
-        "presence",
+        "away",
         e instanceof Error ? e.message : String(e),
       );
     } finally {
