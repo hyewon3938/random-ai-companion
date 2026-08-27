@@ -72,7 +72,7 @@ flowchart LR
 | 모듈 | 하는 일 | 모델 호출 |
 | --- | --- | --- |
 | user-profile.ts | 부르는 이름 · 성별 · 출생연도를 받고, 하는 일과 사는 지역은 비워 둔 채 시작 | 없음 |
-| character.ts | 코드가 성별 · 나이 · MBTI · 애착유형을 정한 뒤 나머지를 한 번의 호출로 생성 | 1번 |
+| character.ts | 유저가 적은 선택지와 서술형 입력을 받아 캐릭터를 한 번의 호출로 생성 | 1번 |
 
 공통으로 쓰는 모듈은 둘이다. db.ts에 스키마와 쿼리가 모여 있고, kst.ts가 한국 시각과 논리일을 계산한다.
 
@@ -90,12 +90,12 @@ flowchart LR
 
 | 모듈 | 하는 일 | 실행 주기 | 모델 호출 |
 | --- | --- | --- | --- |
-| nightly.ts | 데이터 수집, 기억 정리, 일기, 흐름 갱신, 선톡 문안, 한 번에 저장 | 하루 한 번 | 평소 4번 |
+| nightly.ts | 데이터 수집, 기억 정리와 관계 갱신, 일기, 흐름 갱신, 선톡 문안, 한 번에 저장 | 하루 한 번 | 평소 4번 |
 | life-plan.ts | 한 달치 이벤트와 매일 컨디션 생성 | 남은 날 6일 이하일 때 | 1번 |
 | day-plan.ts | 다음 날 각본 생성 | 하루 한 번 | 1번 |
 | tools/ | 배치를 봇 밖에서 실행하는 스크립트, 채점과 분석, 화면 렌더 | 운영자가 실행할 때 | 스크립트마다 다름 |
 
-앞 단계의 결과를 뒤 단계가 읽기 때문에 순서대로 실행한다. 흐름 갱신은 달력 경계에 걸리는 날만, 월 리듬은 이번 달 남은 날이 6일 이하일 때만 실행한다. 전부 만든 다음 한 번에 저장해서, 중간에 실패하면 그날 것이 통째로 남고 다음 실행이 채운다. 각본 없이 시작한 하루에 유저가 먼저 말을 걸면 그 자리에서 임시 각본을 만들고, 다음 새벽 정리가 정식 각본으로 교체하면서 이미 지나간 실제 기록은 그대로 남긴다.
+앞 단계의 결과를 뒤 단계가 읽기 때문에 순서대로 실행한다. 흐름 갱신은 달력 경계에 걸리는 날만, 월 리듬은 이번 달 남은 날이 6일 이하일 때만 실행한다. 전부 만든 다음 한 번에 저장해서, 중간에 실패하면 그날 것이 통째로 남고 다음 실행이 채운다. 각본 없이 시작한 하루에 유저가 먼저 말을 걸면 그 자리에서 임시 각본을 만들고, 다음 새벽 정리가 새로 만든 각본으로 교체하면서 이미 지나간 실제 기록은 그대로 남긴다. 유저와의 관계(사이 정의 · 관계의 결 · 마음 상태 등 relationships의 항목들)는 기억을 정리하는 호출의 출력에 같이 들어 있어서, 관계를 갱신한다고 모델 호출이 늘지 않는다.
 
 ## 모듈을 이렇게 나눈 기준
 
@@ -117,7 +117,6 @@ flowchart LR
 
 | 구분 | 대상 |
 | --- | --- |
-| 새 모듈 | memory.ts(기억 저장과 태그 검색), reply-timing.ts(답장 텀과 붙잡기 판정), pending.ts(대기 답장) |
-| 옮겨 가는 코드 | 답장 텀 계산과 재시작 복구는 bot.ts에서 새 모듈로, 기억 읽기와 쓰기는 context.ts와 nightly.ts에서 memory.ts로 |
-| 삭제 | capture.ts — 대화 중에 기억을 추출하던 자리를 오늘 메모가 대신한다 |
-| 그대로 | bot.ts, llm.ts, bubble-polish.ts, proactive-policy.ts, dispatch.ts, presence.ts, followup.ts, life-plan.ts, day-plan.ts, character.ts, user-profile.ts, db.ts, kst.ts, config.ts |
+| 바뀌는 모듈 | character.ts(코드가 정하던 성별 · 나이 · MBTI · 애착유형 대신 유저 입력으로 생성), memory.ts(저장 항목 셋으로 정리, origin=creation 행 수정 거부, 주변 인물 저장과 검색), nightly.ts(기억 정리 호출의 출력에 관계 항목 갱신 포함), context.ts(관계 항목을 relationships에서 읽어 항상 주입) |
+| 삭제 | cast_members를 읽고 쓰는 코드 — 주변 인물은 memory.ts가 담당한다 |
+| 그대로 | bot.ts, llm.ts, bubble-polish.ts, reply-timing.ts, pending.ts, labels.ts, proactive-policy.ts, dispatch.ts, presence.ts, followup.ts, life-plan.ts, day-plan.ts, user-profile.ts, kst.ts, config.ts. db.ts는 스키마 정의 변경만 |

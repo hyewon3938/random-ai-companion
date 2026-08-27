@@ -19,7 +19,6 @@ erDiagram
     characters ||--|| relationships : "캐릭터당 하나"
     characters ||--o{ memory_items : ""
     characters ||--o{ areas : ""
-    characters ||--o{ cast_members : ""
     characters ||--o{ schedules : ""
     characters ||--o{ diary_entries : ""
     characters ||--o{ today_notes : ""
@@ -57,11 +56,6 @@ erDiagram
         INTEGER id PK
         INTEGER character_id FK
     }
-    cast_members {
-        INTEGER id PK
-        INTEGER character_id FK
-        TEXT name "캐릭터 안 유일"
-    }
     schedules {
         INTEGER id PK
         INTEGER character_id FK
@@ -83,38 +77,50 @@ erDiagram
 | id | INTEGER | O | PK |
 | chat_id | TEXT | O | 텔레그램 대화방 |
 | status | TEXT | O | 대화 상태 — `active` 대화 중 · `ended` 이별 |
-| genesis_json | TEXT | O | 캐릭터 생성 결과 원본, 코드는 읽지 않음 |
+| genesis_json | TEXT | O | 유저의 생성 입력과 생성 결과 원본, 코드는 읽지 않음 |
 | created_at | TEXT | O | |
 
 키·인덱스: PK `id`, 인덱스 `chat_id`
 
 status는 한 대화방에 캐릭터 행이 여러 개 쌓여도 지금 대화하는 캐릭터 하나를 고르는 값이다. 이별한 캐릭터의 행은 지우지 않고 `ended`로 바꿔 남기기 때문에 값이 둘인데, 교체 플로우를 만들기 전까지는 `active`만 쓴다.
 
-genesis_json은 캐릭터 생성 호출이 돌려준 값을 통째로 담아 두는 컬럼이다. 생성 결과는 저장 항목별로 나눠서 memory_items와 cast_members에 넣기 때문에 대화나 배치가 이 컬럼을 읽지는 않고, 생성 시점에 무엇을 받았는지 나중에 확인할 수 있게 남겨둔다.
+genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 호출이 돌려준 결과를 함께 담아 두는 컬럼이다. 생성 결과는 저장 항목별로 나눠서 memory_items와 relationships에 넣기 때문에 대화나 배치가 이 컬럼을 읽지는 않고, 무엇을 받아 무엇을 만들었는지 나중에 확인할 수 있게 남겨둔다.
 
-**relationships** — 유저와 캐릭터의 연결과 만난 날
+**relationships** — 유저와 캐릭터의 관계. 두 사람 사이의 상태라 누구 것인지 나눌 수 없고, 항목이 미리 정해져 있어 기억 대신 컬럼으로 저장
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | character_id | INTEGER | O | PK, FK characters.id |
 | met_at | TEXT | O | 만난 날 |
 | last_contact_at | TEXT | | 마지막으로 주고받은 시각 |
-| legacy_state_json | TEXT | | 이전 구조의 관계 상태 원본, 코드는 읽지 않음 |
+| stage | TEXT | O | 사이 정의 — 친구 · 썸처럼 지금 어떤 사이인지 짧은 서술 |
+| speech_level | TEXT | O | 지금 말투 — `polite` 존댓말 · `casual` 반말 |
+| speech_note | TEXT | | 말투의 결 — 장난스러운 반말처럼 값으로 담기지 않는 부분 |
+| address_terms | TEXT | O | 서로 부르는 말 |
+| texture | TEXT | O | 관계의 결 — 라벨 대신 짧은 서술 |
+| rapport | TEXT | | 잘 통하는 것 — 유저가 잘 반응하는 주제와 방식, 둘 사이에 생긴 표현 |
+| cautions | TEXT | | 조심할 것 |
+| history | TEXT | O | 만나 온 이야기 — 어떻게 만났고 사이가 어떻게 변해 왔는지 |
+| feelings | TEXT | O | 마음 상태 — 캐릭터가 유저에게 가지는 마음 |
+| updated_at | TEXT | O | 갱신 시각 |
 
-**memory_items** — 기억 데이터 한 건. 캐릭터 정체성 · 알게 된 유저 사실 · 진행 중인 일 · 캐릭터와 유저의 관계
+관계를 담는 항목은 여덟이다(사이 정의부터 마음 상태까지, 말투는 값과 결이 한 항목). 프롬프트에는 이 여덟이 항상 전부 들어간다. 초기값은 캐릭터를 만들 때 유저가 적은 관계 설정에서 생성 배치가 채우고, 잘 통하는 것과 조심할 것은 비워 두고 시작해 새벽 정리가 대화에서 채운다.
+
+갱신 주체는 둘로 갈린다. 말투 값과 마지막으로 주고받은 시각은 답장 파이프라인이 대화에서 바로 바꾸고, 나머지 항목은 새벽 정리가 바꾼다. 관계 갱신은 기억을 정리하는 호출의 출력에 같이 들어 있어서 이 항목들 때문에 새벽의 모델 호출이 늘지 않는다. 마음 상태는 최근 일기에 뚜렷한 근거가 있을 때만 움직이고, 말을 놓거나 사이가 달라진 사건은 만나 온 이야기에 날짜와 함께 이어 적는다. 변화를 날짜별로 남기는 로그 테이블은 따로 두지 않고 그날그날의 기록은 일기가 담당한다. 만난 지 며칠인지와 연락이 얼마나 잦은지는 만난 날과 대화 기록에서 계산할 수 있어 저장하지 않는다.
+
+**memory_items** — 기억 데이터 한 건. 사실 · 진행 중인 일 · 주변 인물 세 항목을 캐릭터 쪽과 유저 쪽으로 나눠 저장
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | id | INTEGER | O | PK |
 | character_id | INTEGER | O | FK characters.id |
-| item_type | TEXT | O | 저장 항목 — `identity` · `user_fact` · `ongoing` · `relationship` |
+| item_type | TEXT | O | 저장 항목 — `fact` · `ongoing` · `person` |
 | owner | TEXT | O | 누구 것인가 — `char` · `user` |
 | area | TEXT | O | 키의 영역, 한글, areas에 있는 이름 |
-| subject | TEXT | O | 키의 단어, 무엇에 대한 것인지, 한글 |
+| subject | TEXT | O | 키의 단어, 무엇에 대한 것인지, 한글. 주변 인물은 이 자리에 사람 이름 |
 | value | TEXT | O | 값, 한글 |
-| origin | TEXT | O | 어디서 생긴 값인가 — `seed` · `accrued` |
-| user_knows | TEXT | O | 유저가 아는가 — `unknown` · `known` · `waiting` |
-| interest_level | TEXT | | 유저가 이 주제에 보인 반응 — `asks_first` · `reacts_only` · `changes_topic` |
+| origin | TEXT | O | 어디서 생긴 값인가 — `creation` · `conversation` |
+| user_knows | TEXT | O | 유저가 아는가 — `unknown` · `known` · `waiting`, 캐릭터 쪽 행에서만 의미 |
 | extra_json | TEXT | | 저장 항목별 추가 정보 |
 | updated_at | TEXT | O | 갱신 시각 |
 
@@ -124,17 +130,24 @@ genesis_json은 캐릭터 생성 호출이 돌려준 값을 통째로 담아 두
 
 | item_type | owner | area | subject | value |
 | --- | --- | --- | --- | --- |
-| identity | char | 취향 | 커피 | 산미 있는 원두를 좋아한다 |
-| user_fact | user | 취미 | 등산 | 주말마다 근교 산에 다닌다 |
+| fact | char | 취향 | 커피 | 산미 있는 원두를 좋아한다 |
+| fact | user | 취미 | 등산 | 주말마다 근교 산에 다닌다 |
 | ongoing | char | 일 | 포트폴리오 | 개인 작업을 다음 달까지 정리하려고 한다 |
+| person | char | 일 | 팀장 | 프로젝트 마감이 다가와 요즘 예민하다 |
 
 키는 영역과 단어를 짝지은 두 자리로 항상 만든다. 두 자리를 `취향/커피` 같은 한 문자열로 붙이지 않고 컬럼 둘로 나눠 저장하는 것은 태그 때문이 아니라, 나눠 두면 키가 한 자리나 세 자리로 어긋날 수 없고 저장할 때 남는 검사가 영역 자리의 이름이 areas 목록에 있는지 하나뿐이기 때문이다. 슬래시는 화면에 보여줄 때만 붙인다.
 
-owner는 저장 항목에 따라 대부분 정해진다. 정체성은 캐릭터 것(`char`), 알게 된 유저 사실은 유저 것(`user`)이고, 관계는 둘 사이의 값이라 구분이 필요 없어 `char`로 고정한다. 실제로 갈리는 것은 진행 중인 일 하나이고, 캐릭터가 하는 일과 유저가 하는 일을 이 값으로 나눈다.
+owner는 세 항목 모두에서 갈린다. 캐릭터의 취향과 유저의 취미, 캐릭터가 하는 일과 유저가 준비하는 일, 캐릭터의 지인과 유저의 지인이 이 값으로 나뉘어 세 항목과 두 쪽의 여섯 조합이 전부 유효하고, 어느 쪽 것인지는 저장할 때 모델이 내용을 보고 정한다. 캐릭터 쪽 사실은 프롬프트에 항상 들어가고, 나머지 조합은 태그 검색으로 골라 넣는다. user_knows는 캐릭터 쪽 행에서만 의미가 있어서 유저 쪽 행은 `known`으로 고정한다.
 
-origin은 이 값이 어디서 생겼는지, 그래서 앞으로 누가 고칠 수 있는지를 가른다. `seed`는 캐릭터를 만들 때 생성 배치가 한 번 쓰고 그 뒤로는 아무도 고치지 않는 값이고, `accrued`는 대화에서 드러난 사실을 새벽 정리가 나중에 추가한 값이다. 큰 정체성이 흔들리지 않는 것을 따로 장치를 두지 않고 이 쓰기 권한으로 지킨다. 프롬프트에 넣을 때는 둘을 구분하지 않고 같이 넣는다.
+origin은 이 값이 어디서 생겼는지, 그래서 앞으로 누가 고칠 수 있는지를 가른다. `creation`은 캐릭터를 만들 때 생성 배치가 한 번 쓰는 값이고, `conversation`은 대화에서 드러난 사실을 새벽 정리가 나중에 추가한 값이다. 저장 함수가 `creation` 행의 수정을 거부해서, 캐릭터의 큰 정체성이 대화에 휩쓸려 바뀌지 않는 것을 이 쓰기 규칙으로 지킨다. 프롬프트에 넣을 때는 둘을 구분하지 않고 같이 넣는다.
 
-extra_json에는 저장 항목마다 다른 값이 들어간다. 진행 중인 일은 끝나는 조건과 다음 한 걸음, 관계는 말 놓은 날과 먼저 꺼낸 쪽, 그리고 하나씩 늘어나는 목록형 값(우리끼리 생긴 표현 · 조심할 것)이 여기 들어가고 나머지 둘은 비운다. 관계는 단어 자리도 다섯으로 미리 고정된다(서로 부르는 말 · 지금 말투 · 관계의 결 · 우리끼리 생긴 표현 · 조심할 것). 영역 자리도 `관계`로 고정하는데, 관계는 삶의 갈래가 아니라서 이 이름은 areas 목록에 넣지 않고 영역 이름 검사도 이 항목은 건너뛴다.
+extra_json에는 저장 항목마다 미리 정한 필드만 들어간다. 진행 중인 일은 끝나는 조건 하나, 주변 인물은 어떤 사이 · 만나는 방식 · 사는 곳 · 마지막 등장 넷이고, 사실은 비운다. 목록에 없는 필드는 쓰기 코드가 버린다. 자유 칸을 열어 두면 같은 정보가 어떤 행에서는 값에, 어떤 행에서는 추가 정보에 들어가 검색이 어긋나기 때문에, 새 필드가 필요해지면 이 목록을 고치는 설계 변경으로 다룬다.
+
+주변 인물은 키의 단어 자리에 사람 이름이 들어가는 예외다. 이름이 태그와 같은 문자열이어서, 이름 하나로 인물 행과 그 사람이 나오는 일기 · 일정을 함께 찾는다. 같은 쪽에 같은 이름이 오면 영역이 달라도 같은 사람으로 보고 한 행을 고쳐 쓰기 때문에, 인물의 유일성은 네 자리 키가 아니라 쓰기 코드가 이름으로 지킨다. 다른 사람이면 회사 민수처럼 이름을 늘려 가르고, 태그는 두 이름에 다 남긴다.
+
+인물 행의 값에는 요즘 이 사람과 어떻게 지내는지를 적고, 함께 있었던 일은 이 행에 쌓지 않고 이름 태그로 일기와 일정에 남긴다. 추가 정보의 네 필드는 읽는 곳이 서로 다르다. 어떤 사이인지는 값과 함께 프롬프트에 들어가 캐릭터가 그 사람 이야기를 할 때 쓰이고, 만나는 방식과 사는 곳은 한 달치 이벤트를 만드는 월 리듬이 읽는다. 이 둘이 없으면 이벤트에 누구와 무엇을 하는지가 비어서, 매일 보는 팀장과 명절에나 보는 부모님이 같은 빈도로 나오고 멀리 사는 부모님이 평일 저녁 약속에 나온다. 마지막 등장 시각은 프롬프트에 넣을 인물을 코드가 고를 때 쓴다.
+
+감정은 기억에 저장하지 않는다. 그날의 감정은 일기에 남고, 유저를 향해 이어지는 마음은 relationships의 마음 상태가 담는다.
 
 **tags** — 주제 태그. 기억 · 지난 일기 · 예정된 일에 같은 방식으로 붙어 이름 하나로 함께 검색
 
@@ -147,7 +160,7 @@ extra_json에는 저장 항목마다 다른 값이 들어간다. 진행 중인 �
 
 키·인덱스: PK `(kind, ref_id, tag)`, 인덱스 `(character_id, tag)`
 
-태그가 붙는 대상이 셋뿐인 것은 대화 주제로 검색해서 프롬프트에 넣는 데이터가 그 셋이기 때문이다. 주변 인물은 이름 자체가 키라서 이름으로 바로 찾고, 오늘 메모와 오늘 각본처럼 그날 것을 통째로 넣는 데이터는 골라낼 일이 없어 태그가 필요 없다.
+태그가 붙는 대상이 셋뿐인 것은 대화 주제로 검색해서 프롬프트에 넣는 데이터가 그 셋이기 때문이다. 주변 인물도 기억 데이터의 한 항목이라 `memory`로 함께 검색되고, 오늘 메모와 오늘 각본처럼 그날 것을 통째로 넣는 데이터는 골라낼 일이 없어 태그가 필요 없다.
 
 **areas** — 영역 이름 목록. 키 앞자리에 쓰는 삶의 갈래를 캐릭터마다 따로 관리
 
@@ -172,27 +185,6 @@ extra_json에는 저장 항목마다 다른 값이 들어간다. 진행 중인 �
 
 키·인덱스: PK `id`, 인덱스 `(character_id, created_at)`
 
-**cast_members** — 주변 인물. 이름이 곧 키인 예외 저장 항목
-
-| 컬럼 | 타입 | 필수 | 설명 |
-| --- | --- | --- | --- |
-| id | INTEGER | O | PK |
-| character_id | INTEGER | O | FK characters.id |
-| owner | TEXT | O | 누구의 지인인가 — `char` · `user` |
-| name | TEXT | O | 이름, 태그와 같은 문자열 |
-| relation_label | TEXT | O | 어떤 사이인가 — 대학 동기, 팀장 |
-| area | TEXT | | 이 사람이 속한 영역, areas에 있는 이름 |
-| meet_pattern | TEXT | | 얼마나 자주 어떻게 만나는 사이인가 |
-| place | TEXT | | 이 사람이 사는 곳 |
-| recent_note | TEXT | | 요즘 이 사람과 어떻게 지내는지 |
-| user_knows | TEXT | O | 유저가 아는가 — `unknown` · `known` · `waiting` |
-| last_mentioned_at | TEXT | | 대화에 마지막으로 등장한 시각 |
-| created_at | TEXT | O | |
-
-키·인덱스: PK `id`, UNIQUE `(character_id, name)`
-
-가운데 네 컬럼은 읽는 곳이 서로 다르다. 영역 · 만나는 방식 · 사는 곳은 한 달치 이벤트를 만드는 월 리듬이 읽는다. 이 셋이 없으면 이벤트가 날짜와 내용뿐이라 누구와 무엇을 하는지가 비어서, 매일 보는 팀장과 명절에나 보는 부모님이 같은 빈도로 나오고 멀리 사는 부모님이 평일 저녁 약속에 나온다. 요즘 어떻게 지내는지는 프롬프트에 들어가 캐릭터가 그 사람 이야기를 할 때 쓰인다. 마지막으로 등장한 시각은 프롬프트에 넣을 인물을 코드가 고를 때 쓴다.
-
 **schedules** — 예정된 일. 날짜로 찾는 목록이라 키 없이 태그로 검색
 
 | 컬럼 | 타입 | 필수 | 설명 |
@@ -216,7 +208,7 @@ extra_json에는 저장 항목마다 다른 값이 들어간다. 진행 중인 �
 
 origin은 이 일정이 어디서 나왔는지를 남긴다. `conversation`은 대화에서 유저와 정한 약속이고, 답장하면서 오늘 메모에 적어 둔 것을 새벽 정리가 옮겨 온 것도 여기 들어간다. `rhythm`은 한 달치 이벤트를 만드는 월 리듬이 미리 만들어 둔 일정이다. `ongoing`은 진행 중인 일에서 나온 일정으로, 이사를 준비하는 중이라는 데이터를 새벽 정리가 읽고 이번 주말에 집을 보러 가기로 정하면 이 값으로 저장한다.
 
-parent_kind와 parent_id는 이 일정을 만든 항목을 가리킨다. 토요일 오후에 집을 보러 가는 일정에서 왜 가는지를 다시 적지 않고, 그 일정을 만든 진행 중인 일(이사 준비)을 가리키게 두는 것이다. 같은 내용을 여러 곳에 적으면 한쪽만 고쳐질 수 있어서, 원본은 한 곳에 두고 일정은 가리키기만 한다. `memory`는 memory_items의 행을 가리키고, 진행 중인 일과 아직 날짜가 잡히지 않은 하고 싶다는 마음(정체성 항목으로 저장되는 의향)이 다 여기 있다. `schedule`은 앞선 일정이 다음 일정을 만든 경우다.
+parent_kind와 parent_id는 이 일정을 만든 항목을 가리킨다. 토요일 오후에 집을 보러 가는 일정에서 왜 가는지를 다시 적지 않고, 그 일정을 만든 진행 중인 일(이사 준비)을 가리키게 두는 것이다. 같은 내용을 여러 곳에 적으면 한쪽만 고쳐질 수 있어서, 원본은 한 곳에 두고 일정은 가리키기만 한다. `memory`는 memory_items의 행을 가리키고, 진행 중인 일과 아직 날짜가 잡히지 않은 하고 싶다는 마음(사실 항목으로 저장되는 의향)이 다 여기 있다. `schedule`은 앞선 일정이 다음 일정을 만든 경우다.
 
 **diary_entries** — 하루 일기. 매일 한 편씩 쌓이고, 일기가 있는 날짜는 새벽 정리가 다시 만들지 않는다
 
@@ -436,12 +428,14 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | error | TEXT | O | |
 | failed_at | TEXT | O | |
 
-**user_preferences** — 유저 성향. 매칭 전용 후보라 캐릭터에게 비공개, 지금은 쓰기·읽기 모두 없이 보존
+**user_preferences** — 캐릭터와 무관한 유저 자체의 선호를 담을 자리. 지금은 쓰기·읽기 모두 없이 자리만 유지
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | chat_id | TEXT | O | PK |
 | pref_json | TEXT | O | |
+
+캐릭터마다 다른 선호는 relationships의 잘 통하는 것이 담고, 이 테이블은 캐릭터를 여럿 두는 구조가 생겼을 때 유저가 어떤 캐릭터와 잘 맞는지 같은 유저 단위의 선호를 담는다. 읽는 코드가 없는 값을 미리 쌓으면 기준이 바뀔 때 버리게 되어서 지금은 자리와 뜻만 정해 두고, 채울 때가 오면 대화 원문과 카드 반응, 관계가 얼마나 이어졌는지의 기록에서 뽑는다.
 
 **llm_usage** — 모델 호출량과 캐시 재사용 집계
 
@@ -462,12 +456,11 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | 테이블 | 쓰는 곳 | 읽는 곳 |
 | --- | --- | --- |
 | characters | 생성 배치 | 모든 모듈 (id 연결) |
-| relationships | 생성 배치, 답장 파이프라인(last_contact_at) | 프롬프트 조립(만난 날수 계산) |
-| memory_items | 생성 배치(씨앗), 새벽 정리 | 프롬프트 조립, 새벽 정리, 각본 생성, 월 리듬 |
+| relationships | 생성 배치(초기값), 새벽 정리(관계 항목), 답장 파이프라인(말투 값 · last_contact_at) | 프롬프트 조립(관계 항목 항상, 만난 날수 계산) |
+| memory_items | 생성 배치(origin=creation), 새벽 정리 | 프롬프트 조립, 새벽 정리, 각본 생성, 월 리듬(주변 인물) |
 | tags | 생성 배치, 새벽 정리, 월 리듬(리듬 일정의 태그) | 프롬프트 조립(태그 일치 검색) |
 | areas | 생성 배치, 새벽 정리 | 새벽 정리(키 판정) |
 | today_notes | 답장 파이프라인 | 프롬프트 조립(오늘 것 항상), 새벽 정리 |
-| cast_members | 생성 배치, 새벽 정리 | 프롬프트 조립, 월 리듬 |
 | schedules | 새벽 정리, 월 리듬 | 프롬프트 조립, 각본 생성, 선톡 모듈 |
 | diary_entries | 새벽 정리 | 프롬프트 조립(최근 며칠 항상, 지난 것은 태그 일치), 새벽 정리, 아크 갱신 |
 | user_profile | 온보딩, 새벽 정리(선택 둘) | 프롬프트 조립, 생성 배치, 각본 생성, 선톡 모듈 |
@@ -480,7 +473,7 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | scheduled_sends | 새벽 정리 | 선톡 모듈 |
 | recovery_marks | 답장 파이프라인 | 답장 파이프라인(부팅 복구) |
 | send_failures | 선톡 모듈 | 운영 점검 |
-| user_preferences | 없음 (보존) | 없음 |
+| user_preferences | 없음 (자리만) | 없음 |
 | llm_usage | llm 래퍼 | 운영 점검 |
 
 ## 값이 정해진 컬럼
@@ -489,12 +482,11 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 
 | 자리 | 값 |
 | --- | --- |
-| memory_items.item_type 저장 항목 | `identity` 캐릭터 정체성 · `user_fact` 알게 된 유저 사실 · `ongoing` 진행 중인 일 · `relationship` 캐릭터와 유저의 관계 |
-| memory_items.owner 누구 것인가 | `char` 캐릭터 · `user` 유저 |
-| memory_items.origin 어디서 생긴 값인가 | `seed` 생성 배치가 한 번 씀 · `accrued` 새벽 정리가 대화에서 추가 |
-| cast_members.owner, schedules.owner | `char` 캐릭터 · `user` 유저 |
-| memory_items · cast_members · schedules의 user_knows 유저가 아는가 | `unknown` 모름 · `known` 앎 · `waiting` 기다림, 유저가 결과를 기다리고 있어 캐릭터가 결과를 먼저 알린다 |
-| memory_items.interest_level 유저가 이 주제에 보인 반응 | `asks_first` 먼저 물음, 유저가 나중에 자기 쪽에서 물었다 · `reacts_only` 반응만, 그 자리에서 반응하고 끝났다 · `changes_topic` 화제 전환, 짧게 받고 화제가 바뀌었다 |
+| memory_items.item_type 저장 항목 | `fact` 사실 · `ongoing` 진행 중인 일 · `person` 주변 인물 |
+| memory_items.owner, schedules.owner 누구 것인가 | `char` 캐릭터 · `user` 유저 |
+| memory_items.origin 어디서 생긴 값인가 | `creation` 캐릭터를 만들 때 쓴 값, 수정 거부 · `conversation` 새벽 정리가 대화에서 추가 |
+| relationships.speech_level 지금 말투 | `polite` 존댓말 · `casual` 반말 |
+| memory_items · schedules의 user_knows 유저가 아는가 | `unknown` 모름 · `known` 앎 · `waiting` 기다림, 유저가 결과를 기다리고 있어 캐릭터가 결과를 먼저 알린다 |
 | schedules.origin 출처 | `conversation` 대화 · `rhythm` 월 리듬 · `ongoing` 진행 중인 일 |
 | schedules.parent_kind 이 일정을 만든 항목 | `memory` 기억 데이터(진행 중인 일 · 의향) · `schedule` 앞선 일정 |
 | schedules.status | `active` 유효 · `cancelled` 취소 · `deferred` 미룸 |
@@ -521,22 +513,22 @@ extra_json · plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하�
 - **tags의 kind + ref_id** — 기억 · 일기 · 예정된 일 세 테이블을 한 테이블이 가리키므로 FK를 걸 수 없다. 테이블을 셋으로 쪼개면 FK가 생기는 대신, 사람 이름 하나로 인물 · 일정 · 일기를 함께 찾는 검색이 쿼리 세 번이 되어서 한 테이블을 택했다.
 - **schedules의 parent_kind + parent_id** — 일정을 만든 항목이 기억 데이터(memory_items)일 수도, 앞선 일정(schedules)일 수도 있어 tags처럼 종류 열과 id 둘로 가리킨다.
 - **day_actuals.block_start** — day_plans의 plan_json 안 블록을 시각으로 가리킨다. 블록이 JSON 문서 안에 있어 FK 대상이 아니다.
-- **이름 문자열 일치** — cast_members.name, schedules.with_name, tags.tag는 같은 사람을 같은 문자열로 적는 규칙으로 이어진다. 연결 테이블 대신 이름을 식별자로 쓰는 것이 이 시스템의 설계라, 동명이인은 이름을 늘려 가른다(예: 회사 민수).
-- **영역 이름** — memory_items · cast_members · schedules의 area는 areas에 있는 이름을 문자열로 적는다. 새벽의 목록 관리가 항목을 다른 영역으로 다시 앉힐 때 여러 테이블을 같이 고치는 자리라, FK 대신 저장할 때의 이름 검사로 지킨다.
+- **이름 문자열 일치** — memory_items 주변 인물 행의 subject, schedules.with_name, tags.tag는 같은 사람을 같은 문자열로 적는 규칙으로 이어진다. 연결 테이블 대신 이름을 식별자로 쓰는 것이 이 시스템의 설계라, 동명이인은 이름을 늘려 가른다(예: 회사 민수).
+- **영역 이름** — memory_items · schedules의 area는 areas에 있는 이름을 문자열로 적는다. 새벽의 목록 관리가 항목을 다른 영역으로 다시 앉힐 때 여러 테이블을 같이 고치는 자리라, FK 대신 저장할 때의 이름 검사로 지킨다.
 - **today_notes.message_id** — 메모의 원문이 있는 messages 행을 가리킨다. 나중에 원문을 확인할 때만 쓰는 참조라 FK 없이 id만 적는다.
 
 ## 지금 구조에서 바뀌는 것
 
+운영 중인 스키마에서 이 문서대로 가려면 다음이 바뀐다.
+
 | 구분 | 대상 |
 | --- | --- |
-| 새 테이블 | memory_items, tags, areas, today_notes, day_actuals, pending_replies |
-| 컬럼 추가 | schedules(누구와 · 영역 · 유저가 아는가 · 출처 · 만든 항목 2열), cast_members(영역 · 만나는 방식 · 사는 곳 · 요즘 어떤지 · 유저가 아는가 · 마지막 등장), user_profile(부르는 이름 · 출생연도 · 하는 일 · 사는 지역, 나이대는 출생연도로 옮기고 삭제) |
-| 컬럼 이름 변경 | characters.bible_json → genesis_json, relationships.state_json → legacy_state_json, cast_members·schedules의 who → owner, cast_members.relation → relation_label, arcs.horizon → period, day_plans.source → made_by, day_seeds.note → reason, scheduled_sends.reason → skip_reason, messages.ts → sent_at, send_failures.ts → failed_at, recovery_marks.user_ts → replied_up_to |
-| 컬럼 삭제 | cast_members.note — 요즘 어떻게 지내는지는 recent_note가 받는다 |
-| 읽기 중단 (컬럼은 원본 보관용으로 유지) | characters.genesis_json, relationships.legacy_state_json |
-| 테이블 폐기 | attention_override(day_actuals가 대체), capture_marks(오늘 메모 경유로 대체) |
-| 값 변경 | scheduled_sends.kind의 reconnect를 checkin으로, day_plans.made_by의 lazy를 ondemand로, 값이 정해진 컬럼의 한글 값을 영어 식별자로. messages 메타와 send_failures.kind에 남은 옛 발송 종류도 새 이름으로 바꿔 복사한다(presence → away · reconnect → checkin, followup은 새벽 발송이면 goodnight 나머지는 catchup) |
-| 제약 추가 | 값이 정해진 컬럼 CHECK, diary_entries `(character_id, date)` UNIQUE, cast_members `(character_id, name)` UNIQUE, `PRAGMA foreign_keys = ON` |
-| 구조 그대로 | day_plans, day_seeds, arcs, diary_entries, messages, recovery_marks, send_failures, llm_usage, user_preferences — 위의 이름 변경만 반영 |
+| 저장 항목 정리 | memory_items.item_type을 넷에서 셋으로 — 캐릭터 정체성과 알게 된 유저 사실을 `fact` 하나로 합쳐 owner로 가르고, 관계 항목은 relationships의 컬럼으로 옮긴다 |
+| 테이블 흡수 | cast_members를 memory_items의 `person` 행으로 — 이름은 키의 단어 자리로, 어떤 사이 · 만나는 방식 · 사는 곳 · 마지막 등장은 extra_json으로, 요즘 어떻게 지내는지는 값으로 |
+| 컬럼 추가 | relationships에 관계 항목 컬럼 아홉(stage · speech_level · speech_note · address_terms · texture · rapport · cautions · history · feelings)과 updated_at |
+| 컬럼 삭제 | memory_items.interest_level(읽는 코드 없음), relationships.legacy_state_json(관계 컬럼의 초기값을 채운 뒤) |
+| 값 변경 | memory_items.origin의 seed → `creation`, accrued → `conversation`(컨디션 시드와 이름이 겹치지 않게) |
+| 용도 재정의 | user_preferences(매칭 전용 → 유저 단위 선호 자리), characters.genesis_json(생성 결과에 유저의 생성 입력을 더해 보관) |
+| 그대로 | 나머지 테이블 전부 |
 
 확정된 설계에서 이 문서가 더 정한 것은 하나다. 태그 테이블을 memory_items 전용(item_tags)으로 두면 지난 일기와 예정된 일의 태그가 갈 곳이 없어서, kind 열을 둔 tags 하나로 세 대상을 같이 담는다.
