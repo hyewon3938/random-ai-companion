@@ -72,7 +72,7 @@ flowchart LR
 | 모듈 | 하는 일 | 모델 호출 |
 | --- | --- | --- |
 | user-profile.ts | 부르는 이름 · 성별 · 출생연도를 받고, 하는 일과 사는 지역은 비워 둔 채 시작 | 없음 |
-| character.ts | 유저가 적은 선택지와 서술형 입력을 받아 캐릭터를 한 번의 호출로 생성 | 1번 |
+| character.ts | 유저가 적은 선택지와 서술형 입력을 받아 캐릭터를 생성, 정체성 · 주변 인물 · 진행 중인 일 · 관계 첫 값을 만드는 호출과 삶의 흐름을 쓰는 호출로 나눔 | 2번 |
 
 공통으로 쓰는 모듈은 둘이다. db.ts에 스키마와 쿼리가 모여 있고, kst.ts가 한국 시각과 논리일을 계산한다.
 
@@ -119,4 +119,5 @@ flowchart LR
 | --- | --- |
 | 바뀌는 모듈 | character.ts(코드가 정하던 성별 · 나이 · MBTI · 애착유형 대신 유저 입력으로 생성), memory.ts(저장 항목 셋으로 정리, origin=creation 행 수정 거부, 주변 인물 저장과 검색), nightly.ts(기억 정리 호출의 출력에 관계 항목 갱신 포함), context.ts(관계 항목을 relationships에서 읽어 항상 주입) |
 | 삭제 | cast_members를 읽고 쓰는 코드 — 주변 인물은 memory.ts가 담당한다 |
+| 새 모듈 | thresholds.ts — 선톡 창 · 답장 텀 범위 · 검색 개수 상한처럼 숫자로 관리하는 값을 「고정된 기준값」 표와 1:1로 모은 상수 모듈. labels.ts가 닫힌 목록의 이름을 모은 것과 같은 방식 |
 | 그대로 | bot.ts, llm.ts, bubble-polish.ts, reply-timing.ts, pending.ts, labels.ts, proactive-policy.ts, dispatch.ts, presence.ts, followup.ts, life-plan.ts, day-plan.ts, user-profile.ts, kst.ts, config.ts. db.ts는 스키마 정의 변경만 |
