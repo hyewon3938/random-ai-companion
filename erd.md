@@ -41,6 +41,7 @@ erDiagram
         TEXT owner "유일 키"
         TEXT area "유일 키"
         TEXT subject "유일 키"
+        TEXT origin "유일 키"
     }
     tags {
         INTEGER character_id FK
@@ -121,10 +122,17 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 | value | TEXT | O | 값, 한글 |
 | origin | TEXT | O | 어디서 생긴 값인가 — `creation` · `conversation` |
 | user_knows | TEXT | O | 유저가 아는가 — `unknown` · `known` · `waiting`, 캐릭터 쪽 행에서만 의미 |
-| extra_json | TEXT | | 저장 항목별 추가 정보 |
+| relation | TEXT | | 어떤 사이 — 주변 인물 행에서만 |
+| contact_mode | TEXT | | 만나는 방식 — 주변 인물 행에서만 |
+| region | TEXT | | 사는 곳 — 주변 인물 행에서만 |
+| last_mentioned_at | TEXT | | 마지막 등장 시각 — 주변 인물 행에서만, 코드가 갱신 |
+| end_condition | TEXT | | 끝나는 조건 — 진행 중인 일 행에서만 |
+| interest | TEXT | | 관심도 — `high` · `medium` · `low`, 캐릭터 쪽 행에서만 |
+| last_retrieved_at | TEXT | | 마지막으로 꺼낸 시각 — 태그 검색으로 프롬프트에 넣을 때 갱신 |
+| retrieval_count | INTEGER | O | 꺼낸 횟수, 기본 0 |
 | updated_at | TEXT | O | 갱신 시각 |
 
-키·인덱스: PK `id`, UNIQUE `(character_id, item_type, owner, area, subject)`, 인덱스 `(character_id, item_type)`
+키·인덱스: PK `id`, UNIQUE `(character_id, item_type, owner, area, subject, origin)`, 인덱스 `(character_id, item_type)`
 
 데이터 한 건의 예시다. 앞 네 열을 합친 것이 키라서, 같은 자리에 새 사실이 오면 값을 고쳐 쓴다.
 
@@ -139,13 +147,17 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 
 owner는 세 항목 모두에서 갈린다. 캐릭터의 취향과 유저의 취미, 캐릭터가 하는 일과 유저가 준비하는 일, 캐릭터의 지인과 유저의 지인이 이 값으로 나뉘어 세 항목과 두 쪽의 여섯 조합이 전부 유효하고, 어느 쪽 것인지는 저장할 때 모델이 내용을 보고 정한다. 캐릭터 쪽 사실은 프롬프트에 항상 들어가고, 나머지 조합은 태그 검색으로 골라 넣는다. user_knows는 캐릭터 쪽 행에서만 의미가 있어서 유저 쪽 행은 `known`으로 고정한다.
 
-origin은 이 값이 어디서 생겼는지, 그래서 앞으로 누가 고칠 수 있는지를 가른다. `creation`은 캐릭터를 만들 때 생성 배치가 한 번 쓰는 값이고, `conversation`은 대화에서 드러난 사실을 새벽 정리가 나중에 추가한 값이다. 저장 함수가 `creation` 행의 수정을 거부해서, 캐릭터의 큰 정체성이 대화에 휩쓸려 바뀌지 않는 것을 이 쓰기 규칙으로 지킨다. 프롬프트에 넣을 때는 둘을 구분하지 않고 같이 넣는다.
+origin은 이 값이 어디서 생겼는지, 그래서 앞으로 누가 고칠 수 있는지를 가른다. `creation`은 캐릭터를 만들 때 생성 배치가 한 번 쓰는 값이고, `conversation`은 대화에서 드러난 사실을 새벽 정리가 나중에 추가한 값이다. 저장 함수는 origin을 확인하는 분기 없이 언제나 `conversation` 행에만 써서(있으면 고치고 없으면 만든다), 생성 때 정한 큰 정체성이 대화에 휩쓸려 바뀌지 않는 원칙이 이 쓰기 규칙 하나로 지켜진다. UNIQUE 키에 origin이 들어가 같은 자리에 두 행이 나란히 놓일 수 있고, 프롬프트에 넣을 때는 둘을 구분하지 않고 같이 넣는다.
 
-extra_json에는 저장 항목마다 미리 정한 필드만 들어간다. 진행 중인 일은 끝나는 조건 하나, 주변 인물은 어떤 사이 · 만나는 방식 · 사는 곳 · 마지막 등장 넷이고, 사실은 비운다. 목록에 없는 필드는 쓰기 코드가 버린다. 자유 칸을 열어 두면 같은 정보가 어떤 행에서는 값에, 어떤 행에서는 추가 정보에 들어가 검색이 어긋나기 때문에, 새 필드가 필요해지면 이 목록을 고치는 설계 변경으로 다룬다.
+저장 항목별 추가 정보는 JSON 한 칸이 아니라 전용 컬럼으로 둔다(2026-08-27 확정). 진행 중인 일은 끝나는 조건 하나, 주변 인물은 어떤 사이 · 만나는 방식 · 사는 곳 · 마지막 등장 넷이고, 사실은 추가 정보가 없다. 필드가 전부 미리 정해져 있어 자유 칸을 열어 둘 이유가 없고, 마지막 등장 시각은 프롬프트에 넣을 인물을 고르는 코드가 정렬에 쓰는 값이라 컬럼이어야 쿼리에서 바로 쓴다. 목록에 없는 필드를 쓰기 코드가 버리던 검사도 스키마가 대신한다. 항목에 해당 없는 컬럼은 CHECK로 막아 값이 들어갈 수 없다. 인물 전용 넷은 주변 인물 행에서만, 끝나는 조건은 진행 중인 일 행에서만, 관심도는 캐릭터 쪽 행에서만 값을 가진다. 새 필드가 필요해지면 컬럼을 더하는 설계 변경으로 다룬다.
+
+마지막으로 꺼낸 시각과 꺼낸 횟수는 검색 함수가 채운다. 태그 검색으로 골라 프롬프트에 넣을 때만 갱신하고, 항상 들어가는 캐릭터 쪽 사실에는 매 턴 값이 올라 신호가 되지 않으므로 찍지 않는다. 지금 이 값을 읽는 코드는 없지만 지나가면 다시 만들 수 없는 기록이라 저장부터 시작하고, 잘 안 꺼내는 기억을 응축하는 규칙은 별도 설계로 남긴다.
+
+관심도는 캐릭터 쪽 행이 세 항목 공통으로 갖는다(2026-08-27 확정). 그 항목에 대한 유저의 관심 수준을 많음 · 보통 · 적음 3단계로 담고, 캐릭터가 화제로 꺼내는 빈도만 조절한다. 처음에는 값 이름을 먼저 물음 같은 행동으로 지었다가 행동끼리 엇갈리는 날에 둘 곳이 애매해서 관심 수준으로 바꿨다(같은 날 정정) — 행동은 저장되는 값이 아니라 단계를 옮기는 신호다. 처음에는 가운데 `medium`에서 시작하고, 새벽 정리가 코드가 센 숫자와 그날 대화를 읽고 단계를 옮긴다. 신호를 읽는 법과 올리고 내리는 규칙은 [time-and-memory.md](time-and-memory.md)의 「관심도는 꺼내기만 조절한다」가 원본이다. 유저 쪽 행은 유저 자신의 이야기라 이 값을 비워 둔다.
 
 주변 인물은 키의 단어 자리에 사람 이름이 들어가는 예외다. 이름이 태그와 같은 문자열이어서, 이름 하나로 인물 행과 그 사람이 나오는 일기 · 일정을 함께 찾는다. 같은 쪽에 같은 이름이 오면 영역이 달라도 같은 사람으로 보고 한 행을 고쳐 쓰기 때문에, 인물의 유일성은 네 자리 키가 아니라 쓰기 코드가 이름으로 지킨다. 다른 사람이면 회사 민수처럼 이름을 늘려 가르고, 태그는 두 이름에 다 남긴다.
 
-인물 행의 값에는 요즘 이 사람과 어떻게 지내는지를 적고, 함께 있었던 일은 이 행에 쌓지 않고 이름 태그로 일기와 일정에 남긴다. 추가 정보의 네 필드는 읽는 곳이 서로 다르다. 어떤 사이인지는 값과 함께 프롬프트에 들어가 캐릭터가 그 사람 이야기를 할 때 쓰이고, 만나는 방식과 사는 곳은 한 달치 이벤트를 만드는 월 리듬이 읽는다. 이 둘이 없으면 이벤트에 누구와 무엇을 하는지가 비어서, 매일 보는 팀장과 명절에나 보는 부모님이 같은 빈도로 나오고 멀리 사는 부모님이 평일 저녁 약속에 나온다. 마지막 등장 시각은 프롬프트에 넣을 인물을 코드가 고를 때 쓴다.
+인물 행의 값에는 요즘 이 사람과 어떻게 지내는지를 적고, 함께 있었던 일은 이 행에 쌓지 않고 이름 태그로 일기와 일정에 남긴다. 인물 행의 전용 컬럼 넷은 읽는 곳이 서로 다르다. 어떤 사이인지는 값과 함께 프롬프트에 들어가 캐릭터가 그 사람 이야기를 할 때 쓰이고, 만나는 방식과 사는 곳은 한 달치 이벤트를 만드는 월 리듬이 읽는다. 이 둘이 없으면 이벤트에 누구와 무엇을 하는지가 비어서, 매일 보는 팀장과 명절에나 보는 부모님이 같은 빈도로 나오고 멀리 사는 부모님이 평일 저녁 약속에 나온다. 마지막 등장 시각은 프롬프트에 넣을 인물을 코드가 고를 때 쓴다.
 
 감정은 기억에 저장하지 않는다. 그날의 감정은 일기에 남고, 유저를 향해 이어지는 마음은 relationships의 마음 상태가 담는다.
 
@@ -485,6 +497,7 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | memory_items.item_type 저장 항목 | `fact` 사실 · `ongoing` 진행 중인 일 · `person` 주변 인물 |
 | memory_items.owner, schedules.owner 누구 것인가 | `char` 캐릭터 · `user` 유저 |
 | memory_items.origin 어디서 생긴 값인가 | `creation` 캐릭터를 만들 때 쓴 값, 수정 거부 · `conversation` 새벽 정리가 대화에서 추가 |
+| memory_items.interest 관심도 | `high` 많음 · `medium` 보통 · `low` 적음 |
 | relationships.speech_level 지금 말투 | `polite` 존댓말 · `casual` 반말 |
 | memory_items · schedules의 user_knows 유저가 아는가 | `unknown` 모름 · `known` 앎 · `waiting` 기다림, 유저가 결과를 기다리고 있어 캐릭터가 결과를 먼저 알린다 |
 | schedules.origin 출처 | `conversation` 대화 · `rhythm` 월 리듬 · `ongoing` 진행 중인 일 |
@@ -504,7 +517,7 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 
 영역 이름은 캐릭터마다 목록이 달라서 CHECK 대신 areas 테이블로 관리한다. 각본 블록의 두 태그는 plan_json 안에 있어 CHECK가 걸리지 않으므로 쓰기 코드에서 검사한다.
 
-extra_json · plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한다. 어떤 값이 들어가는지는 테이블마다 적어 두었고, 이름만 남은 결정이다.
+plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한다. 어떤 값이 들어가는지는 테이블마다 적어 두었고, 이름만 남은 결정이다.
 
 ## 외래 키가 아닌 참조
 
@@ -524,9 +537,13 @@ extra_json · plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하�
 | 구분 | 대상 |
 | --- | --- |
 | 저장 항목 정리 | memory_items.item_type을 넷에서 셋으로 — 캐릭터 정체성과 알게 된 유저 사실을 `fact` 하나로 합쳐 owner로 가르고, 관계 항목은 relationships의 컬럼으로 옮긴다 |
-| 테이블 흡수 | cast_members를 memory_items의 `person` 행으로 — 이름은 키의 단어 자리로, 어떤 사이 · 만나는 방식 · 사는 곳 · 마지막 등장은 extra_json으로, 요즘 어떻게 지내는지는 값으로 |
+| 테이블 흡수 | cast_members를 memory_items의 `person` 행으로 — 이름은 키의 단어 자리로, 어떤 사이 · 만나는 방식 · 사는 곳 · 마지막 등장은 전용 컬럼으로, 요즘 어떻게 지내는지는 값으로 |
 | 컬럼 추가 | relationships에 관계 항목 컬럼 아홉(stage · speech_level · speech_note · address_terms · texture · rapport · cautions · history · feelings)과 updated_at |
-| 컬럼 삭제 | memory_items.interest_level(읽는 코드 없음), relationships.legacy_state_json(관계 컬럼의 초기값을 채운 뒤) |
+| 컬럼 추가 | memory_items에 꺼낸 기록 둘(last_retrieved_at · retrieval_count) — 태그 검색으로 프롬프트에 넣을 때 코드가 갱신 |
+| 컬럼 추가 | memory_items에 항목별 추가 정보 다섯(relation · contact_mode · region · last_mentioned_at · end_condition) — extra_json 대신 전용 컬럼 |
+| 컬럼 교체 | memory_items.interest_level → interest — 값 체계를 3단계 영어 식별자로 새로 정하고 캐릭터 쪽 세 항목이 공통으로 쓴다 |
+| 키 변경 | memory_items의 UNIQUE에 origin 추가 — 같은 키에 creation 행과 conversation 행이 나란히 놓인다 |
+| 컬럼 삭제 | relationships.legacy_state_json(관계 컬럼의 초기값을 채운 뒤) |
 | 값 변경 | memory_items.origin의 seed → `creation`, accrued → `conversation`(컨디션 시드와 이름이 겹치지 않게) |
 | 용도 재정의 | user_preferences(매칭 전용 → 유저 단위 선호 자리), characters.genesis_json(생성 결과에 유저의 생성 입력을 더해 보관) |
 | 그대로 | 나머지 테이블 전부 |
