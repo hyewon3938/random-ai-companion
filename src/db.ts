@@ -54,9 +54,11 @@ const TABLES: Record<string, string> = {
   PRIMARY KEY (kind, ref_id, tag)`,
 
   // 캐릭터마다 쓰는 영역 이름 목록. 새벽 정리가 키를 붙일 때 이 목록에서 고른다.
+  // note는 영역이 덮는 범위 설명 — 키를 고르는 모델에게 이름과 같이 보여준다.
   areas: `
   character_id INTEGER NOT NULL REFERENCES characters(id),
   name TEXT NOT NULL,
+  note TEXT,
   PRIMARY KEY (character_id, name)`,
 
   // 오늘 메모: 대화 중에 나온 것을 판정 없이 그대로 적어 두고, 새벽 정리가 읽어 간다.
@@ -245,7 +247,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -270,7 +272,9 @@ const hasLegacySchema = (): boolean => {
 const rebuild = (name: string, columns: string, select: string): void => {
   db.exec(`ALTER TABLE ${name} RENAME TO ${name}__old`);
   db.exec(`CREATE TABLE ${name} (${TABLES[name]}\n)`);
-  db.exec(`INSERT INTO ${name} (${columns}) SELECT ${select} FROM ${name}__old`);
+  db.exec(
+    `INSERT INTO ${name} (${columns}) SELECT ${select} FROM ${name}__old`,
+  );
   db.exec(`DROP TABLE ${name}__old`);
 };
 
@@ -371,11 +375,7 @@ const migrateToV1 = (): void => {
          ELSE kind END,
        error, ts`,
     );
-    rebuild(
-      "recovery_marks",
-      "chat_id, replied_up_to",
-      "chat_id, user_ts",
-    );
+    rebuild("recovery_marks", "chat_id, replied_up_to", "chat_id, user_ts");
 
     createSchema();
 
@@ -384,18 +384,25 @@ const migrateToV1 = (): void => {
       throw new Error(
         `[db] 마이그레이션 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
       );
-    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    db.pragma(`user_version = 1`);
   })();
 
   db.pragma("legacy_alter_table = OFF");
-  console.log(`[db] 스키마를 v${SCHEMA_VERSION}으로 옮겼다`);
+  console.log(`[db] 스키마를 v1으로 옮겼다`);
 };
 
-if (hasLegacySchema() && schemaVersion() < SCHEMA_VERSION) migrateToV1();
-else {
-  createSchema();
-  if (schemaVersion() < SCHEMA_VERSION)
-    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+if (hasLegacySchema() && schemaVersion() < 1) migrateToV1();
+else createSchema();
+
+// v2: areas에 note 컬럼 추가. CREATE TABLE IF NOT EXISTS는 이미 있는 테이블을
+// 건드리지 않아서, v1 DB는 여기서 ALTER로 따라잡는다.
+if (schemaVersion() < SCHEMA_VERSION) {
+  const areaCols = db.prepare(`PRAGMA table_info(areas)`).all() as {
+    name: string;
+  }[];
+  if (!areaCols.some((c) => c.name === "note"))
+    db.exec(`ALTER TABLE areas ADD COLUMN note TEXT`);
+  db.pragma(`user_version = ${SCHEMA_VERSION}`);
 }
 
 db.pragma("foreign_keys = ON");
@@ -468,7 +475,9 @@ export const getRelationshipState = (
   characterId: number,
 ): RelationshipState => {
   const row = db
-    .prepare(`SELECT legacy_state_json FROM relationships WHERE character_id = ?`)
+    .prepare(
+      `SELECT legacy_state_json FROM relationships WHERE character_id = ?`,
+    )
     .get(characterId) as { legacy_state_json: string | null } | undefined;
   if (!row?.legacy_state_json) return emptyRelationshipState();
   try {
