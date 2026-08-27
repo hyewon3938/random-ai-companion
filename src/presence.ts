@@ -1,9 +1,9 @@
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
 import { renderUserBlock } from "./user-profile.js";
+import { isHeldNow } from "./reply-timing.js";
 import {
   db,
-  getAttentionUntil,
   getDayPlan,
   lastMessage,
   proactiveCountToday,
@@ -43,7 +43,7 @@ const ageMin = (ts: string): number =>
 
 // 예고할 만한 '불가'인가 — 실제로 자리를 비우거나 손이 묶이는 일. 잠은 제외(굿나잇 로직이 담당).
 const isAwayUnavail = (b: PlanBlock): boolean =>
-  b.responsiveness === "불가" && !/잠|수면|숙면/.test(b.activity);
+  b.responsiveness === "unavailable" && !/잠|수면|숙면/.test(b.activity);
 
 const lastCharTs = (chatId: string): string | undefined =>
   (
@@ -155,9 +155,8 @@ const presenceTickBody = async (): Promise<void> => {
     if (!lu || ageMin(lu) > 240) continue;
     const last = lastMessage(c.chat_id);
     if (!last) continue;
-    // 유저가 붙잡아 곁에 있는 중(주의집중)이면 자리 비움 예고를 하지 않는다.
-    const ov = getAttentionUntil(c.chat_id);
-    if (ov && ageMin(ov) < 0) continue;
+    // 유저가 붙잡아 지금 일정을 접고 곁에 있는 중이면 자리 비움 예고를 하지 않는다.
+    if (isHeldNow(c.id)) continue;
     // 방금(≤5분) 캐릭터가 발화했으면 스킵 — 답장/예고가 겹쳐 쌓이지 않게.
     const lc = lastCharTs(c.chat_id);
     if (lc && ageMin(lc) < 5) continue;
@@ -289,7 +288,7 @@ const presenceTickBody = async (): Promise<void> => {
           prevAct,
           last.role === "user",
           lastLineOf(c.chat_id),
-          blockCategory(target) === "공적",
+          blockCategory(target) === "official",
           c.chat_id,
         ),
         400,

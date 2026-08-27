@@ -13,6 +13,12 @@ import {
 import type { Bible } from "./character.js";
 import { ensureRhythmRunway } from "./life-plan.js";
 import { kstDateString, todayLabel } from "./kst.js";
+import {
+  toResponsiveness,
+  toActivityCategory,
+  type Responsiveness,
+  type ActivityCategory,
+} from "./labels.js";
 
 // 하루 각본: 시스템이 캐릭터의 하루를 시간 블록으로 미리 짜둔다.
 // 캐릭터는 이걸 계획표로 의식하지 않고, 그 시간이 되면 자기가 하고 싶어서 하는 일로 산다.
@@ -22,14 +28,14 @@ export interface PlanBlock {
   start: string; // "HH:MM"
   end: string;
   activity: string;
-  responsiveness: "즉답" | "짬짬이" | "불가";
+  responsiveness: Responsiveness;
   advance_known: boolean; // 미리 아는 일정(회식 약속 등) vs 닥쳐야 아는 일(급 바빠짐 등)
   // 활동 성격: 유저가 찾을 때 얼마나 조정 가능한가. '답장 여건'과 직교하는 별개 축.
   //   개인 = 혼자 자의로 하는 일(운동·집 여가·영화·장보기·혼밥). 쉽게 접거나 미룬다.
   //   사회 = 남이 엮인 사적 일(친구 약속·가족·병원·학원·친목 회식). 즉시는 아니어도 양해 구해 조정 가능.
   //   공적 = 미룰 수 없는 공적 의무(업무·회의·시험·발표·공적 회식). 접을 수 없다.
   // 옵셔널 — 없으면 activity로 추론(blockCategory). 구 각본·외부 생성분과 호환.
-  category?: "개인" | "사회" | "공적";
+  category?: ActivityCategory;
 }
 
 // 공적 의무(못 미룸, 대개 폰도 불가) 키워드.
@@ -43,13 +49,13 @@ const SOCIAL_HINT =
 // 잠·기상·준비 등 혼자 하는 일은 개인.
 export const blockCategory = (b: {
   activity: string;
-  category?: "개인" | "사회" | "공적";
-}): "개인" | "사회" | "공적" => {
+  category?: ActivityCategory;
+}): ActivityCategory => {
   if (b.category) return b.category;
   const a = b.activity;
-  if (OFFICIAL_HINT.test(a)) return "공적";
-  if (SOCIAL_HINT.test(a)) return "사회";
-  return "개인";
+  if (OFFICIAL_HINT.test(a)) return "official";
+  if (SOCIAL_HINT.test(a)) return "social";
+  return "personal";
 };
 
 export interface DayPlan {
@@ -100,24 +106,35 @@ ${diary || "(없음)"}
   - 미리 아는 일정 (advance_known=true): 점심 회식, 팀원과 저녁 약속, 퇴근 후 서점 들르기 같은 예정된 일
   - 닥쳐야 아는 일 (advance_known=false): 오후에 갑자기 바빠짐, 급한 업무, 예정에 없던 호출, 갑자기 마트에 감, 친구의 급한 전화 같은 그때 가서야 겪는 일 — 이런 갑작스러운 일을 하루 한둘은 자연스럽게 껴 넣는다.
   - 그래도 아무 이벤트 없는 평범한 날도 가끔은 자연스럽다.
-- 하루 곳곳에 '자리를 비우는' 불가 구간을 자연스럽게 넣는다: 운동(한 시간쯤), 씻기, 저녁 준비·식사, 장보기/마트, 집중 업무, 통화. 사람은 늘 답할 수 있는 게 아니다 — 특히 저녁 시간이 즉답으로만 쭉 이어지지 않게 불가·짬짬이를 섞는다. 이 중 일부는 미리 아는 일(advance_known=true, 예: 정해둔 운동)이고 일부는 갑작스러운 것(false, 예: 급하게 마트 감·집안일)이다.
-- 각 블록의 responsiveness = 그 시간에 메신저 답장을 얼마나 할 수 있는가:
-  - "즉답"(여유 — 쉬는 중·대화 시간) / "짬짬이"(근무·이동·집안일·장보기처럼 틈틈이 볼 수 있음) / "불가"(손이나 정신이 묶여 못 봄).
-  - "불가"는 손이나 정신이 진짜로 묶인 때만: 통화(전화 받는 중)·운전·공식 회의·운동·씻기·영화관·잠.
-  - **업무로 자리를 비우는 공적 "불가"(회의·시험·발표·급한 처리 등)는 한 블록 최대 1시간.** 더 길 일이면 블록을 쪼개 사이에 "짬짬이"(잠깐 폰 보는 틈) 구간을 넣는다 — 업무로 한 시간 넘게 통째로 사라지지 않게. (창구 업무처럼 원래 짬짬이인 건 해당 없음.)
-  - **사교 자리(친구 약속·회식·모임)는 "불가"가 아니라 "짬짬이"다** — 사람들과 있어도 폰은 틈틈이 본다. 다만 회식은 텀이 더 길고(자리를 오래 못 뜸), 친구 약속은 대체로 짬짬이지만 가끔 텀이 길어진다.
-  - **집에서 하는 여가는 "불가"가 아니라 "짬짬이"다** — 집에서 영화·드라마(OTT)·독서·집안일·가계부는 폰을 곁에 두고 하므로 틈틈이 답할 수 있다. 영화라도 '영화관에 감'만 "불가"이고 '집에서 봄'은 "짬짬이".
-  - **실제로 자는 시간(잠)만 밤의 "불가"다. '취침 준비·잠자리에 들기'(누워서 폰 보며 뒹굴대는 시간)는 "즉답".** 저녁~취침 전은 대화 시간이라 대체로 "즉답".
+- 하루 곳곳에 '자리를 비우는' 불가 구간을 자연스럽게 넣는다: 운동(한 시간쯤), 씻기, 저녁 준비·식사, 장보기/마트, 집중 업무, 통화. 사람은 늘 답할 수 있는 게 아니다 — 특히 저녁 시간이 즉답으로만 쭉 이어지지 않게 unavailable·intermittent를 섞는다. 이 중 일부는 미리 아는 일(advance_known=true, 예: 정해둔 운동)이고 일부는 갑작스러운 것(false, 예: 급하게 마트 감·집안일)이다.
+- 각 블록의 responsiveness = 그 시간에 메신저 답장을 얼마나 할 수 있는가. 값은 셋 중 하나:
+  - "instant"(즉답 — 쉬는 중·대화 시간) / "intermittent"(틈틈이 — 근무·이동·집안일·장보기처럼 틈틈이 볼 수 있음) / "unavailable"(불가 — 손이나 정신이 묶여 못 봄).
+  - "unavailable"은 손이나 정신이 진짜로 묶인 때만: 통화(전화 받는 중)·운전·공식 회의·운동·씻기·영화관·잠.
+  - **업무로 자리를 비우는 공적 "unavailable"(회의·시험·발표·급한 처리 등)는 한 블록 최대 1시간.** 더 길 일이면 블록을 쪼개 사이에 "intermittent"(잠깐 폰 보는 틈) 구간을 넣는다 — 업무로 한 시간 넘게 통째로 사라지지 않게. (창구 업무처럼 원래 틈틈이 보는 일은 해당 없음.)
+  - **사교 자리(친구 약속·회식·모임)는 "unavailable"이 아니라 "intermittent"다** — 사람들과 있어도 폰은 틈틈이 본다. 다만 회식은 텀이 더 길고(자리를 오래 못 뜸), 친구 약속은 대체로 틈틈이 보지만 가끔 텀이 길어진다.
+  - **집에서 하는 여가는 "unavailable"이 아니라 "intermittent"다** — 집에서 영화·드라마(OTT)·독서·집안일·가계부는 폰을 곁에 두고 하므로 틈틈이 답할 수 있다. 영화라도 '영화관에 감'만 "unavailable"이고 '집에서 봄'은 "intermittent".
+  - **실제로 자는 시간(잠)만 밤의 "unavailable"이다. '취침 준비·잠자리에 들기'(누워서 폰 보며 뒹굴대는 시간)는 "instant".** 저녁~취침 전은 대화 시간이라 대체로 "instant".
 - 블록은 00:00~23:59 안에서 시간순으로 빈틈 없이. 전날 밤부터 이어지는 잠은 00:00부터 기상 시각까지 블록으로.
 
-- 각 블록의 category = 활동의 성격(답장 여건과 별개의 축 — 유저가 찾을 때 얼마나 조정 가능한가):
-  - "개인" = 혼자 자의로 하는 일(운동·집 여가·영화·독서·장보기·산책·혼밥·낮잠). 쉽게 접거나 미룰 수 있다. 답장은 물리적으로 가능하면 한다(집 활동=짬짬이, 영화관·운전·러닝·씻기만 불가).
-  - "사회" = 남이 엮인 사적 일(친구 약속·저녁·전화, 가족 만남, 병원, 학원, 친목 회식). 즉시는 아니어도 양해를 구해 미루거나 조정할 수 있다. 연락은 대체로 틈틈이(짬짬이), 전화 받는 중만 잠깐 불가.
-  - "공적" = 미룰 수 없는 공적 의무(회사 업무·회의·시험·발표·공적 회식). 접을 수 없다. 업무·공적 회식은 틈틈이(짬짬이) 답할 수 있으나, 회의·시험·발표는 폰을 볼 수 없어 "불가".
-  - 잠·기상·준비는 "개인".
+- 각 블록의 category = 활동의 성격(답장 여건과 별개의 축 — 유저가 찾을 때 얼마나 조정 가능한가). 값은 셋 중 하나:
+  - "personal"(개인) = 혼자 자의로 하는 일(운동·집 여가·영화·독서·장보기·산책·혼밥·낮잠). 쉽게 취소하거나 미룰 수 있다. 답장은 물리적으로 가능하면 한다(집 활동=intermittent, 영화관·운전·러닝·씻기만 unavailable).
+  - "social"(사회) = 남이 엮인 사적 일(친구 약속·저녁·전화, 가족 만남, 병원, 학원, 친목 회식). 즉시는 아니어도 양해를 구해 미루거나 조정할 수 있다. 연락은 대체로 intermittent, 전화 받는 중만 잠깐 unavailable.
+  - "official"(공적) = 미룰 수 없는 공적 의무(회사 업무·회의·시험·발표·공적 회식). 미룰 수 없다. 업무·공적 회식은 intermittent로 답할 수 있으나, 회의·시험·발표는 폰을 볼 수 없어 "unavailable".
+  - 잠·기상·준비는 "personal".
 
 [JSON 형식 — 이 구조 그대로]
-{"date":"${date}","blocks":[{"start":"00:00","end":"06:03","activity":"잠","responsiveness":"불가","advance_known":true,"category":"개인"},{"start":"08:00","end":"09:00","activity":"팀 회의","responsiveness":"불가","advance_known":true,"category":"공적"},{"start":"12:00","end":"13:10","activity":"동기들과 점심 겸 수다","responsiveness":"짬짬이","advance_known":false,"category":"사회"},{"start":"19:00","end":"20:00","activity":"저녁 러닝","responsiveness":"불가","advance_known":false,"category":"개인"}, ...]}`;
+{"date":"${date}","blocks":[{"start":"00:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"팀 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동기들과 점심 겸 수다","responsiveness":"intermittent","advance_known":false,"category":"social"},{"start":"19:00","end":"20:00","activity":"저녁 러닝","responsiveness":"unavailable","advance_known":false,"category":"personal"}, ...]}`;
+
+// 두 태그는 plan_json 안에 있어 DB가 값을 검사해 주지 않는다. 생성이 한글 이름으로 답하거나
+// 모르는 값을 내면 여기서 식별자로 되돌리고, 그래도 못 알아보면 무난한 쪽으로 채운다.
+const normalize = (plan: DayPlan): DayPlan => ({
+  ...plan,
+  blocks: (plan.blocks ?? []).map((b) => ({
+    ...b,
+    responsiveness: toResponsiveness(b.responsiveness) ?? "intermittent",
+    category: toActivityCategory(b.category) ?? blockCategory(b),
+  })),
+});
 
 // nightly=true는 밤 정리 경로: 어제 일기가 확정된 뒤의 정식 생성이라, 새벽 대화가 미리 만든
 // lazy 각본(어제 일기 없이 이틀 전 일기를 참조한 것)이 있으면 교체한다. 기본(false)은 대화 중
@@ -163,7 +180,7 @@ export const ensureTodayPlan = async (
   saveDayPlan(
     characterId,
     date,
-    JSON.stringify(plan),
+    JSON.stringify(normalize(plan)),
     nightly ? "nightly" : "ondemand",
   );
 };

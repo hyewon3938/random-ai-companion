@@ -14,7 +14,8 @@ import {
   type CharacterRow,
 } from "../db.js";
 import type { Bible } from "../character.js";
-import type { DayPlan } from "../day-plan.js";
+import { blockCategory, type DayPlan } from "../day-plan.js";
+import { RESPONSIVENESS_NAME } from "../labels.js";
 import { kstClock, kstDateString, kstDescription } from "../kst.js";
 
 const row = db
@@ -50,25 +51,23 @@ const relDays = metRow
       new Date(metRow.met_at.replace(" ", "T") + "+09:00").getTime()) /
     86_400_000
   : 999;
-const nowHour = Number(nowHM.slice(0, 2));
-const isNightNow = nowHour >= 20 || nowHour < 2;
 const curBlock = todayBlocks.find((b) => b.start <= nowHM && nowHM < b.end);
 const curDeepSleep = curBlock
-  ? curBlock.responsiveness === "불가" &&
+  ? curBlock.responsiveness === "unavailable" &&
     /잠|수면|숙면/.test(curBlock.activity) &&
     !/준비/.test(curBlock.activity)
   : false;
 const availabilityNow = !curBlock
   ? "—"
-  : isNightNow && !curDeepSleep
-    ? "밤 대화 시간 → 즉답"
-    : curDeepSleep
-      ? "자는 시간이지만 연락하면 바로 답 (즉답)"
-      : curBlock.responsiveness === "즉답"
-        ? "여유 → 곧 답"
-        : curBlock.responsiveness === "짬짬이"
-          ? "틈틈이 → 몇 분 내"
-          : "잠깐 자리 비움 → 그 일 끝날 때쯤 (최대 ~35분)";
+  : curDeepSleep
+    ? "자는 시간이지만 연락하면 바로 답 (즉답)"
+    : curBlock.responsiveness === "instant"
+      ? "여유 → 0~2분"
+      : curBlock.responsiveness === "intermittent"
+        ? "틈틈이 → 몇 분 내"
+        : blockCategory(curBlock) === "official"
+          ? "손이 묶임 → 그 일정이 끝날 때"
+          : "자리 비움 → 그 일정이 끝날 때 (붙잡으면 접고 곁에)";
 const ym = kstDateString().slice(0, 7);
 const monthSeeds = getMonthSeeds(row.id, ym);
 const monthEvents = getSchedulesInMonth(row.id, ym, "char");
@@ -206,19 +205,19 @@ for (let d = 1; d <= daysInMonth; d++) {
 }
 const calendar = calHeader + calCells.join("");
 
-// 오늘의 하루 각본: 시간 블록 + 답장 여건(즉답/짬짬이/불가) 색 구분, 지금 블록 하이라이트
+// 오늘의 하루 각본: 시간 블록 + 답장 여건(즉답/틈틈이/불가) 색 구분, 지금 블록 하이라이트
 const respStyle = (r: string): { bg: string; label: string } =>
-  r === "즉답"
+  r === "instant"
     ? { bg: "#e3efe1", label: "답장 즉시" }
-    : r === "짬짬이"
-      ? { bg: "#f5ecd8", label: "틈틈이 (1~5분 뒤)" }
+    : r === "intermittent"
+      ? { bg: "#f5ecd8", label: "틈틈이 (몇 분 뒤)" }
       : { bg: "#e6e3dc", label: "자리 비움 (일정 끝나고)" };
 const nowBlock = todayBlocks.find((b) => b.start <= nowHM && nowHM < b.end);
 const planRows = todayBlocks
   .map((b) => {
     const isNow = b === nowBlock;
     const s = respStyle(b.responsiveness);
-    return `<div class="prow${isNow ? " now" : ""}"><span class="ptime">${b.start}–${b.end}</span><span class="pact">${esc(b.activity)}${b.advance_known ? "" : " <span class='sudden'>· 갑자기</span>"}</span><span class="pbadge" style="background:${s.bg}">${b.responsiveness} · ${s.label}</span>${isNow ? "<span class='pnow'>지금</span>" : ""}</div>`;
+    return `<div class="prow${isNow ? " now" : ""}"><span class="ptime">${b.start}–${b.end}</span><span class="pact">${esc(b.activity)}${b.advance_known ? "" : " <span class='sudden'>· 갑자기</span>"}</span><span class="pbadge" style="background:${s.bg}">${RESPONSIVENESS_NAME[b.responsiveness]} · ${s.label}</span>${isNow ? "<span class='pnow'>지금</span>" : ""}</div>`;
   })
   .join("");
 
@@ -287,8 +286,8 @@ const html = `<!doctype html>
 <div class="card">
   ${nowBlock ? `<div class="pcur">지금 ${esc(nowHM)} · <b>${esc(nowBlock.activity)}</b> — ${respStyle(nowBlock.responsiveness).label}<br><span style="color:#a5792a;font-size:12.5px">연락하면: ${esc(availabilityNow)} <span style="color:#8a8272">(관계 ${Math.floor(relDays)}일차)</span></span></div>` : ""}
   <div class="plan">${planRows || "<span class='empty'>(오늘 각본 아직 없음 — 그날 첫 대화나 밤 정리 때 생성)</span>"}</div>
-  <div class="legend"><span><span class="chip" style="background:#e3efe1"></span>즉답</span><span><span class="chip" style="background:#f5ecd8"></span>짬짬이 (1~5분 뒤)</span><span><span class="chip" style="background:#e6e3dc"></span>불가 (일정 끝나고)</span><span><span style="color:#c0392b">· 갑자기</span> = 미리 알려지지 않은 일</span></div>
-  <div class="legend" style="margin-top:6px">연락 가용성: <b>밤 대화는 즉답</b> · 찾으면 웬만하면 곁에(자는 시간에 연락 와도 바로 답, 업무 불가는 최대 1시간) · 밤에 유저가 잠들면 굿나잇 챙김</div>
+  <div class="legend"><span><span class="chip" style="background:#e3efe1"></span>즉답</span><span><span class="chip" style="background:#f5ecd8"></span>틈틈이 (몇 분 뒤)</span><span><span class="chip" style="background:#e6e3dc"></span>불가 (일정 끝나고)</span><span><span style="color:#c0392b">· 갑자기</span> = 미리 알려지지 않은 일</span></div>
+  <div class="legend" style="margin-top:6px">연락 가용성: 답장 여건과 활동 성격 두 태그로 텀이 정해진다 · 자는 시간에 연락이 와도 바로 답 · 개인·사회 일정은 유저가 붙잡으면 접거나 미루고 곁에 · 밤에 유저가 잠들면 밤 인사 챙김</div>
 </div>
 
 <h2>주변 사람들 — 대화와 삶에서 자라는 관계도</h2>

@@ -20,6 +20,15 @@ import { getKstNow, kstClock, kstDateString } from "./kst.js";
 const stamp = (): string =>
   `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
 
+// 유저가 방금까지 대화 중이었는지를 보는 창. 논리일(새벽 5시) 기준으로 재면 유저가 새벽 4시에
+// 말을 걸었을 때 그 대화가 어제로 들어가, 세 시간 뒤 아침 선톡이 그대로 나간다.
+const RECENT_USER_MS = 4 * 60 * 60 * 1000;
+
+const stampBefore = (ms: number): string => {
+  const t = new Date(getKstNow().getTime() - ms);
+  return `${kstDateString(t)} ${t.toISOString().slice(11, 19)}`;
+};
+
 const addMin = (hhmm: string, m: number): string => {
   const [h, mm] = hhmm.split(":").map(Number);
   const t = Math.min(23 * 60 + 59, (h ?? 0) * 60 + (mm ?? 0) + m);
@@ -93,8 +102,8 @@ export const runDispatchTick = async (): Promise<void> => {
         continue;
       }
 
-      if (hasUserMessageSince(r.chat_id, `${today} 05:00:00`)) {
-        markScheduledSend(r.id, "skipped", "유저가 오늘 먼저 연락함", null);
+      if (hasUserMessageSince(r.chat_id, stampBefore(RECENT_USER_MS))) {
+        markScheduledSend(r.id, "skipped", "유저가 먼저 연락함", null);
         continue;
       }
 
