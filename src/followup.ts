@@ -179,7 +179,7 @@ const followupTickBody = async (): Promise<void> => {
     if (proactiveSinceLastUser(c.chat_id) >= TAPER) continue;
 
     const block = currentBlock(c.id);
-    if (!block || block.responsiveness === "불가") continue; // 운전·잠 등엔 못 보냄
+    if (!block || block.responsiveness === "unavailable") continue; // 운전·잠 등엔 못 보냄
 
     const bible = JSON.parse(c.genesis_json) as Bible;
     const state = getRelationshipState(c.id);

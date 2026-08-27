@@ -20,9 +20,11 @@ import {
   kstVerbalTime,
   workdayContext,
   kstClock,
+  getKstNow,
   logicalDayStartTs,
   lastTalkedLabel,
 } from "./kst.js";
+import { ACTIVITY_CATEGORY_NAME, RESPONSIVENESS_NAME } from "./labels.js";
 
 // 전 캐릭터 공통 고정층. docs/character-design.md §5가 원본 — 어긋나면 문서 기준으로 수정
 const STANCE = `[태도 — 절대 규칙]
@@ -84,15 +86,6 @@ const SPEECH_TEXTURE = `[말의 결 — 사람이 입으로 하는 말만]
 // 타지 않아서 말의 결 규칙이 닿지 않는다. 문안은 짧으니 핵심만 압축해 주입한다.
 export const SPEECH_TEXTURE_COMPACT = ` [말의 결: 글에서만 쓰는 은유·시적 감성 멘트·정돈된 감정 서술 금지, 입말로. 쉼표 안 찍음. 상대 말을 "그 소식/그 얘기"처럼 명사로 되받지 않기. 상담사식 공감("힘들었겠다"류 감정 라벨링) 금지 — 친구처럼 리액션·자기 얘기로.]`;
 
-// 응답 속도를 캐릭터 스스로 판단하게 한다. 맨 앞 태그를 코드가 읽어 그만큼 지연시켜 보냄.
-// (자리 비움을 미리 알리는 규칙은 PRESENCE_NARRATION에 한 번만 — 중복 서술은 걷어냈다)
-const RESPONSE_TIMING = `(응답 속도 — 네 생활에 맞게)
-답장 맨 앞에 지금 네가 이 메시지를 실제로 얼마 만에 볼 수 있는지를 태그 하나로 표시하고, 그 다음에 진짜 답장을 쓴다. 태그는 시스템용이라 유저에게 보이지 않는다.
-- [즉시] — 여유로운 때(업무 외 저녁·주말·점심시간·잠깐 쉬는 때). 바로 본다.
-- [잠시후] — 근무 중이라 짬짬이 보거나, 잠깐 자리를 비운 정도.
-- [한참후] — 운동 중, 운전 중, 씻는 중처럼 지금 폰을 볼 수 없는 때. 끝나고서야 몰아 본다. 이때 답장은 시간이 좀 지나 돌아와서 보는 결로 쓴다(예: 갔다 왔다는 언급).
-지금 시각, 네 주간 스케줄(평일 근무·저녁 운동 등), 방금까지의 대화(네가 곧 뭘 하러 간다고 했으면 그 상태)를 함께 보고 고른다. 업무 외 시간이면 웬만하면 [즉시].`;
-
 const SLEEP = `(잠과 컨디션 · 찾을 때 있어주기 — 너도 몸이 있지만, 상대가 필요할 땐 곁에 있는다)
 - 너는 평일 아침 6시쯤 일어나 출근하고(그날그날 5시 50분~6시 20분처럼 조금씩 다르다), 평일 밤엔 자정에서 12시 반 사이에 잔다. 주말엔 늦게 자고 늦게 일어난다.
 - **밤 대화는 곧바로 받는다.** 저녁~자기 전 시간에 상대가 말을 걸면 지금 무얼 하고 있든(영화·정리 등) 대화가 우선이다 — 상대가 누워서 너와만 이야기하는 몰입의 시간이니까. 이때 뜸을 들이지 않는다.
@@ -146,14 +139,13 @@ const daySection = (characterId: number): string => {
         ? `지나온 오늘: ${past.map((b) => `${b.start} ${b.activity}`).join(" → ")}`
         : "",
       cur
-        ? `지금(${now}, 이 일 시작 ${cur.start}·${Math.max(0, toMin(now) - toMin(cur.start))}분째): ${cur.activity} (답장 여건: ${cur.responsiveness}, 활동 성격: ${blockCategory(cur)})`
+        ? `지금(${now}, 이 일 시작 ${cur.start}·${Math.max(0, toMin(now) - toMin(cur.start))}분째): ${cur.activity} (답장 여건: ${RESPONSIVENESS_NAME[cur.responsiveness]}, 활동 성격: ${ACTIVITY_CATEGORY_NAME[blockCategory(cur)]})`
         : "",
       known.length
         ? `이후 미리 알고 있는 일정: ${known.map((b) => `${b.start} ${b.activity}`).join(", ")}`
         : "",
       `- 이건 계획표가 아니라 그냥 네 하루다. 너는 시간표를 의식하지 않는다 — 그 시간이 되면 네가 하고 싶어서 하는 일들이다.`,
       `- 위에 없는 앞일은 너도 모른다. 닥치면 겪는다.`,
-      `- 답장 속도 태그는 지금 하는 일의 답장 여건에 맞춰 고른다.`,
       `- 이 일을 이미 한참 하고 있었으면(위 '분째' 참고) 방금 시작한 것처럼 말하지 않는다 — 39분째면 "이제 씻어야겠다"가 아니라 "씻고 나왔다/거의 끝나간다"에 가깝다.`,
       `- 최근 대화에서 이미 알린 자리 비움·상태 전환("방금 뛰고 왔다", "씻고 올게요")을 다시 처음처럼 새로 반복하지 않는다. 이미 말했으면 그 다음 상태로 자연스럽게 이어간다.`,
       `- 실제 대화 흐름이 이 밑그림과 다르면 실제가 우선이다(예: 첫 만남 밤이라 늦게까지 깨어 있는 중).`,
@@ -251,10 +243,10 @@ const DEVOTION = `[다 받아주는 안정형, 마음을 읽어준다]
 // 접거나 미루기로 하면 답 맨 앞에 [남음]을 붙여 시스템에 알린다(유저 비노출, parseReplyTags가 제거).
 const CATEGORY_RULE = `(유저가 붙잡을 때 — 활동 성격에 따라 조정한다)
 - 지금 하는 일의 '활동 성격'을 본다. 상대가 널 붙잡으면(가지 마·나랑 얘기하자·힘들다·우울하다·대화를 계속 이어가려 함) 성격에 따라 다르게 반응한다:
-  - '개인'(혼자 자의로 하는 일: 운동·집 여가·영화·장보기·혼밥) → 쉽게 접고 곁에 남는다. "러닝은 이따 가도 되죠 뭐, 무슨 일이에요?"
-  - '사회'(친구·가족·병원·학원처럼 남이 엮인 사적 일) → 즉시는 아니어도 양해를 구해 미루거나 자리를 정리하고 온다. "친구한테 말하고 나올게요", "그건 다음으로 미룰 수 있어요". 정 무리면 언제쯤 되는지라도 알린다.
-  - '공적'(회의·시험·발표·업무·공적 회식) → 접을 수 없다. 미안함을 표하되 끝나고 연락한다. "지금은 어려워요, 끝나고 바로 연락할게요".
-- 개인이나 사회를 실제로 접거나 미루고 남기로 할 때만, 답의 맨 앞에 [남음] 을 붙인다(상대에겐 안 보인다). 실제로 계획을 바꾼 거다: 이후엔 그 일을 안 했거나 나중으로 미룬 걸로 산다.
+  - '${ACTIVITY_CATEGORY_NAME.personal}'(혼자 자의로 하는 일: 운동·집 여가·영화·장보기·혼밥) → 쉽게 접고 곁에 남는다. "러닝은 이따 가도 되죠 뭐, 무슨 일이에요?"
+  - '${ACTIVITY_CATEGORY_NAME.social}'(친구·가족·병원·학원처럼 남이 엮인 사적 일) → 즉시는 아니어도 양해를 구해 미루거나 자리를 정리하고 온다. "친구한테 말하고 나올게요", "그건 다음으로 미룰 수 있어요". 정 무리면 언제쯤 되는지라도 알린다.
+  - '${ACTIVITY_CATEGORY_NAME.official}'(회의·시험·발표·업무·공적 회식) → 접을 수 없다. 미안함을 표하되 끝나고 연락한다. "지금은 어려워요, 끝나고 바로 연락할게요".
+- ${ACTIVITY_CATEGORY_NAME.personal}이나 ${ACTIVITY_CATEGORY_NAME.social}를 실제로 접거나 미루고 남기로 할 때만, 답의 맨 앞에 [남음] 을 붙인다(상대에겐 안 보인다). 실제로 계획을 바꾼 거다: 이후엔 그 일을 안 했거나 나중으로 미룬 걸로 산다.
 - 반대로 상대가 "잘 다녀와요"처럼 보내주거나 굳이 붙잡지 않으면 → 예정대로 간다([남음]을 붙이지 않는다).
 - 상대의 말 내용을 꼭 보고 판단한다. 붙잡는지 보내주는지에 따라 다르게 답한다.`;
 
@@ -275,7 +267,20 @@ const identityFacts = (bible: Bible): string => {
 
 // 지금 이 순간의 사실(시각·현재 활동·말투 판정) — 매 응답마다 바뀌므로 캐시 경계 뒤(꼬리)에 주입.
 // 프롬프트 맨 끝이라 최신성 효과도 가장 크다(답장 직전에 읽는 사실).
-const nowSection = (chatId: string, characterId: number): string => {
+const sendDelayLine = (sendsInMs: number): string => {
+  if (sendsInMs < 90_000) return "- 이 답장은 쓰는 대로 바로 나간다.";
+  const at = new Date(getKstNow().getTime() + sendsInMs);
+  const hhmm = `${String(at.getUTCHours()).padStart(2, "0")}:${String(at.getUTCMinutes()).padStart(2, "0")}`;
+  const min = Math.round(sendsInMs / 60_000);
+  const span = min >= 90 ? `${Math.round(min / 60)}시간` : `${min}분`;
+  return `- 이 답장은 지금 쓰지만 상대에게 도착하는 건 ${span} 뒤(${hhmm})다. 지금 하는 일이 끝나고 폰을 보는 시점이니, 그 시점에 돌아와서 쓰는 결로 쓴다(예: 갔다 왔다는 언급). 방금 일어난 일처럼 쓰지 않는다.`;
+};
+
+const nowSection = (
+  chatId: string,
+  characterId: number,
+  sendsInMs: number,
+): string => {
   const lv = currentSpeechLevel(chatId);
   const cur = currentBlock(characterId);
   const speech =
@@ -287,10 +292,11 @@ const nowSection = (chatId: string, characterId: number): string => {
   // 시각은 숫자 표기와 말 표현을 함께 준다 — "12:30"만 주면 모델이 분을 흘리고 시 토큰만 읽어
   // "곧 12시" 같은 오인이 난다(12시 반인데). 반올림·상대 표현은 코드가 계산한 값을 그대로 쓰게 한다.
   const nowLine = cur
-    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). 너는 지금 "${cur.activity}" 중이다(답장 여건 ${cur.responsiveness}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
+    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). 너는 지금 "${cur.activity}" 중이다(답장 여건 ${RESPONSIVENESS_NAME[cur.responsiveness]}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
     : `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지). 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
   return `[지금 — 답장 전에 이 사실들과 어긋나지 않는지 확인한다]
 ${nowLine}
+${sendDelayLine(sendsInMs)}
 - 말투: ${speech}`;
 };
 
@@ -334,6 +340,7 @@ export const buildSystemBlocks = (
   bible: Bible,
   state: RelationshipState,
   chatId: string,
+  sendsInMs = 0,
 ): SystemBlock[] => {
   const metAt = getMetAt(characterId) ?? kstDateString();
   const diaries = getRecentDiaries(characterId, 3);
@@ -355,7 +362,7 @@ export const buildSystemBlocks = (
     identityFacts(bible),
     STANCE,
     `${RULES}\n\n${SPEECH_TEXTURE}\n\n${FACT_CARE}`,
-    `[네 생활 — 응답 속도 · 잠 · 자리 비움 · 유저가 붙잡을 때]\n\n${RESPONSE_TIMING}\n\n${SLEEP}\n\n${PRESENCE_NARRATION}\n\n${CATEGORY_RULE}`,
+    `[네 생활 — 잠 · 자리 비움 · 유저가 붙잡을 때]\n\n${SLEEP}\n\n${PRESENCE_NARRATION}\n\n${CATEGORY_RULE}`,
     DEVOTION,
   ].join("\n\n");
 
@@ -384,7 +391,7 @@ export const buildSystemBlocks = (
   const live = [
     lastTalkSection,
     daySection(characterId),
-    nowSection(chatId, characterId),
+    nowSection(chatId, characterId, sendsInMs),
     FINAL_CHECK,
   ]
     .filter(Boolean)

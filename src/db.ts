@@ -3,6 +3,15 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "./config.js";
 import { getKstNow, kstDateString, kstLogicalDate } from "./kst.js";
+import {
+  toResponsiveness,
+  toActivityCategory,
+  type MemoryItemType,
+  type MemoryOwner,
+  type MemoryOrigin,
+  type UserKnows,
+  type InterestLevel,
+} from "./labels.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
@@ -174,6 +183,7 @@ const TABLES: Record<string, string> = {
   bubbles_json TEXT NOT NULL,
   note_to_save TEXT,
   send_at TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover')),
   status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','sent','superseded','failed')),
   attempts INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
@@ -218,15 +228,10 @@ const TABLES: Record<string, string> = {
   output_tokens INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (date, model)`,
 
-  // 아래 둘은 day_actuals와 오늘 메모가 대신하게 되어 있다. 읽는 코드를 걷어낼 때 같이 지운다.
-  attention_override: `
-  chat_id TEXT PRIMARY KEY,
-  until_ts TEXT NOT NULL`,
-
-  capture_marks: `
-  chat_id TEXT PRIMARY KEY,
-  last_msg_id INTEGER NOT NULL`,
 };
+
+// attention_override·capture_marks는 정의에서 뺐다 — 붙잡힌 상태는 day_actuals가, 세션 중 사실
+// 포착은 오늘 메모가 대신한다. 쓰던 DB에 남은 행은 읽는 코드가 없어 그대로 두고, 새 DB에는 만들지 않는다.
 
 const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_characters_chat ON characters (chat_id)`,
@@ -247,7 +252,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -394,15 +399,66 @@ const migrateToV1 = (): void => {
 if (hasLegacySchema() && schemaVersion() < 1) migrateToV1();
 else createSchema();
 
+// v3: 저장된 각본 블록의 답장 여건·활동 성격을 한글에서 영어 식별자로 바꾼다.
+// 두 태그는 plan_json 안에 있어 CHECK도 UNIQUE도 닿지 않는다. SQL replace()로 문자열을 바꾸면
+// activity 텍스트에 든 같은 낱말("불가피한 일정")까지 건드리므로, 행마다 JSON을 파싱해서 옮긴다.
+const migratePlanTags = (): number => {
+  const rows = db
+    .prepare(`SELECT character_id, date, plan_json FROM day_plans`)
+    .all() as { character_id: number; date: string; plan_json: string }[];
+  const upd = db.prepare(
+    `UPDATE day_plans SET plan_json = ? WHERE character_id = ? AND date = ?`,
+  );
+  let moved = 0;
+  for (const r of rows) {
+    let plan: { blocks?: Record<string, unknown>[] };
+    try {
+      plan = JSON.parse(r.plan_json) as { blocks?: Record<string, unknown>[] };
+    } catch {
+      continue; // 깨진 행은 건너뛴다 — 읽는 쪽도 파싱 실패를 이미 견딘다
+    }
+    if (!Array.isArray(plan.blocks)) continue;
+    let touched = false;
+    for (const b of plan.blocks) {
+      const resp = toResponsiveness(b.responsiveness);
+      if (resp && b.responsiveness !== resp) {
+        b.responsiveness = resp;
+        touched = true;
+      }
+      const cat = toActivityCategory(b.category);
+      if (cat && b.category !== cat) {
+        b.category = cat;
+        touched = true;
+      }
+    }
+    if (!touched) continue;
+    upd.run(JSON.stringify(plan), r.character_id, r.date);
+    moved++;
+  }
+  return moved;
+};
+
 // v2: areas에 note 컬럼 추가. CREATE TABLE IF NOT EXISTS는 이미 있는 테이블을
 // 건드리지 않아서, v1 DB는 여기서 ALTER로 따라잡는다.
 if (schemaVersion() < SCHEMA_VERSION) {
-  const areaCols = db.prepare(`PRAGMA table_info(areas)`).all() as {
-    name: string;
-  }[];
-  if (!areaCols.some((c) => c.name === "note"))
-    db.exec(`ALTER TABLE areas ADD COLUMN note TEXT`);
-  db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  db.transaction(() => {
+    const areaCols = db.prepare(`PRAGMA table_info(areas)`).all() as {
+      name: string;
+    }[];
+    if (!areaCols.some((c) => c.name === "note"))
+      db.exec(`ALTER TABLE areas ADD COLUMN note TEXT`);
+    // 대기 답장이 답장인지 복구분인지 — 보낸 뒤 기록에 그대로 남긴다.
+    const pendingCols = db.prepare(`PRAGMA table_info(pending_replies)`).all() as {
+      name: string;
+    }[];
+    if (pendingCols.length && !pendingCols.some((c) => c.name === "kind"))
+      db.exec(
+        `ALTER TABLE pending_replies ADD COLUMN kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover'))`,
+      );
+    const moved = migratePlanTags();
+    if (moved) console.log(`[db] 각본 ${moved}일치의 태그를 식별자로 옮겼다`);
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  })();
 }
 
 db.pragma("foreign_keys = ON");
@@ -1011,35 +1067,6 @@ export const setRecoveryMark = (chatId: string, repliedUpTo: string): void => {
   ).run(chatId, repliedUpTo);
 };
 
-// 주의 집중(attention override): 유저가 붙잡아 우진이 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 대화로 돌아온 상태.
-// until_ts(KST "YYYY-MM-DD HH:MM:SS")까지는 각본상 불가여도 곁에 있는 것으로 본다(즉답, 예고 안 함).
-export const getAttentionUntil = (chatId: string): string | undefined =>
-  (
-    db
-      .prepare(`SELECT until_ts FROM attention_override WHERE chat_id = ?`)
-      .get(chatId) as { until_ts: string } | undefined
-  )?.until_ts;
-
-export const setAttentionOverride = (chatId: string, untilTs: string): void => {
-  db.prepare(
-    `INSERT OR REPLACE INTO attention_override (chat_id, until_ts) VALUES (?, ?)`,
-  ).run(chatId, untilTs);
-};
-
-// 세션 중 사실 포착의 워터마크: 여기 id까지는 이미 포착을 시도했다. 다음엔 그 이후 메시지만 본다.
-export const getCaptureMark = (chatId: string): number =>
-  (
-    db
-      .prepare(`SELECT last_msg_id FROM capture_marks WHERE chat_id = ?`)
-      .get(chatId) as { last_msg_id: number } | undefined
-  )?.last_msg_id ?? 0;
-
-export const setCaptureMark = (chatId: string, lastMsgId: number): void => {
-  db.prepare(
-    `INSERT OR REPLACE INTO capture_marks (chat_id, last_msg_id) VALUES (?, ?)`,
-  ).run(chatId, lastMsgId);
-};
-
 export const getDayPlan = (
   characterId: number,
   date: string,
@@ -1087,4 +1114,353 @@ export const getRecentDiaries = (
     )
     .all(characterId, limit) as { date: string; entry_json: string }[];
   return rows.reverse();
+};
+
+// ── 기억 한 건과 태그 ──────────────────────────────────────────────────────
+// 저장은 키(저장 항목·누구 쪽·영역·무엇)로 자리를 찾고, 검색은 태그로 모은다.
+// 키를 짓고 태그를 고르는 규칙은 memory.ts가 갖는다 — 여기는 행을 넣고 빼는 자리다.
+
+export interface MemoryRow {
+  id: number;
+  character_id: number;
+  item_type: MemoryItemType;
+  owner: MemoryOwner;
+  area: string;
+  subject: string;
+  value: string;
+  origin: MemoryOrigin;
+  user_knows: UserKnows;
+  interest_level: InterestLevel | null;
+  extra_json: string | null;
+  updated_at: string;
+}
+
+export interface MemoryWrite {
+  characterId: number;
+  itemType: MemoryItemType;
+  owner: MemoryOwner;
+  area: string;
+  subject: string;
+  value: string;
+  origin?: MemoryOrigin;
+  userKnows?: UserKnows;
+  interestLevel?: InterestLevel | null;
+  extraJson?: string | null;
+  updatedAt: string;
+}
+
+// 같은 키가 이미 있으면 내용만 갈아 끼운다 — 사실이 바뀌어도 행이 늘지 않는다.
+export const upsertMemoryItem = (w: MemoryWrite): number => {
+  const r = db
+    .prepare(
+      `INSERT INTO memory_items
+         (character_id, item_type, owner, area, subject, value, origin, user_knows, interest_level, extra_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (character_id, item_type, owner, area, subject) DO UPDATE SET
+         value = excluded.value,
+         user_knows = excluded.user_knows,
+         interest_level = excluded.interest_level,
+         extra_json = excluded.extra_json,
+         updated_at = excluded.updated_at`,
+    )
+    .run(
+      w.characterId,
+      w.itemType,
+      w.owner,
+      w.area,
+      w.subject,
+      w.value,
+      w.origin ?? "accrued",
+      w.userKnows ?? "unknown",
+      w.interestLevel ?? null,
+      w.extraJson ?? null,
+      w.updatedAt,
+    );
+  if (r.lastInsertRowid) return Number(r.lastInsertRowid);
+  return (
+    db
+      .prepare(
+        `SELECT id FROM memory_items
+          WHERE character_id = ? AND item_type = ? AND owner = ? AND area = ? AND subject = ?`,
+      )
+      .get(
+        w.characterId,
+        w.itemType,
+        w.owner,
+        w.area,
+        w.subject,
+      ) as { id: number }
+  ).id;
+};
+
+export const getMemoryItemById = (id: number): MemoryRow | undefined =>
+  db.prepare(`SELECT * FROM memory_items WHERE id = ?`).get(id) as
+    | MemoryRow
+    | undefined;
+
+export const listMemoryItems = (
+  characterId: number,
+  itemType?: MemoryItemType,
+): MemoryRow[] =>
+  db
+    .prepare(
+      itemType
+        ? `SELECT * FROM memory_items WHERE character_id = ? AND item_type = ? ORDER BY updated_at DESC`
+        : `SELECT * FROM memory_items WHERE character_id = ? ORDER BY updated_at DESC`,
+    )
+    .all(...(itemType ? [characterId, itemType] : [characterId])) as MemoryRow[];
+
+// 일이 끝나면 주소의 저장 항목 부분만 바뀐다(진행 중인 일 → 알게 된 유저 사실). 키는 그대로 두어
+// 이어 온 내용이 끊기지 않게 한다. 옮긴 자리에 같은 키가 이미 있으면 그쪽 내용을 갈아 끼운다.
+export const moveMemoryItemType = (
+  id: number,
+  itemType: MemoryItemType,
+  updatedAt: string,
+): number => {
+  const cur = getMemoryItemById(id);
+  if (!cur) return id;
+  const moved = upsertMemoryItem({
+    characterId: cur.character_id,
+    itemType,
+    owner: cur.owner,
+    area: cur.area,
+    subject: cur.subject,
+    value: cur.value,
+    origin: cur.origin,
+    userKnows: cur.user_knows,
+    interestLevel: cur.interest_level,
+    extraJson: cur.extra_json,
+    updatedAt,
+  });
+  if (moved !== id) {
+    db.prepare(`UPDATE tags SET ref_id = ? WHERE kind = 'memory' AND ref_id = ?`)
+      .run(moved, id);
+    db.prepare(`DELETE FROM memory_items WHERE id = ?`).run(id);
+  }
+  return moved;
+};
+
+export type TagKind = "memory" | "diary" | "schedule";
+
+// 태그는 통째로 갈아 끼운다 — 내용이 바뀌면 붙일 태그도 달라진다.
+export const setTags = (
+  characterId: number,
+  kind: TagKind,
+  refId: number,
+  tags: string[],
+): void => {
+  const ins = db.prepare(
+    `INSERT OR IGNORE INTO tags (character_id, kind, ref_id, tag) VALUES (?, ?, ?, ?)`,
+  );
+  db.transaction(() => {
+    db.prepare(`DELETE FROM tags WHERE kind = ? AND ref_id = ?`).run(kind, refId);
+    for (const t of tags) {
+      const v = t.trim();
+      if (v) ins.run(characterId, kind, refId, v);
+    }
+  })();
+};
+
+export const getTags = (kind: TagKind, refId: number): string[] =>
+  (
+    db
+      .prepare(`SELECT tag FROM tags WHERE kind = ? AND ref_id = ? ORDER BY tag`)
+      .all(kind, refId) as { tag: string }[]
+  ).map((r) => r.tag);
+
+// 태그가 겹치는 대상을 찾는다. 몇 개나 겹쳤는지(hits)를 같이 주어 memory.ts가 순서를 매긴다.
+export const findRefsByTags = (
+  characterId: number,
+  kind: TagKind,
+  tags: string[],
+): { ref_id: number; hits: number }[] => {
+  const wanted = tags.map((t) => t.trim()).filter(Boolean);
+  if (!wanted.length) return [];
+  const holes = wanted.map(() => "?").join(",");
+  return db
+    .prepare(
+      `SELECT ref_id, count(*) hits FROM tags
+        WHERE character_id = ? AND kind = ? AND tag IN (${holes})
+        GROUP BY ref_id ORDER BY hits DESC`,
+    )
+    .all(characterId, kind, ...wanted) as { ref_id: number; hits: number }[];
+};
+
+export const listAreas = (
+  characterId: number,
+): { name: string; note: string | null }[] =>
+  db
+    .prepare(
+      `SELECT name, note FROM areas WHERE character_id = ? ORDER BY rowid`,
+    )
+    .all(characterId) as { name: string; note: string | null }[];
+
+export const upsertArea = (
+  characterId: number,
+  name: string,
+  note?: string | null,
+): void => {
+  db.prepare(
+    `INSERT INTO areas (character_id, name, note) VALUES (?, ?, ?)
+     ON CONFLICT (character_id, name) DO UPDATE SET note = coalesce(excluded.note, areas.note)`,
+  ).run(characterId, name, note ?? null);
+};
+
+// ── 오늘 메모 ─────────────────────────────────────────────────────────────
+// 대화 중에 저장 항목·키를 판정하지 않고 그날 있었던 일을 그대로 적어 두는 자리.
+// 새벽 정리가 이걸 읽어 기억으로 옮기고, 그날이 지나면 다시 보지 않는다.
+
+export const addTodayNote = (
+  characterId: number,
+  createdAt: string,
+  note: string,
+  messageId?: number | null,
+): void => {
+  db.prepare(
+    `INSERT INTO today_notes (character_id, created_at, note, message_id) VALUES (?, ?, ?, ?)`,
+  ).run(characterId, createdAt, note, messageId ?? null);
+};
+
+export const getTodayNotes = (
+  characterId: number,
+  since: string,
+): { created_at: string; note: string }[] =>
+  db
+    .prepare(
+      `SELECT created_at, note FROM today_notes
+        WHERE character_id = ? AND created_at >= ? ORDER BY id`,
+    )
+    .all(characterId, since) as { created_at: string; note: string }[];
+
+// ── 오늘 실제 ─────────────────────────────────────────────────────────────
+// 각본과 달라진 블록만 남긴다: 하려던 것 · 어떻게 됐나 · 왜.
+
+export interface DayActualRow {
+  id: number;
+  date: string;
+  block_start: string | null;
+  intended: string;
+  outcome: string;
+  reason: string | null;
+  recorded_at: string;
+}
+
+export const recordDayActual = (
+  characterId: number,
+  date: string,
+  blockStart: string | null,
+  intended: string,
+  outcome: string,
+  reason: string | null,
+  recordedAt: string,
+): void => {
+  db.prepare(
+    `INSERT INTO day_actuals (character_id, date, block_start, intended, outcome, reason, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(characterId, date, blockStart, intended, outcome, reason, recordedAt);
+};
+
+export const getDayActuals = (
+  characterId: number,
+  date: string,
+): DayActualRow[] =>
+  db
+    .prepare(
+      `SELECT id, date, block_start, intended, outcome, reason, recorded_at
+         FROM day_actuals WHERE character_id = ? AND date = ? ORDER BY id`,
+    )
+    .all(characterId, date) as DayActualRow[];
+
+// ── 대기 중인 답장 ────────────────────────────────────────────────────────
+// 답장을 미리 만들어 두고 정한 시각에 보낸다. 몇 시간짜리 대기가 생기므로 행으로 남겨
+// 프로세스가 다시 떠도 이어간다.
+
+export interface PendingReplyRow {
+  id: number;
+  chat_id: string;
+  character_id: number;
+  user_msg_at: string;
+  bubbles_json: string;
+  note_to_save: string | null;
+  send_at: string;
+  kind: string;
+  attempts: number;
+  created_at: string;
+}
+
+export const insertPendingReply = (p: {
+  chatId: string;
+  characterId: number;
+  userMsgAt: string;
+  bubbles: string[];
+  noteToSave: string | null;
+  sendAt: string;
+  kind: string;
+  createdAt: string;
+}): number =>
+  Number(
+    db
+      .prepare(
+        `INSERT INTO pending_replies
+           (chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        p.chatId,
+        p.characterId,
+        p.userMsgAt,
+        JSON.stringify(p.bubbles),
+        p.noteToSave,
+        p.sendAt,
+        p.kind,
+        p.createdAt,
+      ).lastInsertRowid,
+  );
+
+export const getWaitingPendingReplies = (): PendingReplyRow[] =>
+  db
+    .prepare(
+      `SELECT id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, attempts, created_at
+         FROM pending_replies WHERE status = 'waiting' ORDER BY send_at`,
+    )
+    .all() as PendingReplyRow[];
+
+export const hasWaitingPendingReply = (chatId: string): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' LIMIT 1`,
+    )
+    .get(chatId);
+
+// 유저가 대기 중에 말을 더 걸면 만들어 둔 답장을 버린다 — 그 사이 대화가 바뀌었기 때문.
+export const supersedePendingReplies = (chatId: string): number[] => {
+  const ids = (
+    db
+      .prepare(
+        `SELECT id FROM pending_replies WHERE chat_id = ? AND status = 'waiting'`,
+      )
+      .all(chatId) as { id: number }[]
+  ).map((r) => r.id);
+  if (ids.length)
+    db.prepare(
+      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting'`,
+    ).run(chatId);
+  return ids;
+};
+
+export const markPendingReply = (
+  id: number,
+  status: "sent" | "failed" | "superseded",
+  sentAt: string | null,
+  error?: string | null,
+): void => {
+  db.prepare(
+    `UPDATE pending_replies SET status = ?, sent_at = ?, last_error = coalesce(?, last_error) WHERE id = ?`,
+  ).run(status, sentAt, error ?? null, id);
+};
+
+export const bumpPendingAttempt = (id: number, error: string): void => {
+  db.prepare(
+    `UPDATE pending_replies SET attempts = attempts + 1, last_error = ? WHERE id = ?`,
+  ).run(error, id);
 };

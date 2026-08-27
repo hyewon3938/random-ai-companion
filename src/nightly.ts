@@ -251,7 +251,7 @@ const applyNightlyTxn = db.transaction(
     const ex = out.extract;
     if (ex) {
       // 동일 문자열 사실은 다시 쌓지 않는다 — "이미 아는 건 뽑지 마라"는 프롬프트 지시만으로는
-      // LLM이 표현을 바꿔 재추출할 때 못 막는다(capture.ts와 같은 코드 레벨 가드로 통일).
+      // LLM이 표현을 바꿔 재추출할 때 못 막는다(코드 레벨 가드로 막는다).
       for (const f of ex.user_facts ?? [])
         if (!state.user_facts.some((x) => x.fact === f))
           state.user_facts.push({ fact: f, learned_at: g.diaryDate });

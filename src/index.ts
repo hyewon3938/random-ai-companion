@@ -10,6 +10,7 @@ import { runNightly } from "./nightly.js";
 import { runDispatchTick } from "./dispatch.js";
 import { runFollowupTick } from "./followup.js";
 import { runPresenceTick } from "./presence.js";
+import { resumePendingReplies } from "./pending.js";
 
 // 이 프로세스는 실시간 대화(반응형)와 선톡 발송을 담당한다.
 //
@@ -79,6 +80,10 @@ void bot.start();
 // 텔레그램 API 연결 보온. 이게 없으면 몇 시간 만에 나가는 선톡이 매번 새 연결을 맺게 되는데,
 // 이 VM에서는 그 '새 연결 수립'이 간헐적으로 죽어 선톡만 골라 유실됐다(bot.ts 참고).
 keepConnectionWarm();
+
+// 만들어 두고 기다리던 답장을 이어받는다. 회의가 세 시간이면 답장도 세 시간을 기다리므로,
+// 그 사이에 배포가 한 번만 있어도 타이머는 사라진다 — 행으로 남겨 둔 것을 다시 건다.
+resumePendingReplies();
 
 // 재시작(배포)으로 놓친 답장 복구: 디바운스 대기 중 프로세스가 죽으면 그 답장은 영영 사라지므로,
 // 부팅 후 한 번 확인해 이어서 답한다. 폴링이 밀린 메시지를 먼저 받도록 잠깐 기다렸다가 실행.

@@ -3,27 +3,32 @@ import { Agent } from "node:https";
 import { inspect } from "node:util";
 import { config } from "./config.js";
 import { createDaepyoCharacter, type Bible } from "./character.js";
-import { ensureTodayPlan, blockCategory } from "./day-plan.js";
-import { buildSystemBlocks, currentBlock } from "./context.js";
+import { ensureTodayPlan } from "./day-plan.js";
+import { buildSystemBlocks } from "./context.js";
 import { polishBubble } from "./bubble-polish.js";
-import { maybeCaptureFacts } from "./capture.js";
+import { decideReplyTiming, recordHold } from "./reply-timing.js";
+import {
+  dropPendingReplies,
+  isWaiting,
+  schedulePendingReply,
+  setPendingSender,
+} from "./pending.js";
 import { chat, type ChatTurn } from "./llm.js";
 import {
   db,
   getActiveCharacter,
-  getAttentionUntil,
   getRecentMessages,
   getRecoveryMark,
   getRelationshipState,
   lastMessage,
   logMessage,
   recentUserGaps,
-  setAttentionOverride,
   setRecoveryMark,
   type CharacterRow,
   type MessageRow,
+  type PendingReplyRow,
 } from "./db.js";
-import { getKstNow, kstClock, kstDateString, timeMarkerFor } from "./kst.js";
+import { getKstNow, timeMarkerFor } from "./kst.js";
 
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
 // reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 선톡,
@@ -173,13 +178,12 @@ const sleepWhileTyping = async (chatId: string, ms: number): Promise<void> => {
 // 중간에 실패해도 이미 나간 말풍선은 되돌릴 수 없다. 그래서 실패를 그냥 던지지 않고
 // '어디까지 나갔는지'를 함께 돌려준다 — 호출부가 통째로 재시도해 앞부분을 중복 발송하는 걸 막는다.
 // (재시도 봉투를 넓힌 만큼 이 부분 실패 확률도 같이 올라간다. 잘린 채로 두는 게 중복보다 낫다.)
-const sendBubblesTo = async (
+const sendBubbleList = async (
   chatId: string,
-  text: string,
+  bubbles: string[],
 ): Promise<{ sent: string[]; error?: unknown }> => {
   const sent: string[] = [];
-  for (const raw of splitBubbles(text)) {
-    const bubble = polishBubble(raw);
+  for (const bubble of bubbles) {
     // 실제 치는 속도(≈5~6자/초)에 맞춘 타이핑 시간. 90ms/자는 복붙처럼 빨라서 180ms/자로 늦춤.
     const typeMs =
       clamp(bubble.length * 180, 1700, 9000) + Math.random() * 1000;
@@ -194,12 +198,16 @@ const sendBubblesTo = async (
   return { sent };
 };
 
-const rand = (min: number, max: number): number =>
-  min + Math.random() * (max - min);
-// 제곱 skew: 대부분 낮은 쪽에 몰리고 가끔 높은 쪽 — 사교 자리(회식·약속) 짬짬이용.
-// 대개 몇 분 내에 답하되 간헐적으로 텀이 길어지는 결. 회식은 span을 더 크게 줘 평균을 늘린다.
-const skewLow = (min: number, span: number): number =>
-  min + Math.random() ** 2 * span;
+// 말풍선으로 쪼개고 다듬는 것까지 한 번에 — 선톡처럼 만들자마자 보내는 쪽이 쓴다.
+// 답장은 만들어 두고 나중에 보내므로, 쪼갠 결과를 저장한 뒤 sendBubbleList로 바로 간다.
+const toBubbles = (text: string): string[] =>
+  splitBubbles(text).map(polishBubble);
+
+const sendBubblesTo = (
+  chatId: string,
+  text: string,
+): Promise<{ sent: string[]; error?: unknown }> =>
+  sendBubbleList(chatId, toBubbles(text));
 
 // 선제 발송(선톡): 유저 메시지 없이 캐릭터가 먼저 보낸다. 아침 안부(morning)·침묵 팔로업(followup)이 호출
 // 반환: 실제로 나간 말풍선 수 / 전체. 아무것도 못 나가면 throw(= 호출부가 재시도해도 안전),
@@ -315,109 +323,14 @@ const responding = new Set<string>();
 const proactiveBusy = new Set<string>();
 export const acquireProactive = (chatId: string): boolean => {
   if (proactiveBusy.has(chatId) || responding.has(chatId)) return false;
+  // 만들어 두고 발송을 기다리는 답장이 있으면 선톡을 접는다 — 답장이 나가기 직전에
+  // 근황톡이 먼저 도착하면 유저는 자기 말이 씹힌 것으로 읽는다.
+  if (isWaiting(chatId)) return false;
   proactiveBusy.add(chatId);
   return true;
 };
 export const releaseProactive = (chatId: string): void => {
   proactiveBusy.delete(chatId);
-};
-
-// 지금 각본 블록 + 관계 나이 + 시간대로 답장 지연을 정한다.
-// 핵심 원칙(서비스): '찾을 때 있어준다'가 사람다움보다 우선 — 특히 밤.
-//   · 밤 대화(저녁~취침 전)는 즉답: 유저가 누워서 우진과만 대화하는 몰입 시간.
-//   · 낮에도 찾으면 웬만하면 나와준다. 자리 비움은 짧게(운전·회의 등, 1시간 미만).
-//   · 깊은 잠 중 연락도 무조건 즉답.
-// (관계 진전도에 따른 텀 조정은 지금은 두지 않는다 — 단일 밀착 동작.)
-const toMin = (hhmm: string): number => {
-  const [h, m] = hhmm.split(":").map(Number);
-  return (h ?? 0) * 60 + (m ?? 0);
-};
-// 오늘의 특정 분(minute-of-day)을 KST 타임스탬프 문자열로 (override 만료 시각용).
-// 1439(23:59)를 넘으면 다음날로 넘긴다 — 자정 직전에 붙잡힌 "최소 30분"이 잘리지 않게.
-const kstStampAt = (min: number): string => {
-  const total = Math.max(0, min);
-  const dayOffset = Math.floor(total / 1440);
-  const mm = total % 1440;
-  const date = kstDateString(
-    new Date(getKstNow().getTime() + dayOffset * 24 * 3600_000),
-  );
-  const hh = String(Math.floor(mm / 60)).padStart(2, "0");
-  const m2 = String(mm % 60).padStart(2, "0");
-  return `${date} ${hh}:${m2}:00`;
-};
-// '취침 준비'는 아직 깨어 있는 것. 실제로 깊이 자는 블록만 잠으로 본다.
-const isDeepSleep = (b: {
-  activity: string;
-  responsiveness: string;
-}): boolean =>
-  b.responsiveness === "불가" &&
-  /잠|수면|숙면/.test(b.activity) &&
-  !/준비/.test(b.activity);
-const lastCharTs = (chatId: string): string | undefined =>
-  (
-    db
-      .prepare(
-        `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`,
-      )
-      .get(chatId) as { sent_at: string } | undefined
-  )?.sent_at;
-// 유저가 붙잡아 우진이 (개인·사회) 일정을 접거나 미루고 곁에 있기로 한 상태가 아직 유효한가.
-const attentionActive = (chatId: string): boolean => {
-  const until = getAttentionUntil(chatId);
-  return (
-    !!until &&
-    Date.now() < new Date(until.replace(" ", "T") + "+09:00").getTime()
-  );
-};
-
-const blockDelayMs = (characterId: number, chatId: string): number => {
-  const b = currentBlock(characterId);
-  if (!b) return 0;
-  // 유저가 붙잡아 접은 상태면 각본상 불가여도 곁에 있는다(즉답).
-  if (attentionActive(chatId)) return rand(0, 40_000);
-  const deepSleep = isDeepSleep(b);
-  const hour = Number(kstClock().slice(0, 2));
-  const night = hour >= 20 || hour < 2; // 저녁~새벽 2시: 밤 대화 창
-  // 밤에 대화가 이어지는 중이면(최근 캐릭터 응답이 45분 내) 아직 깨어 있는 것 — 자는 각본이어도 즉답
-  const lc = lastCharTs(chatId);
-  const activeChat =
-    !!lc &&
-    Date.now() - new Date(lc.replace(" ", "T") + "+09:00").getTime() <
-      45 * 60_000;
-
-  // 밤 대화는 가장 빠르게(몰입 대화) — 대화가 이어지는 중이거나 자는 시간이 아니면. 관계 나이 무관.
-  // 그래도 로봇처럼 0초는 아니게 살짝(디바운스 위에 0~40초). 모든 게 즉답이면 리얼리티가 떨어진다.
-  if (night && (activeChat || !deepSleep)) return rand(0, 40_000);
-  // 낮의 여유(즉답) 블록: 곧 답하되 가끔 1~2분 텀(사람은 늘 폰만 보지 않는다)
-  if (b.responsiveness === "즉답") return rand(0, 120_000);
-
-  // 깊은 잠 중 연락 = 무조건 (거의) 즉답. 자다 깨는 척·실제로 자는 척을 안 한다 —
-  // 밤에 찾을 때 늘 곁에 있는 게 더 낫다는 판단(굳이 사람처럼 잠들어 있지 않는다).
-  if (deepSleep) return rand(0, 40_000);
-
-  // 낮 시간 자리 비움
-  const untilEnd = Math.max(0, toMin(b.end) - toMin(kstClock())) * 60_000;
-  const category = blockCategory(b); // 개인 / 사회 / 공적
-  const cancelable = category !== "공적"; // 개인·사회는 붙잡으면 조정 가능
-  const sinceStart = (toMin(kstClock()) - toMin(b.start)) * 60_000;
-  // 조정 가능한 불가(개인·사회)로 막 들어간 참(~12분)이면 아직 닿는다 — 유저가 붙잡으면
-  // 접거나 미룰 수 있게 곧 확인한다. (회의·시험 같은 공적 불가는 여기 안 걸리고 아래로.)
-  if (b.responsiveness === "불가" && cancelable && sinceStart <= 12 * 60_000) {
-    return rand(20_000, 150_000);
-  }
-  // 짬짬이: 개인(집안일·집 여가)=곧 답(20초~2.5분) / 사회(친구·가족·병원·학원)=틈틈이(약간 뜸) /
-  // 공적(업무·공적 회식)=틈틈이지만 더 뜸(대개 몇 분, 가끔 더 길게 — skew).
-  if (b.responsiveness === "짬짬이") {
-    if (category === "개인") return rand(20_000, 150_000);
-    if (category === "사회") return skewLow(30_000, 240_000);
-    return skewLow(60_000, 480_000); // 공적
-  }
-  // 불가(운동·운전·회의 등 손이 묶임): 그 일 끝날 때쯤, 최대 ~35분.
-  return clamp(
-    Math.min(untilEnd, 30 * 60_000) + rand(0, 60_000),
-    120_000,
-    35 * 60_000,
-  );
 };
 
 // 대기 시간 = 20초 바닥에서 위로만. 이어 보내기 텀이 길면(길게 치는 사람) 그 상위값(p80)에 맞춰 늘린다.
@@ -437,6 +350,29 @@ const computeWait = (chatId: string): number => {
   return wait;
 };
 
+// 답장 대상이 되는 유저 발화. 마지막 캐릭터 발화 뒤에 온 유저 메시지를 모은다 —
+// 나눠 보낸 여러 줄이 한 덩어리로 붙잡기 판정에 들어간다.
+const pendingUserTurn = (
+  chatId: string,
+): { at: string; text: string } | null => {
+  const rows = getRecentMessages(chatId, 12);
+  const mine: MessageRow[] = [];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (!r || r.role !== "user") break;
+    mine.unshift(r);
+  }
+  const last = mine[mine.length - 1];
+  if (!last) return null;
+  return { at: last.sent_at, text: mine.map((m) => m.text).join("\n") };
+};
+
+// 답장 한 번의 순서: 텀 결정 → 생성 → 대기 → 발송.
+//
+// 예전에는 각본상 자리를 비운 시간만큼 먼저 기다린 뒤 생성했다. 그러면 30분 뒤에 나가는 답장도
+// 방금 대화를 보고 쓴 것처럼 읽혔고, 그사이 일정이 바뀐 것도 반영하지 못했다.
+// 지금은 유저 말이 도착한 참에 답장을 만들어 두고, 정한 시각에 그대로 내보낸다.
+// 만들어 둔 답장은 pending_replies에 남아 프로세스가 다시 떠도 이어진다.
 const respond = async (
   chatId: string,
   kind: "reply" | "recover" = "reply",
@@ -450,9 +386,36 @@ const respond = async (
     await ensureTodayPlan(character.id, bible).catch((e) =>
       logErr("[bot] day plan error:", e),
     );
+    // 지금 답장하는 유저 메시지. 생성이 끝났을 때 이보다 새 메시지가 와 있으면 이 답장은 버린다.
+    const turn = pendingUserTurn(chatId);
+    if (!turn) {
+      console.warn(`[bot] 답장할 유저 메시지가 없다 — skip (chat=${chatId})`);
+      return;
+    }
+
+    // 1. 텀부터 정한다. 붙잡기 판정도 여기서 끝나고, 접거나 미룬 일정은 오늘 실제 기록에 바로 적힌다.
+    // 복구 답장은 이미 늦은 것이라 텀을 다시 얹지 않는다.
+    const timing =
+      kind === "recover"
+        ? { waitMs: 0, held: null }
+        : await decideReplyTiming(character.id, turn.text);
+    if (timing.held)
+      console.log(
+        `[hold] ${chatId} ${timing.held.activity} → ${timing.held.outcome}`,
+      );
+
+    // 2. 지금 만든다
     const state = getRelationshipState(character.id);
     // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다
-    const system = buildSystemBlocks(character.id, bible, state, chatId);
+    // 대기가 길면 답장이 도착하는 시점을 꼬리에 적어 준다 — 세 시간 뒤에 나갈 말을
+    // 방금 본 것처럼 쓰지 않게.
+    const system = buildSystemBlocks(
+      character.id,
+      bible,
+      state,
+      chatId,
+      timing.waitMs,
+    );
     const turns = toTurns(getRecentMessages(chatId, 40));
     // 태그는 여기서 전부 떼어낸다(유저 비노출).
     let { text, stay } = parseReplyTags(await chat(system, turns));
@@ -464,45 +427,67 @@ const respond = async (
       text = retry.text;
       stay = stay || retry.stay;
     }
-    // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음])면 주의집중을 켠다 — 그 블록 끝까지(최소 30분) 곁에.
-    if (stay) {
-      const cur = currentBlock(character.id);
-      const nowMin = toMin(kstClock());
-      const endMin = cur ? toMin(cur.end) : nowMin + 45;
-      setAttentionOverride(chatId, kstStampAt(Math.max(endMin, nowMin + 30)));
-      console.log(
-        `[attention] ${chatId} 유저 요청으로 일정 접음 (until ${cur?.end ?? "+30m"})`,
-      );
-    }
+    // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음]).
+    // 붙잡기 판정이 이미 접었으면 그 기록이 남아 있어 recordHold가 알아서 넘어간다.
+    if (stay) recordHold(character.id);
     if (!text) {
       console.warn(`[bot] empty reply — skip (chat=${chatId})`);
       return;
     }
-    console.log(`[send] kind=${kind} chat=${chatId} len=${text.length}`);
-    const total = splitBubbles(text).length;
-    const { sent, error } = await sendBubblesTo(chatId, text);
-    // 한 마디도 못 나갔으면 throw → 아래 기록 생략 → 복구 틱이 재시도한다.
-    // 일부라도 나갔으면 답장 책임을 완료로 확정한다: 재시도하면 이미 나간 앞부분이 중복되는 데다,
-    // 복구는 답장을 새로 생성하므로 다른 내용이 뒤에 덧붙는다.
-    if (sent.length === 0 && error) throw error;
-    if (error)
-      console.warn(`[send] 부분 발송 kind=${kind} ${sent.length}/${total}`);
-    // 전송에 성공한 뒤에야 '답장 책임 완료'를 기록한다(보내기 전 기록하면, 전송 실패 시 복구가
-    // 이미 처리됐다고 보고 영영 재시도하지 않아 답장이 유실된다). 성공 후이므로 중복도 방지된다.
-    const lu = lastMessage(chatId);
-    if (lu?.role === "user") setRecoveryMark(chatId, lu.sent_at);
-    logMessage(chatId, character.id, "assistant", sent.join("\n"), nowIso(), {
+    // 만드는 동안 유저가 말을 더 보냈으면 이 답장은 버린다 — 새 타이머가 합쳐서 다시 만든다.
+    const now = pendingUserTurn(chatId);
+    if (now && now.at !== turn.at) {
+      console.log(`[send] 생성 중 새 메시지 도착 — 폐기 (chat=${chatId})`);
+      return;
+    }
+
+    // 3. 정한 시각에 나가게 저장한다. 대기가 0이어도 같은 길로 보낸다 —
+    // 발송 직전에 죽어도 pending_replies에 남아 다시 뜰 때 이어진다.
+    const bubbles = toBubbles(text);
+    schedulePendingReply({
+      chatId,
+      characterId: character.id,
+      userMsgAt: turn.at,
+      bubbles,
+      // 오늘 메모로 남길 한 줄은 아직 답장 프롬프트가 만들지 않는다(배관만 깔아 둔다).
+      noteToSave: null,
+      waitMs: timing.waitMs,
       kind,
-      ...(sent.length < total ? { partial: `${sent.length}/${total}` } : {}),
     });
-    // 세션 중 가벼운 사실 포착(비동기 — 답장 지연 없음). 유저 메시지가 쌓이면 밤 정리 전에 저장.
-    void maybeCaptureFacts(character.id, chatId).catch((e) =>
-      logErr("[capture] error:", e),
+    // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
+    setRecoveryMark(chatId, turn.at);
+    console.log(
+      `[send] kind=${kind} chat=${chatId} len=${text.length} wait=${Math.round(timing.waitMs / 1000)}s`,
     );
   } finally {
     responding.delete(chatId);
   }
 };
+
+// 저장해 둔 답장을 실제로 내보내는 자리 — pending.ts가 정한 시각에 부른다.
+// (pending.ts가 bot.ts를 부르면 서로 물고 늘어져서, 발송만 여기서 끼워 넣는다.)
+setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
+  const kind = (row.kind === "recover" ? "recover" : "reply") as SendKind;
+  const { sent, error } = await sendBubbleList(row.chat_id, bubbles);
+  // 한 마디도 못 나갔으면 throw → 아래 기록 생략 → pending 재시도에 맡긴다.
+  // 일부라도 나갔으면 답장 책임을 완료로 확정한다: 재시도하면 이미 나간 앞부분이 중복되기 때문.
+  if (sent.length === 0 && error) throw error;
+  if (error)
+    console.warn(`[send] 부분 발송 kind=${kind} ${sent.length}/${bubbles.length}`);
+  logMessage(
+    row.chat_id,
+    row.character_id,
+    "assistant",
+    sent.join("\n"),
+    nowIso(),
+    {
+      kind,
+      ...(sent.length < bubbles.length
+        ? { partial: `${sent.length}/${bubbles.length}` }
+        : {}),
+    },
+  );
+});
 
 // 마지막 메시지 뒤 waitMs 동안 조용하면 응답. 이미 답장 보내는 중이면 끝날 때까지 다시 대기(겹침 방지)
 const arm = (chatId: string, waitMs: number): void => {
@@ -529,9 +514,13 @@ bot.on("message:text", async (ctx) => {
     return;
   }
   logMessage(chatId, character.id, "user", ctx.message.text, nowIso());
-  // 대기 = 유저 리듬(디바운스) + 캐릭터 각본 자리비움(짬짬이 1~5분·불가 일정 끝날 때쯤).
-  // 자리 비운 동안 유저가 더 보내도 재무장돼 합쳐지고, 돌아올 때쯤 한 번에 답한다.
-  arm(chatId, computeWait(chatId) + blockDelayMs(character.id, chatId));
+  // 만들어 두고 기다리던 답장이 있으면 버린다 — 유저가 말을 더 보탰으니 내용도 텀도 다시 정한다.
+  const dropped = dropPendingReplies(chatId);
+  if (dropped)
+    console.log(`[pending] 유저 추가 발화로 ${dropped}건 폐기 (chat=${chatId})`);
+  // 여기서 기다리는 건 유저 말이 다 도착할 때까지의 시간뿐이다(20~40초).
+  // 각본상 자리를 비운 만큼의 텀은 답장을 만든 뒤 pending_replies가 맡는다.
+  arm(chatId, computeWait(chatId));
 });
 
 // 배포·재시작으로 놓친 답장 복구: 유저 메시지가 디바운스 대기 중에 프로세스가 죽으면
@@ -553,6 +542,8 @@ export const recoverMissedReplies = async (): Promise<void> => {
       60000;
     if (ageMin > 180) continue;
     if (pending.has(c.chat_id) || responding.has(c.chat_id)) continue; // 이미 처리 중
+    // 만들어 두고 발송을 기다리는 답장이 있으면 이미 답한 것으로 본다 — 그 행이 발송을 책임진다.
+    if (isWaiting(c.chat_id)) continue;
     if (getRecoveryMark(c.chat_id) === last.sent_at) {
       console.log(
         `[recover] 이미 답장한 메시지 — 건너뜀: ${c.chat_id} (${last.sent_at})`,
