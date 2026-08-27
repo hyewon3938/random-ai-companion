@@ -24,18 +24,13 @@ export const ACTIVITY_CATEGORY_NAME: Record<ActivityCategory, string> = {
   official: "공적",
 };
 
-/** 기억 한 건이 들어가는 저장 항목. */
-export type MemoryItemType =
-  | "identity"
-  | "user_fact"
-  | "ongoing"
-  | "relationship";
+/** 기억 한 건이 들어가는 저장 항목. 주인(캐릭터·유저)과 짝지어 여섯 조합이 된다. */
+export type MemoryItemType = "fact" | "ongoing" | "person";
 
 export const MEMORY_ITEM_TYPE_NAME: Record<MemoryItemType, string> = {
-  identity: "캐릭터 정체성",
-  user_fact: "알게 된 유저 사실",
+  fact: "사실",
   ongoing: "진행 중인 일",
-  relationship: "캐릭터와 유저의 관계",
+  person: "주변 인물",
 };
 
 /** 이 기억이 누구 쪽 것인가 — 키의 나머지 절반. */
@@ -46,14 +41,33 @@ export const MEMORY_OWNER_NAME: Record<MemoryOwner, string> = {
   user: "유저",
 };
 
-/** 씨앗 생성이 준 값인가, 대화로 쌓인 값인가. */
-export type MemoryOrigin = "seed" | "accrued";
+/** 캐릭터를 만들 때 정한 값인가, 대화로 쌓인 값인가. creation 행은 저장 함수가 고치지 않는다. */
+export type MemoryOrigin = "creation" | "conversation";
+
+export const MEMORY_ORIGIN_NAME: Record<MemoryOrigin, string> = {
+  creation: "생성",
+  conversation: "대화",
+};
 
 /** 이 사실을 유저가 아는가 — 캐릭터 쪽 기억에만 쓴다. */
 export type UserKnows = "unknown" | "known" | "waiting";
 
-/** 이 주제에 유저가 보이는 관심 — 유저 쪽 기억에만 쓴다. */
-export type InterestLevel = "asks_first" | "reacts_only" | "changes_topic";
+/** 유저가 이 주제에 보이는 관심 수준 — 캐릭터 쪽 기억에만 쓴다. */
+export type Interest = "high" | "medium" | "low";
+
+export const INTEREST_NAME: Record<Interest, string> = {
+  high: "많음",
+  medium: "보통",
+  low: "적음",
+};
+
+/** 캐릭터와 유저가 지금 쓰는 말투. */
+export type SpeechLevel = "polite" | "casual";
+
+export const SPEECH_LEVEL_NAME: Record<SpeechLevel, string> = {
+  polite: "존댓말",
+  casual: "반말",
+};
 
 // 각본 블록의 두 태그는 plan_json 안에 있어 DB CHECK가 닿지 않는다. 저장된 옛 각본과 외부
 // 생성분에는 한글 값이 남아 있으므로, 읽는 자리에서 식별자로 되돌린다.

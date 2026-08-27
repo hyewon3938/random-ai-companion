@@ -114,7 +114,7 @@ for (const m of msgs) {
 // 선톡 반응: 발송된 선톡 후 첫 유저 응답까지 걸린 시간
 const sends = db
   .prepare(
-    `SELECT date, sent_at FROM scheduled_sends WHERE character_id = ? AND status = 'sent'`,
+    `SELECT date, sent_at FROM scheduled_messages WHERE character_id = ? AND status = 'sent'`,
   )
   .all(row.id) as { date: string; sent_at: string }[];
 const sendReact = sends.map((snd) => {

@@ -10,3 +10,4 @@
 | [0002](0002-user-authored-character-creation.md) | 캐릭터 생성을 유저 입력 방식으로 바꾸고 현대 일상으로 한정하기 | Accepted |
 | [0003](0003-memory-three-items-relationship-columns.md) | 기억을 세 항목으로 통합하고 관계는 컬럼으로 분리하기 | Accepted |
 | [0004](0004-preference-disclosure-and-user-preferences.md) | 유저 선호를 캐릭터에게 공개하고 저장 자리를 세 갈래로 나누기 | Accepted |
+| [0005](0005-memory-schema-v4-migration.md) | 기억 스키마를 v4로 옮기고 생성 시점 기억을 쓰기 규칙으로 지키기 | Accepted |
