@@ -100,8 +100,8 @@ ${diary || "(없음)"}
 - 단, 어제 일기에 실제 여파(회식·술·새벽까지 대화 등)가 있으면 그게 시드보다 우선이다 — 실제로 늦게 잤으면 시드가 '보통'이어도 오늘 아침은 피곤하게.
 
 [원칙]
-- 근무일이면: 기상은 위 컨디션 시드에 맞춰 그날의 시각을 정한다 — 보통이면 5시 50분~6시 20분, '이른'이면 5시 30분 무렵(눈이 일찍 떠짐), '늦잠'이면 6시 40분~7시(허둥지둥한 아침). 씻고 준비, 자차로 출근, 오전 업무, 점심(12:00~13:00), 오후 업무, 퇴근(보통 18시 넘어서, 가끔 더 늦게), 저녁 운동(그날 컨디션·사정에 따라 밥 전/후·건너뛰기도), 집에서 이 사람 성격에 맞는 저녁(책·SF나 철학적인 영화·맥주 한 캔 등), 자정 전후 취침.
-- 쉬는 날(주말·공휴일)이면: 늦잠, 밀린 잠·책·영화·러닝·집안일 같은 여유로운 흐름.
+- 근무일이면: 기상은 위 컨디션 시드에 맞춰 그날의 시각을 정한다 — 보통이면 5시 50분~6시 20분, '이른'이면 5시 30분 무렵(눈이 일찍 떠짐), '늦잠'이면 6시 40분~7시(허둥지둥한 아침). 씻고 준비, 자차로 출근, 오전 업무, 점심(12:00~13:00), 오후 업무, 퇴근(보통 18시 넘어서, 가끔 더 늦게), 저녁 운동(그날 컨디션·사정에 따라 밥 전/후·건너뛰기도), 집에서 이 사람의 성격·취향에 맞는 저녁, 자정 전후 취침.
+- 쉬는 날(주말·공휴일)이면: 늦잠, 밀린 잠·집안일과 이 사람 취향의 여가로 여유로운 흐름.
 - 이벤트 1~3개를 배치(들쭉날쭉하게 — 이벤트 많은 날도 없는 날도 있다). 두 종류가 있다:
   - 미리 아는 일정 (advance_known=true): 점심 회식, 팀원과 저녁 약속, 퇴근 후 서점 들르기 같은 예정된 일
   - 닥쳐야 아는 일 (advance_known=false): 오후에 갑자기 바빠짐, 급한 업무, 예정에 없던 호출, 갑자기 마트에 감, 친구의 급한 전화 같은 그때 가서야 겪는 일 — 이런 갑작스러운 일을 하루 한둘은 자연스럽게 껴 넣는다.
@@ -110,20 +110,21 @@ ${diary || "(없음)"}
 - 각 블록의 responsiveness = 그 시간에 메신저 답장을 얼마나 할 수 있는가. 값은 셋 중 하나:
   - "instant"(즉답 — 쉬는 중·대화 시간) / "intermittent"(틈틈이 — 근무·이동·집안일·장보기처럼 틈틈이 볼 수 있음) / "unavailable"(불가 — 손이나 정신이 묶여 못 봄).
   - "unavailable"은 손이나 정신이 진짜로 묶인 때만: 통화(전화 받는 중)·운전·공식 회의·운동·씻기·영화관·잠.
-  - **업무로 자리를 비우는 공적 "unavailable"(회의·시험·발표·급한 처리 등)는 한 블록 최대 1시간.** 더 길 일이면 블록을 쪼개 사이에 "intermittent"(잠깐 폰 보는 틈) 구간을 넣는다 — 업무로 한 시간 넘게 통째로 사라지지 않게. (창구 업무처럼 원래 틈틈이 보는 일은 해당 없음.)
+  - **업무로 자리를 비우는 공적 "unavailable"(회의·시험·발표·급한 처리 등)는 한 블록 최대 1시간.** 더 길 일이면 블록을 쪼개 사이에 "intermittent"(잠깐 폰 보는 틈) 구간을 넣는다 — 업무로 한 시간 넘게 통째로 사라지지 않게. (원래 틈틈이 폰을 볼 수 있는 일은 해당 없음.)
   - **사교 자리(친구 약속·회식·모임)는 "unavailable"이 아니라 "intermittent"다** — 사람들과 있어도 폰은 틈틈이 본다. 다만 회식은 텀이 더 길고(자리를 오래 못 뜸), 친구 약속은 대체로 틈틈이 보지만 가끔 텀이 길어진다.
   - **집에서 하는 여가는 "unavailable"이 아니라 "intermittent"다** — 집에서 영화·드라마(OTT)·독서·집안일·가계부는 폰을 곁에 두고 하므로 틈틈이 답할 수 있다. 영화라도 '영화관에 감'만 "unavailable"이고 '집에서 봄'은 "intermittent".
   - **실제로 자는 시간(잠)만 밤의 "unavailable"이다. '취침 준비·잠자리에 들기'(누워서 폰 보며 뒹굴대는 시간)는 "instant".** 저녁~취침 전은 대화 시간이라 대체로 "instant".
 - 블록은 00:00~23:59 안에서 시간순으로 빈틈 없이. 전날 밤부터 이어지는 잠은 00:00부터 기상 시각까지 블록으로.
 
 - 각 블록의 category = 활동의 성격(답장 여건과 별개의 축 — 유저가 찾을 때 얼마나 조정 가능한가). 값은 셋 중 하나:
-  - "personal"(개인) = 혼자 자의로 하는 일(운동·집 여가·영화·독서·장보기·산책·혼밥·낮잠). 쉽게 취소하거나 미룰 수 있다. 답장은 물리적으로 가능하면 한다(집 활동=intermittent, 영화관·운전·러닝·씻기만 unavailable).
+  - "personal"(개인) = 혼자 자의로 하는 일(운동·집 여가·영화·독서·장보기·산책·혼밥·낮잠). 쉽게 취소하거나 미룰 수 있다. 답장은 물리적으로 가능하면 한다(집 활동=intermittent, 영화관·운전·운동·씻기만 unavailable).
   - "social"(사회) = 남이 엮인 사적 일(친구 약속·저녁·전화, 가족 만남, 병원, 학원, 친목 회식). 즉시는 아니어도 양해를 구해 미루거나 조정할 수 있다. 연락은 대체로 intermittent, 전화 받는 중만 잠깐 unavailable.
   - "official"(공적) = 미룰 수 없는 공적 의무(회사 업무·회의·시험·발표·공적 회식). 미룰 수 없다. 업무·공적 회식은 intermittent로 답할 수 있으나, 회의·시험·발표는 폰을 볼 수 없어 "unavailable".
   - 잠·기상·준비는 "personal".
 
 [JSON 형식 — 이 구조 그대로]
-{"date":"${date}","blocks":[{"start":"00:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"팀 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동기들과 점심 겸 수다","responsiveness":"intermittent","advance_known":false,"category":"social"},{"start":"19:00","end":"20:00","activity":"저녁 러닝","responsiveness":"unavailable","advance_known":false,"category":"personal"}, ...]}`;
+{"date":"${date}","blocks":[{"start":"00:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":false,"category":"social"},{"start":"19:00","end":"20:00","activity":"운동","responsiveness":"unavailable","advance_known":false,"category":"personal"}, ...]}
+위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다.`;
 
 // 두 태그는 plan_json 안에 있어 DB가 값을 검사해 주지 않는다. 생성이 한글 이름으로 답하거나
 // 모르는 값을 내면 여기서 식별자로 되돌리고, 그래도 못 알아보면 무난한 쪽으로 채운다.
@@ -147,7 +148,10 @@ export const ensureTodayPlan = async (
   const date = kstDateString();
   const existing = getDayPlan(characterId, date);
   // 이미 있으면 비용 없이 종료(런웨이 확인도 생략). 단 밤 정리 경로는 lazy분이면 다시 만든다.
-  if (existing && !(nightly && getDayPlanMadeBy(characterId, date) === "ondemand"))
+  if (
+    existing &&
+    !(nightly && getDayPlanMadeBy(characterId, date) === "ondemand")
+  )
     return;
   // 오늘의 컨디션 시드가 담긴 이번 달 리듬을 확보(이미 있으면 no-op). 실패해도 각본은 계속
   await ensureRhythmRunway(characterId, bible, date).catch((e) =>

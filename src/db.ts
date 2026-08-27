@@ -227,7 +227,6 @@ const TABLES: Record<string, string> = {
   cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (date, model)`,
-
 };
 
 // attention_override·capture_marks는 정의에서 뺐다 — 붙잡힌 상태는 day_actuals가, 세션 중 사실
@@ -448,7 +447,9 @@ if (schemaVersion() < SCHEMA_VERSION) {
     if (!areaCols.some((c) => c.name === "note"))
       db.exec(`ALTER TABLE areas ADD COLUMN note TEXT`);
     // 대기 답장이 답장인지 복구분인지 — 보낸 뒤 기록에 그대로 남긴다.
-    const pendingCols = db.prepare(`PRAGMA table_info(pending_replies)`).all() as {
+    const pendingCols = db
+      .prepare(`PRAGMA table_info(pending_replies)`)
+      .all() as {
       name: string;
     }[];
     if (pendingCols.length && !pendingCols.some((c) => c.name === "kind"))
@@ -961,7 +962,7 @@ export const proactiveCountToday = (chatId: string, since: string): number =>
   ).c;
 
 // 유저 선호(매칭 전용, 캐릭터에 비주입). 밤 정리가 대화 내용으로 뽑아 누적한다.
-// topics = 유저가 몰입하는 소재(영화·투자…), facets = 우진의 어떤 성향에 반응이 좋은지(안정감·위트·직업·취미…).
+// topics = 유저가 몰입하는 소재(영화·투자…), facets = 캐릭터의 어떤 성향에 반응이 좋은지(태도·위트·직업·취미…).
 export interface UserPreferences {
   topics: { topic: string; note: string; learned_at: string }[];
   facets: {
@@ -1183,20 +1184,15 @@ export const upsertMemoryItem = (w: MemoryWrite): number => {
         `SELECT id FROM memory_items
           WHERE character_id = ? AND item_type = ? AND owner = ? AND area = ? AND subject = ?`,
       )
-      .get(
-        w.characterId,
-        w.itemType,
-        w.owner,
-        w.area,
-        w.subject,
-      ) as { id: number }
+      .get(w.characterId, w.itemType, w.owner, w.area, w.subject) as {
+      id: number;
+    }
   ).id;
 };
 
 export const getMemoryItemById = (id: number): MemoryRow | undefined =>
   db.prepare(`SELECT * FROM memory_items WHERE id = ?`).get(id) as
-    | MemoryRow
-    | undefined;
+    MemoryRow | undefined;
 
 export const listMemoryItems = (
   characterId: number,
@@ -1208,7 +1204,9 @@ export const listMemoryItems = (
         ? `SELECT * FROM memory_items WHERE character_id = ? AND item_type = ? ORDER BY updated_at DESC`
         : `SELECT * FROM memory_items WHERE character_id = ? ORDER BY updated_at DESC`,
     )
-    .all(...(itemType ? [characterId, itemType] : [characterId])) as MemoryRow[];
+    .all(
+      ...(itemType ? [characterId, itemType] : [characterId]),
+    ) as MemoryRow[];
 
 // 일이 끝나면 주소의 저장 항목 부분만 바뀐다(진행 중인 일 → 알게 된 유저 사실). 키는 그대로 두어
 // 이어 온 내용이 끊기지 않게 한다. 옮긴 자리에 같은 키가 이미 있으면 그쪽 내용을 갈아 끼운다.
@@ -1233,8 +1231,9 @@ export const moveMemoryItemType = (
     updatedAt,
   });
   if (moved !== id) {
-    db.prepare(`UPDATE tags SET ref_id = ? WHERE kind = 'memory' AND ref_id = ?`)
-      .run(moved, id);
+    db.prepare(
+      `UPDATE tags SET ref_id = ? WHERE kind = 'memory' AND ref_id = ?`,
+    ).run(moved, id);
     db.prepare(`DELETE FROM memory_items WHERE id = ?`).run(id);
   }
   return moved;
@@ -1253,7 +1252,10 @@ export const setTags = (
     `INSERT OR IGNORE INTO tags (character_id, kind, ref_id, tag) VALUES (?, ?, ?, ?)`,
   );
   db.transaction(() => {
-    db.prepare(`DELETE FROM tags WHERE kind = ? AND ref_id = ?`).run(kind, refId);
+    db.prepare(`DELETE FROM tags WHERE kind = ? AND ref_id = ?`).run(
+      kind,
+      refId,
+    );
     for (const t of tags) {
       const v = t.trim();
       if (v) ins.run(characterId, kind, refId, v);
@@ -1264,7 +1266,9 @@ export const setTags = (
 export const getTags = (kind: TagKind, refId: number): string[] =>
   (
     db
-      .prepare(`SELECT tag FROM tags WHERE kind = ? AND ref_id = ? ORDER BY tag`)
+      .prepare(
+        `SELECT tag FROM tags WHERE kind = ? AND ref_id = ? ORDER BY tag`,
+      )
       .all(kind, refId) as { tag: string }[]
   ).map((r) => r.tag);
 
