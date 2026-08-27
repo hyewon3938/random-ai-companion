@@ -19,7 +19,6 @@ import {
   getActiveCharacter,
   getRecentMessages,
   getRecoveryMark,
-  getRelationshipState,
   lastMessage,
   logMessage,
   recentUserGaps,
@@ -405,17 +404,13 @@ const respond = async (
       );
 
     // 2. 지금 만든다
-    const state = getRelationshipState(character.id);
-    // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다
+    // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
     // 대기가 길면 답장이 도착하는 시점을 꼬리에 적어 준다 — 세 시간 뒤에 나갈 말을
-    // 방금 본 것처럼 쓰지 않게.
-    const system = buildSystemBlocks(
-      character.id,
-      bible,
-      state,
-      chatId,
-      timing.waitMs,
-    );
+    // 방금 본 것처럼 쓰지 않게. searchText는 이번 발화 — 태그 검색의 재료.
+    const system = buildSystemBlocks(character.id, chatId, {
+      sendsInMs: timing.waitMs,
+      searchText: turn.text,
+    });
     const turns = toTurns(getRecentMessages(chatId, 40));
     // 태그는 여기서 전부 떼어낸다(유저 비노출).
     let { text, stay } = parseReplyTags(await chat(system, turns));
@@ -473,7 +468,9 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
   // 일부라도 나갔으면 답장 책임을 완료로 확정한다: 재시도하면 이미 나간 앞부분이 중복되기 때문.
   if (sent.length === 0 && error) throw error;
   if (error)
-    console.warn(`[send] 부분 발송 kind=${kind} ${sent.length}/${bubbles.length}`);
+    console.warn(
+      `[send] 부분 발송 kind=${kind} ${sent.length}/${bubbles.length}`,
+    );
   logMessage(
     row.chat_id,
     row.character_id,
@@ -517,7 +514,9 @@ bot.on("message:text", async (ctx) => {
   // 만들어 두고 기다리던 답장이 있으면 버린다 — 유저가 말을 더 보탰으니 내용도 텀도 다시 정한다.
   const dropped = dropPendingReplies(chatId);
   if (dropped)
-    console.log(`[pending] 유저 추가 발화로 ${dropped}건 폐기 (chat=${chatId})`);
+    console.log(
+      `[pending] 유저 추가 발화로 ${dropped}건 폐기 (chat=${chatId})`,
+    );
   // 여기서 기다리는 건 유저 말이 다 도착할 때까지의 시간뿐이다(20~40초).
   // 각본상 자리를 비운 만큼의 텀은 답장을 만든 뒤 pending_replies가 맡는다.
   arm(chatId, computeWait(chatId));
@@ -538,7 +537,8 @@ export const recoverMissedReplies = async (): Promise<void> => {
     // 최근(3시간 내) 놓친 것만 복구한다 — 그보다 오래된 건 아침 안부·팔로업이 담당.
     // (예전엔 "오늘 새벽 5시 이후"로 걸렀는데, 자정~새벽 대화가 통째로 걸러지는 버그가 있었다.)
     const ageMin =
-      (Date.now() - new Date(last.sent_at.replace(" ", "T") + "+09:00").getTime()) /
+      (Date.now() -
+        new Date(last.sent_at.replace(" ", "T") + "+09:00").getTime()) /
       60000;
     if (ageMin > 180) continue;
     if (pending.has(c.chat_id) || responding.has(c.chat_id)) continue; // 이미 처리 중
@@ -552,7 +552,9 @@ export const recoverMissedReplies = async (): Promise<void> => {
     }
     const prev = getRecoveryMark(c.chat_id);
     setRecoveryMark(c.chat_id, last.sent_at); // 보내기 전에 책임 표시(재부팅 중복 방지)
-    console.log(`[recover] 놓친 답장 복구: ${c.chat_id} (마지막 ${last.sent_at})`);
+    console.log(
+      `[recover] 놓친 답장 복구: ${c.chat_id} (마지막 ${last.sent_at})`,
+    );
     try {
       await respond(c.chat_id, "recover");
     } catch (e) {

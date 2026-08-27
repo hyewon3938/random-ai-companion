@@ -8,6 +8,7 @@ import {
   setTags,
   getTags,
   findRefsByTags,
+  listTagNames,
   listAreas,
   upsertArea,
   addTodayNote,
@@ -213,6 +214,15 @@ export const searchMemories = (
       stamp(),
     );
   return picked;
+};
+
+/**
+ * 유저 발화에 들어 있는 태그를 골라낸다. 붙어 있는 태그 이름을 문자열 포함으로 맞춰 보는
+ * 것이라 추가 모델 호출이 없다 — 답장 경로에서 검색어를 만드는 유일한 방법.
+ */
+export const tagsInText = (characterId: number, text: string): string[] => {
+  if (!text.trim()) return [];
+  return listTagNames(characterId).filter((t) => text.includes(t));
 };
 
 /** 일기·일정도 같은 태그로 찾는다. 행을 읽는 건 그 데이터를 가진 쪽 몫이라 id만 준다. */

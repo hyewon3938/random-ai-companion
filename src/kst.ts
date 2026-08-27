@@ -41,7 +41,7 @@ export const dayLabel = (d: Date): string => {
   const dow = d.getUTCDay();
   if (KR_HOLIDAYS.has(kstDateString(d))) return "공휴일(휴무)";
   if (dow === 0 || dow === 6) return "주말(휴무)";
-  return "평일(근무일, 아침 일찍 출근)";
+  return "평일";
 };
 
 // 오늘/내일이 근무일인지 — 밤에 잠을 챙길지 판단하는 근거
@@ -137,6 +137,12 @@ export const lastTalkedLabel = (
   const date = `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${DAYS[d.getUTCDay()]}`;
   const ago = logicalDaysAgo(ts, todayLogical);
   const rel =
-    ago <= 0 ? "오늘" : ago === 1 ? "어제" : ago === 2 ? "그저께" : `${ago}일 전`;
+    ago <= 0
+      ? "오늘"
+      : ago === 1
+        ? "어제"
+        : ago === 2
+          ? "그저께"
+          : `${ago}일 전`;
   return `${rel}(${date}) ${ts.slice(11, 16)}`;
 };
