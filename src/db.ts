@@ -11,6 +11,7 @@ import {
   type MemoryOrigin,
   type UserKnows,
   type Interest,
+  type SpeechLevel,
 } from "./labels.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
@@ -710,6 +711,41 @@ export const getMetAt = (characterId: number): string | undefined => {
   return row?.met_at;
 };
 
+/** 생성 배치가 채우는 관계 첫 값. 여덟 항목 중 여섯 — 잘 통하는 것(rapport)과
+ * 조심할 것(cautions)은 대화가 쌓여야 알 수 있어 비운 채 시작한다. */
+export interface RelationshipFirstValues {
+  stage: string;
+  speechLevel: SpeechLevel;
+  speechNote: string;
+  addressTerms: string;
+  texture: string;
+  history: string;
+  feelings: string;
+}
+
+export const saveRelationshipFirstValues = (
+  characterId: number,
+  v: RelationshipFirstValues,
+  now: string,
+): void => {
+  db.prepare(
+    `UPDATE relationships SET
+       stage = ?, speech_level = ?, speech_note = ?, address_terms = ?,
+       texture = ?, history = ?, feelings = ?, updated_at = ?
+     WHERE character_id = ?`,
+  ).run(
+    v.stage,
+    v.speechLevel,
+    v.speechNote,
+    v.addressTerms,
+    v.texture,
+    v.history,
+    v.feelings,
+    now,
+    characterId,
+  );
+};
+
 export const logMessage = (
   chatId: string,
   characterId: number | null,
@@ -1155,6 +1191,40 @@ export const getUserProfile = (chatId: string): StoredUserProfile => {
   return {
     gender: row.gender ?? undefined,
     ageBand: row.age_band ?? undefined,
+  };
+};
+
+// 온보딩이 채우는 컬럼까지 포함한 프로필 전체. 캐릭터 생성이 부르는 이름(서로 부르는 말·
+// 첫 인사)과 하는 일·사는 지역(취향 접점 하나·거리 감각)을 읽는 데 쓴다.
+export interface UserProfileFull {
+  preferredName?: string;
+  gender?: string;
+  birthYear?: number;
+  job?: string;
+  region?: string;
+}
+
+export const getUserProfileFull = (chatId: string): UserProfileFull => {
+  const row = db
+    .prepare(
+      `SELECT preferred_name, gender, birth_year, job, region FROM user_profile WHERE chat_id = ?`,
+    )
+    .get(chatId) as
+    | {
+        preferred_name: string | null;
+        gender: string | null;
+        birth_year: number | null;
+        job: string | null;
+        region: string | null;
+      }
+    | undefined;
+  if (!row) return {};
+  return {
+    preferredName: row.preferred_name ?? undefined,
+    gender: row.gender ?? undefined,
+    birthYear: row.birth_year ?? undefined,
+    job: row.job ?? undefined,
+    region: row.region ?? undefined,
   };
 };
 

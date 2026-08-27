@@ -608,18 +608,31 @@ const windowTimes = (w: string): [string, string] => {
 const ARC_SYSTEM = `너는 한 인물의 삶의 큰 흐름을 짜는 작가다. 과장 없이, 실제 그 사람의 한 해에 있을 법한 결로.`;
 
 const arcPrompt = (
-  bible: Bible,
+  personBlock: string,
   today: string,
 ): string => `오늘은 ${today}다. 아래 인물의 삶의 큰 흐름을 JSON으로 짜줘.
 
 [인물]
-${JSON.stringify({ identity: bible.identity, backstory: bible.backstory.story_seeds, life: bible.life }, null, 2)}
+${personBlock}
 
 {"year":"올해의 큰 진행 사건 1~2문장","season":"이 계절의 결 1~2문장","month":"이번 달의 상황 1~2문장","week":"이번 주의 특이사항 1문장 (없으면 '평범한 주')"}`;
 
+// 옛 바이블 캐릭터가 아크 부트스트랩에 넣는 인물 재료. V2 캐릭터는 생성 출력으로
+// 같은 자리의 재료를 만든다(character.ts의 arcMaterial).
+const bibleArcMaterial = (bible: Bible): string =>
+  JSON.stringify(
+    {
+      identity: bible.identity,
+      backstory: bible.backstory.story_seeds,
+      life: bible.life,
+    },
+    null,
+    2,
+  );
+
 export const ensureArcs = async (
   characterId: number,
-  bible: Bible,
+  personBlock: string,
 ): Promise<void> => {
   if (Object.keys(getArcs(characterId)).length) return;
   const arcs = await chatJson<{
@@ -627,7 +640,12 @@ export const ensureArcs = async (
     season: string;
     month: string;
     week: string;
-  }>(ARC_SYSTEM, arcPrompt(bible, kstDateString()), 1000, config.modelDeep);
+  }>(
+    ARC_SYSTEM,
+    arcPrompt(personBlock, kstDateString()),
+    1000,
+    config.modelDeep,
+  );
   saveArc(characterId, "year", arcs.year);
   saveArc(characterId, "season", arcs.season);
   saveArc(characterId, "month", arcs.month);
@@ -692,7 +710,7 @@ const refreshArcs = async (g: NightlyGathered): Promise<void> => {
 
 export const runNightly = async (character: CharacterRow): Promise<string> => {
   const g = gatherNightlyInput(character);
-  await ensureArcs(g.characterId, g.bible);
+  await ensureArcs(g.characterId, bibleArcMaterial(g.bible));
   // 이번 달(+월말이면 다음 달) 리듬을 확보한다. ensureTodayPlan이 오늘 시드를 읽어 각본에 잇는다
   await ensureRhythmRunway(g.characterId, g.bible, g.today);
   // 달력 경계 아크 갱신 — 침묵 중엔 생략(볼 사람이 없고, 복귀 후 다음 경계에 이어 쓴다)
