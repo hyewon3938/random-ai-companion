@@ -10,7 +10,7 @@ import {
   type MemoryOwner,
   type MemoryOrigin,
   type UserKnows,
-  type InterestLevel,
+  type Interest,
 } from "./labels.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
@@ -31,28 +31,60 @@ const TABLES: Record<string, string> = {
   genesis_json TEXT NOT NULL,
   created_at TEXT NOT NULL`,
 
+  // 캐릭터와 유저의 관계. 여덟 항목을 컬럼으로 나눠 두고 프롬프트에 항상 넣는다.
+  // 말투 값과 last_contact_at은 답장 경로가, 나머지는 새벽 정리가 갱신한다.
+  // 새 컬럼은 전부 NULL을 허용한다 — 초기값을 채우는 것은 데이터 이관 회차 몫이고,
+  // legacy_state_json을 지울 때 같이 NOT NULL로 조인다.
   relationships: `
   character_id INTEGER PRIMARY KEY REFERENCES characters(id),
   met_at TEXT NOT NULL,
   last_contact_at TEXT,
+  stage TEXT,
+  speech_level TEXT CHECK (speech_level IN ('polite','casual')),
+  speech_note TEXT,
+  address_terms TEXT,
+  texture TEXT,
+  rapport TEXT,
+  cautions TEXT,
+  history TEXT,
+  feelings TEXT,
+  updated_at TEXT,
   legacy_state_json TEXT`,
 
-  // 기억 한 건 = 저장 항목(item_type) + 누구 쪽(owner) + 영역(area) + 무엇(subject)이 키.
-  // 같은 키로 다시 들어오면 값을 덮어쓴다.
+  // 기억 한 건 = 저장 항목(item_type) + 누구 쪽(owner) + 영역(area) + 무엇(subject) + 출처(origin)가 키.
+  // 같은 키로 다시 들어오면 값을 덮어쓴다. 저장 항목 셋과 주인 둘이 만드는 여섯 조합이 전부 유효하다.
+  //
+  // 항목마다 따로 챙기는 값은 전용 컬럼으로 둔다. extra_json에 넣으면 CHECK가 닿지 않아
+  // 오타 난 키가 그대로 저장되고 읽는 쪽에서야 없는 값으로 드러난다(각본 태그에서 겪었다).
+  // 주변 인물은 relation·contact_mode·region·last_mentioned_at, 진행 중인 일은 end_condition,
+  // 캐릭터 쪽 행은 interest를 쓰고, 해당 없는 자리는 CHECK가 막는다.
+  //
+  // 캐릭터를 만들 때 정한 값(origin='creation')과 대화로 쌓인 값(origin='conversation')은
+  // 같은 키에 두 행으로 나란히 놓인다. 저장 함수는 언제나 conversation 행에만 쓴다.
   memory_items: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER NOT NULL REFERENCES characters(id),
-  item_type TEXT NOT NULL CHECK (item_type IN ('identity','user_fact','ongoing','relationship')),
+  item_type TEXT NOT NULL CHECK (item_type IN ('fact','ongoing','person')),
   owner TEXT NOT NULL CHECK (owner IN ('char','user')),
   area TEXT NOT NULL,
   subject TEXT NOT NULL,
   value TEXT NOT NULL,
-  origin TEXT NOT NULL DEFAULT 'accrued' CHECK (origin IN ('seed','accrued')),
+  origin TEXT NOT NULL DEFAULT 'conversation' CHECK (origin IN ('creation','conversation')),
   user_knows TEXT NOT NULL DEFAULT 'unknown' CHECK (user_knows IN ('unknown','known','waiting')),
-  interest_level TEXT CHECK (interest_level IN ('asks_first','reacts_only','changes_topic')),
-  extra_json TEXT,
+  relation TEXT,
+  contact_mode TEXT,
+  region TEXT,
+  last_mentioned_at TEXT,
+  end_condition TEXT,
+  interest TEXT CHECK (interest IN ('high','medium','low')),
+  last_retrieved_at TEXT,
+  retrieval_count INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
-  UNIQUE (character_id, item_type, owner, area, subject)`,
+  CHECK (item_type = 'person' OR (relation IS NULL AND contact_mode IS NULL AND region IS NULL AND last_mentioned_at IS NULL)),
+  CHECK (item_type = 'ongoing' OR end_condition IS NULL),
+  CHECK (owner = 'char' OR interest IS NULL),
+  CHECK (owner = 'char' OR user_knows = 'known'),
+  UNIQUE (character_id, item_type, owner, area, subject, origin)`,
 
   // 태그에서 데이터로 가는 방향의 표. 기억·일기·일정이 ref_id로 함께 들어온다.
   tags: `
@@ -190,7 +222,9 @@ const TABLES: Record<string, string> = {
   created_at TEXT NOT NULL,
   sent_at TEXT`,
 
-  scheduled_sends: `
+  // 미리 만들어 둔 아침 · 안부 선톡 문안. 만든 자리에서 바로 보내지 않고 여기 적어 두면
+  // 봇이 내려가도 보낼 것이 남고, 실패한 시도를 같은 행에 세어 둘 수 있다.
+  scheduled_messages: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER NOT NULL REFERENCES characters(id),
   chat_id TEXT NOT NULL,
@@ -242,7 +276,7 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages (chat_id, sent_at)`,
   `CREATE INDEX IF NOT EXISTS idx_pending_replies_due ON pending_replies (status, send_at)`,
   `CREATE INDEX IF NOT EXISTS idx_pending_replies_chat ON pending_replies (chat_id, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_scheduled_sends_due ON scheduled_sends (status, date)`,
+  `CREATE INDEX IF NOT EXISTS idx_scheduled_messages_due ON scheduled_messages (status, date)`,
 ];
 
 const createSchema = (): void => {
@@ -251,7 +285,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -273,8 +307,13 @@ const hasLegacySchema = (): boolean => {
 // SQLite는 이미 있는 테이블에 CHECK·UNIQUE를 붙이지 못한다. 그래서 바뀌는 테이블은
 // 옛 이름으로 밀어 두고 새로 만든 다음 값을 옮기고 옛 테이블을 지운다. 이름 바꾸기와
 // 값 바꾸기가 한 번에 끝난다.
-const rebuild = (name: string, columns: string, select: string): void => {
-  db.exec(`ALTER TABLE ${name} RENAME TO ${name}__old`);
+const rebuild = (
+  name: string,
+  columns: string,
+  select: string,
+  source: string = name,
+): void => {
+  db.exec(`ALTER TABLE ${source} RENAME TO ${name}__old`);
   db.exec(`CREATE TABLE ${name} (${TABLES[name]}\n)`);
   db.exec(
     `INSERT INTO ${name} (${columns}) SELECT ${select} FROM ${name}__old`,
@@ -345,12 +384,14 @@ const migrateToV1 = (): void => {
       "character_id, date, energy, wake_hint, mood, reason",
       "character_id, date, energy, wake_hint, mood, note",
     );
+    // 선톡 문안 테이블은 v4에서 scheduled_messages로 이름이 바뀌었다. 옛 DB는 여기서 새 이름으로 간다.
     rebuild(
-      "scheduled_sends",
+      "scheduled_messages",
       "id, character_id, chat_id, date, window_start, window_end, text, kind, status, skip_reason, attempts, last_error, created_at, sent_at",
       `id, character_id, chat_id, date, window_start, window_end, text,
        CASE kind WHEN 'reconnect' THEN 'checkin' ELSE kind END,
        status, reason, attempts, last_error, created_at, sent_at`,
+      "scheduled_sends",
     );
     // 모델 API가 대화 기록을 받을 때 쓰는 이름에 맞춰 char를 assistant로 바꾼다.
     rebuild(
@@ -439,7 +480,7 @@ const migratePlanTags = (): number => {
 
 // v2: areas에 note 컬럼 추가. CREATE TABLE IF NOT EXISTS는 이미 있는 테이블을
 // 건드리지 않아서, v1 DB는 여기서 ALTER로 따라잡는다.
-if (schemaVersion() < SCHEMA_VERSION) {
+if (schemaVersion() < 3) {
   db.transaction(() => {
     const areaCols = db.prepare(`PRAGMA table_info(areas)`).all() as {
       name: string;
@@ -458,9 +499,110 @@ if (schemaVersion() < SCHEMA_VERSION) {
       );
     const moved = migratePlanTags();
     if (moved) console.log(`[db] 각본 ${moved}일치의 태그를 식별자로 옮겼다`);
-    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    db.pragma(`user_version = 3`);
   })();
 }
+
+// v4: 기억을 저장 항목 셋으로 줄이고, 관계를 컬럼으로 나누고, 선톡 문안 테이블 이름을 바꾼다.
+//
+// 기억은 정체성과 알게 된 유저 사실이 사실 하나로 합쳐지고, 캐릭터와 유저의 관계는
+// relationships의 컬럼으로 옮겨 간다. 옮겨 갈 자리가 없는 관계 행과, 전용 컬럼이 받지 못하는
+// extra_json 값이 있어서 옛 테이블을 memory_items_legacy로 남긴다 — 관계 컬럼의 초기값을
+// 채우는 데이터 이관 회차가 이 표를 읽고, 그 회차가 끝나면 지운다.
+const migrateToV4 = (): void => {
+  const columns = (table: string): string[] =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+  const tableExists = (name: string): boolean =>
+    db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
+      .get(name) !== undefined;
+
+  const memoryIsOld = columns("memory_items").includes("extra_json");
+  const relationIsOld = !columns("relationships").includes("stage");
+  const sendsAreOld = tableExists("scheduled_sends");
+  if (!memoryIsOld && !relationIsOld && !sendsAreOld) {
+    db.pragma(`user_version = 4`);
+    return;
+  }
+
+  db.pragma("foreign_keys = OFF");
+  db.pragma("legacy_alter_table = ON");
+
+  db.transaction(() => {
+    if (memoryIsOld) {
+      db.exec(`ALTER TABLE memory_items RENAME TO memory_items_legacy`);
+      // 인덱스 이름은 DB 전체에서 하나뿐이라, 옛 테이블을 따라간 이름을 먼저 비운다.
+      db.exec(`DROP INDEX IF EXISTS idx_memory_items_type`);
+      db.exec(`CREATE TABLE memory_items (${TABLES.memory_items}\n)`);
+      // 정체성과 알게 된 유저 사실이 사실 하나로 합쳐진다. 진행 중인 일의 끝나는 조건은
+      // extra_json에 있던 ends_when이 전용 컬럼으로 온다. 관계 행은 옮기지 않는다.
+      db.exec(`
+        INSERT INTO memory_items
+          (id, character_id, item_type, owner, area, subject, value, origin, user_knows,
+           end_condition, retrieval_count, updated_at)
+        SELECT id, character_id,
+               CASE item_type WHEN 'ongoing' THEN 'ongoing' ELSE 'fact' END,
+               owner, area, subject, value,
+               CASE origin WHEN 'seed' THEN 'creation' ELSE 'conversation' END,
+               CASE owner WHEN 'user' THEN 'known' ELSE user_knows END,
+               CASE WHEN item_type = 'ongoing'
+                    THEN json_extract(extra_json, '$.ends_when') END,
+               0, updated_at
+          FROM memory_items_legacy
+         WHERE item_type <> 'relationship'`);
+      // 옮기지 않은 행의 태그를 지운다. 남겨 두면 없는 기억을 가리키는 태그가 검색에 걸린다.
+      db.exec(`
+        DELETE FROM tags
+         WHERE kind = 'memory'
+           AND ref_id IN (SELECT id FROM memory_items_legacy
+                           WHERE item_type = 'relationship')`);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_memory_items_type ON memory_items (character_id, item_type)`,
+      );
+    }
+
+    if (relationIsOld)
+      for (const sql of [
+        `ALTER TABLE relationships ADD COLUMN stage TEXT`,
+        `ALTER TABLE relationships ADD COLUMN speech_level TEXT CHECK (speech_level IN ('polite','casual'))`,
+        `ALTER TABLE relationships ADD COLUMN speech_note TEXT`,
+        `ALTER TABLE relationships ADD COLUMN address_terms TEXT`,
+        `ALTER TABLE relationships ADD COLUMN texture TEXT`,
+        `ALTER TABLE relationships ADD COLUMN rapport TEXT`,
+        `ALTER TABLE relationships ADD COLUMN cautions TEXT`,
+        `ALTER TABLE relationships ADD COLUMN history TEXT`,
+        `ALTER TABLE relationships ADD COLUMN feelings TEXT`,
+        `ALTER TABLE relationships ADD COLUMN updated_at TEXT`,
+      ])
+        db.exec(sql);
+
+    if (sendsAreOld) {
+      // 새 이름의 빈 테이블은 부팅할 때 이미 만들어졌다. 값을 옮기고 옛 테이블을 지운다.
+      db.exec(`
+        INSERT INTO scheduled_messages
+          (id, character_id, chat_id, date, window_start, window_end, text, kind,
+           status, skip_reason, attempts, last_error, created_at, sent_at)
+        SELECT id, character_id, chat_id, date, window_start, window_end, text, kind,
+               status, skip_reason, attempts, last_error, created_at, sent_at
+          FROM scheduled_sends`);
+      db.exec(`DROP TABLE scheduled_sends`);
+    }
+
+    const broken = db.pragma("foreign_key_check") as unknown[];
+    if (broken.length)
+      throw new Error(
+        `[db] 마이그레이션 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
+      );
+    db.pragma(`user_version = 4`);
+  })();
+
+  db.pragma("legacy_alter_table = OFF");
+  console.log(`[db] 스키마를 v4로 옮겼다`);
+};
+
+if (schemaVersion() < SCHEMA_VERSION) migrateToV4();
 
 db.pragma("foreign_keys = ON");
 
@@ -853,19 +995,19 @@ export const insertScheduledSend = (
 ): void => {
   const dup = db
     .prepare(
-      `SELECT 1 FROM scheduled_sends WHERE character_id = ? AND date = ? LIMIT 1`,
+      `SELECT 1 FROM scheduled_messages WHERE character_id = ? AND date = ? LIMIT 1`,
     )
     .get(characterId, date);
   if (dup) return; // 하루 1통
   db.prepare(
-    `INSERT INTO scheduled_sends (character_id, chat_id, date, window_start, window_end, text, created_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO scheduled_messages (character_id, chat_id, date, window_start, window_end, text, created_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(characterId, chatId, date, windowStart, windowEnd, text, now, kind);
 };
 
 export const getPendingSends = (date: string): ScheduledSendRow[] =>
   db
     .prepare(
-      `SELECT id, character_id, chat_id, date, window_start, window_end, text, kind, attempts FROM scheduled_sends WHERE status = 'pending' AND date = ?`,
+      `SELECT id, character_id, chat_id, date, window_start, window_end, text, kind, attempts FROM scheduled_messages WHERE status = 'pending' AND date = ?`,
     )
     .all(date) as ScheduledSendRow[];
 
@@ -876,7 +1018,7 @@ export const markScheduledSend = (
   sentAt: string | null,
 ): void => {
   db.prepare(
-    `UPDATE scheduled_sends SET status = ?, skip_reason = ?, sent_at = ? WHERE id = ?`,
+    `UPDATE scheduled_messages SET status = ?, skip_reason = ?, sent_at = ? WHERE id = ?`,
   ).run(status, skipReason, sentAt, id);
 };
 
@@ -884,11 +1026,11 @@ export const markScheduledSend = (
 // (정상 스킵과 네트워크 실패가 똑같이 '발송 창 지남'으로 뭉뚱그려지던 걸 가르는 근거)
 export const recordSendAttempt = (id: number, error: string): void => {
   db.prepare(
-    `UPDATE scheduled_sends SET attempts = attempts + 1, last_error = ? WHERE id = ?`,
+    `UPDATE scheduled_messages SET attempts = attempts + 1, last_error = ? WHERE id = ?`,
   ).run(error.slice(0, 300), id);
 };
 
-// scheduled_sends 밖의 선톡(팔로업·자리비움 예고) 전송 실패 흔적. 이 메시지들은 순간에 묶여 있어
+// scheduled_messages 밖의 선톡(팔로업·자리비움 예고) 전송 실패 흔적. 이 메시지들은 순간에 묶여 있어
 // 유예·재시도가 없다 — 대신 실패했다는 사실만은 콘솔이 아니라 DB에 남겨 사후 추적이 되게 한다.
 export const recordSendFailure = (
   chatId: string,
@@ -1131,8 +1273,14 @@ export interface MemoryRow {
   value: string;
   origin: MemoryOrigin;
   user_knows: UserKnows;
-  interest_level: InterestLevel | null;
-  extra_json: string | null;
+  relation: string | null;
+  contact_mode: string | null;
+  region: string | null;
+  last_mentioned_at: string | null;
+  end_condition: string | null;
+  interest: Interest | null;
+  last_retrieved_at: string | null;
+  retrieval_count: number;
   updated_at: string;
 }
 
@@ -1143,51 +1291,118 @@ export interface MemoryWrite {
   area: string;
   subject: string;
   value: string;
-  origin?: MemoryOrigin;
   userKnows?: UserKnows;
-  interestLevel?: InterestLevel | null;
-  extraJson?: string | null;
+  relation?: string | null;
+  contactMode?: string | null;
+  region?: string | null;
+  lastMentionedAt?: string | null;
+  endCondition?: string | null;
+  interest?: Interest | null;
   updatedAt: string;
 }
 
-// 같은 키가 이미 있으면 내용만 갈아 끼운다 — 사실이 바뀌어도 행이 늘지 않는다.
-export const upsertMemoryItem = (w: MemoryWrite): number => {
-  const r = db
-    .prepare(
-      `INSERT INTO memory_items
-         (character_id, item_type, owner, area, subject, value, origin, user_knows, interest_level, extra_json, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (character_id, item_type, owner, area, subject) DO UPDATE SET
-         value = excluded.value,
-         user_knows = excluded.user_knows,
-         interest_level = excluded.interest_level,
-         extra_json = excluded.extra_json,
-         updated_at = excluded.updated_at`,
-    )
-    .run(
-      w.characterId,
-      w.itemType,
-      w.owner,
-      w.area,
-      w.subject,
-      w.value,
-      w.origin ?? "accrued",
-      w.userKnows ?? "unknown",
-      w.interestLevel ?? null,
-      w.extraJson ?? null,
-      w.updatedAt,
-    );
-  if (r.lastInsertRowid) return Number(r.lastInsertRowid);
-  return (
+// 항목별 전용 컬럼은 해당 항목에서만 값을 갖는다. 어긋난 값이 오면 CHECK가 쓰기를 통째로
+// 막아 버려서, DB에 닿기 전에 여기서 비운다 — 각본 태그를 세 겹으로 막아 둔 것과 같은 이유다.
+const fitToItem = (w: MemoryWrite) => {
+  const person = w.itemType === "person";
+  const ofChar = w.owner === "char";
+  return {
+    relation: person ? (w.relation ?? null) : null,
+    contactMode: person ? (w.contactMode ?? null) : null,
+    region: person ? (w.region ?? null) : null,
+    lastMentionedAt: person ? (w.lastMentionedAt ?? null) : null,
+    endCondition: w.itemType === "ongoing" ? (w.endCondition ?? null) : null,
+    interest: ofChar ? (w.interest ?? null) : null,
+    userKnows: ofChar ? (w.userKnows ?? "unknown") : "known",
+  };
+};
+
+const MEMORY_COLUMNS = `character_id, item_type, owner, area, subject, value, origin, user_knows,
+   relation, contact_mode, region, last_mentioned_at, end_condition, interest, updated_at`;
+
+const memoryValues = (w: MemoryWrite, origin: MemoryOrigin): unknown[] => {
+  const f = fitToItem(w);
+  return [
+    w.characterId,
+    w.itemType,
+    w.owner,
+    w.area,
+    w.subject,
+    w.value,
+    origin,
+    f.userKnows,
+    f.relation,
+    f.contactMode,
+    f.region,
+    f.lastMentionedAt,
+    f.endCondition,
+    f.interest,
+    w.updatedAt,
+  ];
+};
+
+const memoryIdOf = (w: MemoryWrite, origin: MemoryOrigin): number =>
+  (
     db
       .prepare(
         `SELECT id FROM memory_items
-          WHERE character_id = ? AND item_type = ? AND owner = ? AND area = ? AND subject = ?`,
+          WHERE character_id = ? AND item_type = ? AND owner = ? AND area = ? AND subject = ? AND origin = ?`,
       )
-      .get(w.characterId, w.itemType, w.owner, w.area, w.subject) as {
+      .get(w.characterId, w.itemType, w.owner, w.area, w.subject, origin) as {
       id: number;
     }
   ).id;
+
+// 같은 키가 이미 있으면 내용만 갈아 끼운다 — 사실이 바뀌어도 행이 늘지 않는다.
+//
+// 출처를 확인하는 분기는 두지 않고 언제나 대화로 쌓인 행에만 쓴다. 캐릭터를 만들 때 정한
+// 값은 같은 키의 다른 행에 그대로 남아, 대화가 큰 정체성을 바꾸지 못한다.
+export const upsertMemoryItem = (w: MemoryWrite): number => {
+  const r = db
+    .prepare(
+      `INSERT INTO memory_items (${MEMORY_COLUMNS})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (character_id, item_type, owner, area, subject, origin) DO UPDATE SET
+         value = excluded.value,
+         user_knows = excluded.user_knows,
+         relation = excluded.relation,
+         contact_mode = excluded.contact_mode,
+         region = excluded.region,
+         last_mentioned_at = excluded.last_mentioned_at,
+         end_condition = excluded.end_condition,
+         interest = excluded.interest,
+         updated_at = excluded.updated_at
+       RETURNING id`,
+    )
+    .get(...memoryValues(w, "conversation")) as { id: number } | undefined;
+  // 넣은 행과 갈아 끼운 행 중 어느 쪽이든 그 행의 id가 필요하다. lastInsertRowid는 갈아 끼울
+  // 때 값이 서지 않고 태그를 넣는 것 같은 다른 쓰기에 밀리기도 해서, 문장이 돌려주는 값을 쓴다.
+  return r ? r.id : memoryIdOf(w, "conversation");
+};
+
+// 캐릭터를 만드는 배치만 쓰는 자리다. 여기서 한 번 넣은 행은 뒤에 아무도 고치지 않는다.
+export const insertCreationMemory = (w: MemoryWrite): number => {
+  const r = db
+    .prepare(
+      `INSERT OR IGNORE INTO memory_items (${MEMORY_COLUMNS})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING id`,
+    )
+    .get(...memoryValues(w, "creation")) as { id: number } | undefined;
+  // 같은 키가 이미 있으면 아무것도 넣지 않고 돌려주는 행도 없다 — 그때는 있던 행의 id를 찾는다.
+  return r ? r.id : memoryIdOf(w, "creation");
+};
+
+// 태그로 찾아 프롬프트에 넣은 기억에 그 사실을 적어 둔다. 오래 꺼내지 않은 기억을 골라
+// 응축할 때 쓸 값이라, 답장 한 번이 느려지지 않게 검색한 뒤 한 번에 세운다.
+export const markMemoriesRetrieved = (ids: number[], at: string): void => {
+  if (!ids.length) return;
+  const upd = db.prepare(
+    `UPDATE memory_items SET last_retrieved_at = ?, retrieval_count = retrieval_count + 1 WHERE id = ?`,
+  );
+  db.transaction(() => {
+    for (const id of ids) upd.run(at, id);
+  })();
 };
 
 export const getMemoryItemById = (id: number): MemoryRow | undefined =>
@@ -1208,8 +1423,11 @@ export const listMemoryItems = (
       ...(itemType ? [characterId, itemType] : [characterId]),
     ) as MemoryRow[];
 
-// 일이 끝나면 주소의 저장 항목 부분만 바뀐다(진행 중인 일 → 알게 된 유저 사실). 키는 그대로 두어
+// 일이 끝나면 키에서 저장 항목만 바뀐다(진행 중인 일 → 사실). 나머지 키는 그대로 두어
 // 이어 온 내용이 끊기지 않게 한다. 옮긴 자리에 같은 키가 이미 있으면 그쪽 내용을 갈아 끼운다.
+//
+// 옮긴 결과는 언제나 대화로 쌓인 행이다. 캐릭터를 만들 때 정한 행을 옮기면 그 행은 자리에
+// 그대로 두고 태그만 새 행에 복사한다 — 만들 때 정한 값은 지우지 않는다.
 export const moveMemoryItemType = (
   id: number,
   itemType: MemoryItemType,
@@ -1224,18 +1442,27 @@ export const moveMemoryItemType = (
     area: cur.area,
     subject: cur.subject,
     value: cur.value,
-    origin: cur.origin,
     userKnows: cur.user_knows,
-    interestLevel: cur.interest_level,
-    extraJson: cur.extra_json,
+    relation: cur.relation,
+    contactMode: cur.contact_mode,
+    region: cur.region,
+    lastMentionedAt: cur.last_mentioned_at,
+    endCondition: cur.end_condition,
+    interest: cur.interest,
     updatedAt,
   });
-  if (moved !== id) {
+  if (moved === id) return moved;
+  if (cur.origin === "creation") {
     db.prepare(
-      `UPDATE tags SET ref_id = ? WHERE kind = 'memory' AND ref_id = ?`,
+      `INSERT OR IGNORE INTO tags (character_id, kind, ref_id, tag)
+       SELECT character_id, 'memory', ?, tag FROM tags WHERE kind = 'memory' AND ref_id = ?`,
     ).run(moved, id);
-    db.prepare(`DELETE FROM memory_items WHERE id = ?`).run(id);
+    return moved;
   }
+  db.prepare(
+    `UPDATE tags SET ref_id = ? WHERE kind = 'memory' AND ref_id = ?`,
+  ).run(moved, id);
+  db.prepare(`DELETE FROM memory_items WHERE id = ?`).run(id);
   return moved;
 };
 

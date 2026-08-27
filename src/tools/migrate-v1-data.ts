@@ -3,6 +3,10 @@
 // 옮긴다. 후보 값은 커밋하지 않는 docs/migration/candidates.json에 있고, 이 파일에는
 // 검증 규칙과 반영 절차만 둔다.
 //
+// apply 명령은 v1 시절의 memory_items 모양(extra_json·저장 항목 넷)에 맞춰 쓴다. 스키마가
+// v4로 바뀐 뒤로는 이 명령이 실행되지 않는다. 운영 DB에는 2026-08-27에 이미 반영했고 다시
+// 돌릴 일이 없어 손대지 않고 둔다 — 그때 무엇을 어떤 규칙으로 옮겼는지 남기는 파일이다.
+//
 // 명령 5개:
 //   snapshot <characterId> <out.json>            legacy 상태를 스냅샷으로 저장
 //   diff-legacy <characterId> <snap.json> [out]  스냅샷 이후 늘어난 legacy 기록 확인

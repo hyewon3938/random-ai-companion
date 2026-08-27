@@ -543,7 +543,7 @@ const draftReconnect = async (
 const ensureReconnectSend = async (g: NightlyGathered): Promise<void> => {
   const exists = db
     .prepare(
-      `SELECT 1 FROM scheduled_sends WHERE character_id = ? AND date = ? LIMIT 1`,
+      `SELECT 1 FROM scheduled_messages WHERE character_id = ? AND date = ? LIMIT 1`,
     )
     .get(g.characterId, g.today);
   if (exists) return;

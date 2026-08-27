@@ -1,5 +1,7 @@
 import {
   upsertMemoryItem,
+  insertCreationMemory,
+  markMemoriesRetrieved,
   getMemoryItemById,
   listMemoryItems,
   moveMemoryItemType,
@@ -17,10 +19,10 @@ import {
   MEMORY_ITEM_TYPE_NAME,
   type MemoryItemType,
   type MemoryOwner,
-  type MemoryOrigin,
   type UserKnows,
-  type InterestLevel,
+  type Interest,
 } from "./labels.js";
+import { SEARCH_LIMIT } from "./thresholds.js";
 import { getKstNow, kstDateString, logicalDayStartTs } from "./kst.js";
 
 // 기억 저장과 태그 검색.
@@ -46,26 +48,24 @@ export const CORE_AREAS = [
 
 /**
  * 저장 항목별로 프롬프트에 넣을 개수 상한.
- * 한 항목이 자리를 다 차지하지 않게 두는 장치다. 실제 숫자는 며칠 써 보고 정하기로 했다
- * (time-and-memory.md 「고정된 기준값」에 결정 대상으로 올려 뒀다).
+ * 한 항목이 자리를 다 차지하지 않게 두는 장치다. 숫자는 thresholds.ts가 갖고 있고,
+ * 실제 프롬프트 길이를 보면서 조절한다.
  */
 export const SEARCH_LIMITS: Record<MemoryItemType, number> = {
-  ongoing: 5,
-  user_fact: 5,
-  identity: 4,
-  relationship: 4,
+  ongoing: SEARCH_LIMIT.ongoing,
+  person: SEARCH_LIMIT.person,
+  fact: SEARCH_LIMIT.fact,
 };
 
-/** 검색으로 골라 넣는 저장 항목. 정체성과 관계는 늘 들어가므로 여기 없다. */
-const SEARCHABLE: MemoryItemType[] = ["ongoing", "user_fact"];
+/**
+ * 태그로 찾아 넣을 수 있는 기억인지 본다.
+ * 캐릭터 쪽 사실은 정체성이라 늘 프롬프트에 들어간다 — 검색까지 걸리면 같은 줄이 두 번 들어간다.
+ */
+const searchable = (r: MemoryRow): boolean =>
+  !(r.item_type === "fact" && r.owner === "char");
 
 /** 꺼내는 순서 — 지금 진행 중인 것부터. */
-const TYPE_ORDER: MemoryItemType[] = [
-  "ongoing",
-  "user_fact",
-  "identity",
-  "relationship",
-];
+const TYPE_ORDER: MemoryItemType[] = ["ongoing", "person", "fact"];
 
 const stamp = (): string =>
   `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
@@ -94,53 +94,87 @@ export interface MemoryInput {
   subject: string;
   value: string;
   tags?: string[];
-  origin?: MemoryOrigin;
   userKnows?: UserKnows;
-  interestLevel?: InterestLevel | null;
-  extra?: Record<string, unknown> | null;
+  /** 주변 인물에만 쓰는 추가 정보. */
+  relation?: string | null;
+  contactMode?: string | null;
+  region?: string | null;
+  lastMentionedAt?: string | null;
+  /** 진행 중인 일이 끝났다고 볼 조건. */
+  endCondition?: string | null;
+  /** 유저가 이 주제에 보이는 관심 수준. 캐릭터 쪽 기억에만 쓴다. */
+  interest?: Interest | null;
 }
 
-/**
- * 기억 한 건을 저장한다. 같은 키가 있으면 내용을 갈아 끼우고, 태그도 새로 붙인 것으로 바꾼다.
- * 키의 두 낱말은 태그에도 그대로 들어간다 — 키로 찾던 것을 태그로도 찾을 수 있게.
- */
-export const saveMemory = (m: MemoryInput): number => {
-  const area = tidy(m.area);
-  const subject = tidy(m.subject);
-  const bad = keyProblem(area, subject);
-  if (bad) throw new Error(`키를 만들 수 없다(${area}/${subject}): ${bad}`);
+const toWrite = (m: MemoryInput, area: string, subject: string) => ({
+  characterId: m.characterId,
+  itemType: m.itemType,
+  owner: m.owner,
+  area,
+  subject,
+  value: tidy(m.value),
+  userKnows: m.userKnows,
+  relation: m.relation,
+  contactMode: m.contactMode,
+  region: m.region,
+  lastMentionedAt: m.lastMentionedAt,
+  endCondition: m.endCondition,
+  interest: m.interest,
+  updatedAt: stamp(),
+});
 
-  const id = upsertMemoryItem({
-    characterId: m.characterId,
-    itemType: m.itemType,
-    owner: m.owner,
-    area,
-    subject,
-    value: tidy(m.value),
-    origin: m.origin,
-    userKnows: m.userKnows,
-    interestLevel: m.interestLevel,
-    extraJson: m.extra ? JSON.stringify(m.extra) : null,
-    updatedAt: stamp(),
-  });
-
+const attach = (m: MemoryInput, id: number, area: string, subject: string) => {
   upsertArea(m.characterId, area);
   const tags = new Set([area, subject, ...(m.tags ?? []).map(tidy)]);
   setTags(m.characterId, "memory", id, [...tags].filter(Boolean));
   return id;
 };
 
-/** 일이 끝났을 때 저장 항목만 옮긴다(진행 중인 일 → 알게 된 유저 사실). */
+const checkedKey = (m: MemoryInput): [string, string] => {
+  const area = tidy(m.area);
+  const subject = tidy(m.subject);
+  const bad = keyProblem(area, subject);
+  if (bad) throw new Error(`키를 만들 수 없다(${area}/${subject}): ${bad}`);
+  return [area, subject];
+};
+
+/**
+ * 기억 한 건을 저장한다. 같은 키가 있으면 내용을 갈아 끼우고, 태그도 새로 붙인 것으로 바꾼다.
+ * 키의 두 낱말은 태그에도 그대로 들어간다 — 키로 찾던 것을 태그로도 찾을 수 있게.
+ *
+ * 쓰는 자리는 언제나 대화로 쌓인 행이다. 캐릭터를 만들 때 정한 행은 같은 키에 나란히 남아
+ * 있고 프롬프트에는 둘 다 들어간다 — 생성 때 정한 큰 정체성이 대화로 바뀌지 않는다는 원칙을
+ * 지시문이 아니라 이 쓰기 규칙 하나로 지킨다.
+ */
+export const saveMemory = (m: MemoryInput): number => {
+  const [area, subject] = checkedKey(m);
+  const id = upsertMemoryItem(toWrite(m, area, subject));
+  return attach(m, id, area, subject);
+};
+
+/**
+ * 캐릭터를 만들 때 정한 기억을 저장한다. 생성 배치만 쓰는 자리이고, 같은 키가 이미 있으면
+ * 그대로 둔다 — 이 행은 만든 뒤로 고치지 않는다.
+ */
+export const saveCreationMemory = (m: MemoryInput): number => {
+  const [area, subject] = checkedKey(m);
+  const id = insertCreationMemory(toWrite(m, area, subject));
+  return attach(m, id, area, subject);
+};
+
+/** 일이 끝났을 때 저장 항목만 옮긴다(진행 중인 일 → 사실). */
 export const moveMemory = (id: number, to: MemoryItemType): number =>
   moveMemoryItemType(id, to, stamp());
 
 export const memoryTags = (id: number): string[] => getTags("memory", id);
 
 export interface SearchOptions {
-  /** 어떤 저장 항목에서 찾을지. 기본은 검색으로 골라 넣는 두 가지. */
+  /** 어떤 저장 항목에서 찾을지. 안 주면 검색으로 골라 넣는 것 전부. */
   itemTypes?: MemoryItemType[];
   /** 저장 항목별 개수 상한. 안 주면 SEARCH_LIMITS. */
   limits?: Partial<Record<MemoryItemType, number>>;
+  /** 꺼낸 기록을 남길지. 화면에 보여주기만 하는 도구는 false로 부른다. */
+  track?: boolean;
 }
 
 /**
@@ -154,14 +188,17 @@ export const searchMemories = (
 ): MemoryRow[] => {
   const hits = findRefsByTags(characterId, "memory", tags);
   if (!hits.length) return [];
-  const types = opts.itemTypes ?? SEARCHABLE;
+  const types = opts.itemTypes;
   const rows = hits
     .map((h) => getMemoryItemById(h.ref_id))
-    .filter((r): r is MemoryRow => !!r && types.includes(r.item_type));
+    .filter(
+      (r): r is MemoryRow =>
+        !!r && searchable(r) && (!types || types.includes(r.item_type)),
+    );
 
   const picked: MemoryRow[] = [];
   for (const t of TYPE_ORDER) {
-    if (!types.includes(t)) continue;
+    if (types && !types.includes(t)) continue;
     const cap = opts.limits?.[t] ?? SEARCH_LIMITS[t];
     picked.push(
       ...rows
@@ -170,6 +207,11 @@ export const searchMemories = (
         .slice(0, cap),
     );
   }
+  if (opts.track !== false)
+    markMemoriesRetrieved(
+      picked.map((r) => r.id),
+      stamp(),
+    );
   return picked;
 };
 
@@ -180,11 +222,12 @@ export const searchTaggedRefs = (
   tags: string[],
 ): number[] => findRefsByTags(characterId, kind, tags).map((h) => h.ref_id);
 
-/** 늘 프롬프트에 들어가는 항목(정체성·관계). */
-export const alwaysIncluded = (characterId: number): MemoryRow[] => [
-  ...listMemoryItems(characterId, "identity"),
-  ...listMemoryItems(characterId, "relationship"),
-];
+/**
+ * 늘 프롬프트에 들어가는 기억 — 캐릭터 쪽 사실, 곧 정체성이다.
+ * 관계는 relationships 테이블이 갖고 있고, 프롬프트에 넣는 건 context.ts가 한다.
+ */
+export const alwaysIncluded = (characterId: number): MemoryRow[] =>
+  listMemoryItems(characterId, "fact").filter((r) => r.owner === "char");
 
 // 갱신 날짜를 함께 적는다 — 오늘 일인지 지난달 일인지를 모델이 지금 시각과 견줘 판단한다.
 const dayLabel = (updatedAt: string): string => {
