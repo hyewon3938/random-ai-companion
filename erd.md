@@ -134,14 +134,17 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 
 키·인덱스: PK `id`, UNIQUE `(character_id, item_type, owner, area, subject, origin)`, 인덱스 `(character_id, item_type)`
 
-데이터 한 건의 예시다. 앞 네 열을 합친 것이 키라서, 같은 자리에 새 사실이 오면 값을 고쳐 쓴다.
+데이터 한 건의 예시다. 앞 다섯 열을 합친 것이 키라서, 같은 자리에 새 사실이 오면 값을 고쳐 쓴다.
 
-| item_type | owner | area | subject | value |
-| --- | --- | --- | --- | --- |
-| fact | char | 취향 | 커피 | 산미 있는 원두를 좋아한다 |
-| fact | user | 취미 | 등산 | 주말마다 근교 산에 다닌다 |
-| ongoing | char | 일 | 포트폴리오 | 개인 작업을 다음 달까지 정리하려고 한다 |
-| person | char | 일 | 팀장 | 프로젝트 마감이 다가와 요즘 예민하다 |
+| item_type | owner | area | subject | origin | value |
+| --- | --- | --- | --- | --- | --- |
+| fact | char | 취향 | 커피 | creation | 산미 있는 원두를 좋아한다 |
+| fact | char | 취향 | 커피 | conversation | 요즘은 카페인을 줄여서 디카페인으로 마신다 |
+| fact | user | 취미 | 등산 | conversation | 주말마다 근교 산에 다닌다 |
+| ongoing | char | 일 | 포트폴리오 | conversation | 개인 작업을 다음 달까지 정리하려고 한다 |
+| person | char | 일 | 팀장 | creation | 프로젝트 마감이 다가와 요즘 예민하다 |
+
+첫 두 줄이 같은 키에 두 행이 놓인 경우다. 커피 취향은 캐릭터를 만들 때 정해진 값이라 대화에서 다른 이야기가 나와도 그 행은 건드리지 않고, 새벽 정리가 같은 키의 `conversation` 행에 새로 쓴다(이미 있으면 값만 고쳐 쓴다). 프롬프트에는 두 줄이 갱신 날짜와 함께 같이 들어가서, 캐릭터는 원래 산미 있는 원두를 좋아하지만 요즘은 디카페인을 마시는 사람으로 말한다.
 
 키는 영역과 단어를 짝지은 두 자리로 항상 만든다. 두 자리를 `취향/커피` 같은 한 문자열로 붙이지 않고 컬럼 둘로 나눠 저장하는 것은 태그 때문이 아니라, 나눠 두면 키가 한 자리나 세 자리로 어긋날 수 없고 저장할 때 남는 검사가 영역 자리의 이름이 areas 목록에 있는지 하나뿐이기 때문이다. 슬래시는 화면에 보여줄 때만 붙인다.
 
@@ -331,7 +334,7 @@ plan_json 안 블록의 두 태그도 영어 식별자로 저장한다. 답장 �
 ```mermaid
 erDiagram
     characters ||--o{ pending_replies : "대기 중인 답장"
-    characters ||--o{ scheduled_sends : "미리 만든 선톡"
+    characters ||--o{ scheduled_messages : "미리 만든 선톡"
     characters ||--o{ send_failures : "전송 실패 기록"
     pending_replies }o..|| messages : "user_msg_at이 가리킴"
 
@@ -347,7 +350,7 @@ erDiagram
         INTEGER character_id FK
         TEXT chat_id
     }
-    scheduled_sends {
+    scheduled_messages {
         INTEGER id PK
         INTEGER character_id FK
     }
@@ -401,7 +404,7 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 
 키·인덱스: PK `id`, 인덱스 `(status, send_at)`, 인덱스 `(chat_id, status)`
 
-**scheduled_sends** — 미리 만드는 선톡 둘(아침 · 안부)의 문안과 발송 창
+**scheduled_messages** — 미리 만드는 선톡 둘(아침 · 안부)의 문안과 발송 창
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
@@ -482,7 +485,7 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | day_actuals | 답장 파이프라인(붙잡기 즉시), 새벽 정리 | 프롬프트 조립(지난 시간은 실제로 읽음), 새벽 정리 |
 | messages | 답장 파이프라인, 선톡 모듈 | 프롬프트 조립(최근 대화), 새벽 정리, 채점·분석 |
 | pending_replies | 답장 파이프라인 | 답장 파이프라인(발송 틱·부팅 복구), 선톡 모듈(대기 중이면 선톡 미발송) |
-| scheduled_sends | 새벽 정리 | 선톡 모듈 |
+| scheduled_messages | 새벽 정리 | 선톡 모듈 |
 | recovery_marks | 답장 파이프라인 | 답장 파이프라인(부팅 복구) |
 | send_failures | 선톡 모듈 | 운영 점검 |
 | user_preferences | 없음 (자리만) | 없음 |
@@ -508,8 +511,8 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | 각본 블록의 활동 성격 | `personal` 개인 · `social` 사회 · `official` 공적 |
 | arcs.period 기간 | `year` 올해 · `season` 계절 · `month` 달 · `week` 주 |
 | day_plans.made_by | `nightly` 새벽 정리 · `ondemand` 대화 중 만든 임시 각본 |
-| scheduled_sends.kind 선톡 종류 | `morning` 아침 선톡 · `checkin` 안부 선톡 |
-| scheduled_sends.status | `pending` 대기 · `sent` 발송 · `skipped` 폐기 |
+| scheduled_messages.kind 선톡 종류 | `morning` 아침 선톡 · `checkin` 안부 선톡 |
+| scheduled_messages.status | `pending` 대기 · `sent` 발송 · `skipped` 폐기 |
 | pending_replies.status | `waiting` 대기 · `sent` 발송 · `superseded` 새 메시지로 폐기 · `failed` 실패 |
 | characters.status | `active` 대화 중 · `ended` 이별 |
 | messages.role | `user` 유저 · `assistant` 캐릭터 |
