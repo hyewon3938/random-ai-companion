@@ -31,7 +31,7 @@ import {
 
 // 자리 비움 예고(선-불가 선톡): 곧 한동안 답장이 어려운 일(운동·샤워·외출·회의 등)로
 // 들어가기 직전이면 조용히 사라지지 않고 "이제 ~하러 가요, 답 늦어요"를 먼저 남긴다.
-// 연속으로 바쁜 사이(러닝→샤워)의 짧은 틈에는 경계에서 "막 뛰고 왔어요, 이제 씻고 올게요"로 메운다.
+// 연속으로 바쁜 일 사이의 짧은 틈에는 그 경계에서 방금 한 일과 다음 일을 함께 알려 메운다.
 // '찾을 때 있어주기'의 연장 — 막연한 침묵(이탈)을 '알고 하는 기다림'으로 바꾼다. 블록당 한 번.
 
 const toMin = (hhmm: string): number => {
@@ -261,12 +261,7 @@ const presenceTickBody = async (): Promise<void> => {
         .prepare(
           `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
         )
-        .get(
-          c.chat_id,
-          dayStart,
-          '%"kind":"away"%',
-          `%"block":"${b.start}"%`,
-        );
+        .get(c.chat_id, dayStart, '%"kind":"away"%', `%"block":"${b.start}"%`);
       if (dup) continue;
       target = b;
       between = prevAway;
@@ -295,7 +290,11 @@ const presenceTickBody = async (): Promise<void> => {
         config.model, // 실시간성이라 대화 모델(sonnet)
       );
       // 발송 직전 재확인 — LLM을 기다리는 사이 대화 상태가 바뀌었으면(유저 추가 발화·다른 발송) 접는다
-      if (draft.send && draft.text && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+      if (
+        draft.send &&
+        draft.text &&
+        lastMessage(c.chat_id)?.sent_at === last.sent_at
+      ) {
         await sendProactive(c.chat_id, c.id, draft.text, "away", {
           block: target.start,
         });

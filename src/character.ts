@@ -44,7 +44,7 @@ export const rollChemistry = (): Chemistry => ({
   richness: pick(AXES.richness),
 });
 
-const BIBLE_SYSTEM = `너는 대화형 캐릭터의 설정(바이블)을 만드는 작가다. 과장된 픽션 캐릭터가 아니라, 실제로 존재할 법한 평범하고 구체적인 한국의 30대 전후 사람을 만든다. 장르물 문법(재벌·아이돌·판타지)은 금지. 생활의 결이 느껴지는 디테일로.`;
+const BIBLE_SYSTEM = `너는 대화형 캐릭터의 설정(바이블)을 만드는 작가다. 과장된 픽션 캐릭터가 아니라, 실제로 존재할 법한 평범하고 구체적인 한국 사람을 만든다. 장르물 문법(재벌·아이돌·판타지)은 금지. 생활의 결이 느껴지는 디테일로.`;
 
 const biblePrompt = (
   chemistry: Chemistry,

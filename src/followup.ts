@@ -20,12 +20,16 @@ import {
   releaseProactive,
   logErr,
 } from "./bot.js";
-import { currentBlock, OUTPUT_FORMAT_COMPACT, SPEECH_TEXTURE_COMPACT } from "./context.js";
+import {
+  currentBlock,
+  OUTPUT_FORMAT_COMPACT,
+  SPEECH_TEXTURE_COMPACT,
+} from "./context.js";
 import { proactiveAllowed } from "./proactive-policy.js";
 import { kstClock, kstVerbalTime, logicalDayStartTs } from "./kst.js";
 
-// 침묵 팔로업: 대화 중 유저가 한동안 조용하고, 지금 우진의 각본이 '자기 삶을 한 마디 흘릴 만한
-// 전환점'이면(점심 가기·퇴근·운동 등), 우진이 먼저 근황을 남긴다. 밤에 계획된 아침 안부와 다른 채널.
+// 침묵 팔로업: 대화 중 유저가 한동안 조용하고, 지금 캐릭터의 각본이 '자기 삶을 한 마디 흘릴 만한
+// 전환점'이면(밥 먹으러 가기·일 마치기·운동 등), 캐릭터가 먼저 근황을 남긴다. 밤에 계획된 아침 안부와 다른 채널.
 // 그 순간의 각본을 봐야 하므로 판단·문안을 LLM이 한다. 매달리지 않도록 총량·간격을 강하게 제한.
 
 // 기계처럼 똑같이 반복되지 않게 — 하루 상한도, 침묵 임계도 그때그때 다르게(단 안정적으로).
@@ -79,10 +83,10 @@ ${renderUserBlock(chatId)}
 아직 이어가지 못한 것: ${openLoops.join(" / ") || "(없음)"}
 
 상대가 한참 조용하다. 이 전환점(지금 네가 하는 일)에서 네 근황을 가볍게 한 마디 흘긴다면 뭐라고 할까?
-- 점심 가는 참이면 이제 밥 먹으러 간다고 가볍게 흘리는 결. 퇴근·운동도 마찬가지. (문구는 위 [말투] 지시대로 직접 쓴다.)
+- 위에 적힌 지금 하는 일을 막 시작하는 참이면 이제 그걸 하러 간다고 가볍게 흘리는 결. (문구는 위 [말투] 지시대로 직접 쓴다.)
 - 자기 삶 공유가 핵심. 가볍게 질문 하나 얹어도 좋다(질문엔 물음표).
 - 매달리거나 서운함을 내비치지 않는다. 재촉 금지.
-- 지금 각본이 흘릴 만한 전환점이 아니거나(회의·잠·집중 업무), 억지스러우면 send=false.
+- 지금 각본이 흘릴 만한 전환점이 아니거나(자는 중이거나 손·정신이 묶인 일 중), 억지스러우면 send=false.
 - 지금 관계 말투 유지. 1~2개 말풍선(줄바꿈).
 
 JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
@@ -210,7 +214,11 @@ const followupTickBody = async (): Promise<void> => {
       );
       // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 말을 걸었으면(답장이 담당) 근황톡을 접고,
       // 다른 경로가 이미 보냈으면(마지막 메시지가 바뀜) 겹쳐 보내지 않는다.
-      if (draft.send && draft.text && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+      if (
+        draft.send &&
+        draft.text &&
+        lastMessage(c.chat_id)?.sent_at === last.sent_at
+      ) {
         await sendProactive(c.chat_id, c.id, draft.text, "catchup");
         console.log(`[followup] sent to ${c.chat_id} @ ${block.activity}`);
       }
