@@ -8,7 +8,6 @@ import {
   type CharacterRow,
 } from "../db.js";
 import { ensureMonthPlan } from "../life-plan.js";
-import type { Bible } from "../character.js";
 import { kstDateString } from "../kst.js";
 
 const row = db
@@ -22,9 +21,8 @@ if (!row) {
 }
 
 const ym = process.argv[2] ?? kstDateString().slice(0, 7);
-const bible = JSON.parse(row.genesis_json) as Bible;
 
-const made = await ensureMonthPlan(row.id, bible, ym);
+const made = await ensureMonthPlan(row.id, ym);
 console.log(made ? `생성함: ${ym}` : `이미 있음: ${ym} (내용만 표시)`);
 
 const events = getSchedulesInMonth(row.id, ym, "char");

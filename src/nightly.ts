@@ -712,7 +712,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   const g = gatherNightlyInput(character);
   await ensureArcs(g.characterId, bibleArcMaterial(g.bible));
   // 이번 달(+월말이면 다음 달) 리듬을 확보한다. ensureTodayPlan이 오늘 시드를 읽어 각본에 잇는다
-  await ensureRhythmRunway(g.characterId, g.bible, g.today);
+  await ensureRhythmRunway(g.characterId, g.today);
   // 달력 경계 아크 갱신 — 침묵 중엔 생략(볼 사람이 없고, 복귀 후 다음 경계에 이어 쓴다)
   if (g.silenceTier === "normal")
     await refreshArcs(g).catch((e) =>
@@ -757,7 +757,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   if (g.diaryExists) {
     if (g.silenceTier === "normal") {
       // 정식(어제 일기 반영) 각본 확보 — 새벽 대화가 만든 lazy 각본이 있으면 교체된다
-      await ensureTodayPlan(g.characterId, g.bible, true);
+      await ensureTodayPlan(g.characterId, true);
     } else if (g.silenceTier === "checkin") {
       // 외부 경로가 일기만 응고하고 재연결 문안을 안 만들었을 수 있다 — 없으면 여기서 준비
       await ensureReconnectSend(g);
@@ -804,7 +804,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
 
   // 오늘 각본을 먼저 만들고, 아침 안부의 발송 시점을 그 각본의 삶(기상·출근·자리)과 연동한다.
   // 밤 정리 경로(nightly=true)라 새벽 대화가 만든 lazy 각본이 있으면 정식 각본으로 교체된다.
-  await ensureTodayPlan(g.characterId, g.bible, true);
+  await ensureTodayPlan(g.characterId, true);
   const anchors = morningAnchors(getDayPlan(g.characterId, g.today));
   const isWorkday = g.todayLabel.includes("근무");
   const styles: [string, string, string][] = [];

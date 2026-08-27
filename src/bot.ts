@@ -2,7 +2,7 @@ import { Bot, type ApiClientOptions } from "grammy";
 import { Agent } from "node:https";
 import { inspect } from "node:util";
 import { config } from "./config.js";
-import { createDaepyoCharacter, type Bible } from "./character.js";
+import { createDaepyoCharacter } from "./character.js";
 import { ensureTodayPlan } from "./day-plan.js";
 import { buildSystemBlocks } from "./context.js";
 import { polishBubble } from "./bubble-polish.js";
@@ -380,9 +380,8 @@ const respond = async (
   try {
     const character = getActiveCharacter(chatId);
     if (!character) return;
-    const bible = JSON.parse(character.genesis_json) as Bible;
     // 오늘의 하루 각본이 없으면 생성(그날 첫 대화 때 한 번). 실패해도 대화는 계속
-    await ensureTodayPlan(character.id, bible).catch((e) =>
+    await ensureTodayPlan(character.id).catch((e) =>
       logErr("[bot] day plan error:", e),
     );
     // 지금 답장하는 유저 메시지. 생성이 끝났을 때 이보다 새 메시지가 와 있으면 이 답장은 버린다.

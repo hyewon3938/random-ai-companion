@@ -17,6 +17,7 @@ import {
 } from "./db.js";
 import {
   alwaysIncluded,
+  orderedIdentity,
   tagsInText,
   searchMemories,
   searchTaggedRefs,
@@ -242,24 +243,8 @@ const FINAL_CHECK = `[보내기 전 마지막 점검]
 - 예: "어디 살아요" → "어디 살아요?" / "밥은 먹었어요" → "밥은 먹었어요?" / "안 힘들어요" → "안 힘들어요?" / "오늘 뭐 했어요" → "오늘 뭐 했어요?"
 - 질문이 아닌 평서문에는 억지로 붙이지 않는다.`;
 
-// 정체성 — 캐릭터 쪽 사실 전부. 생성 때 정한 행(creation)을 먼저, 대화로 쌓인 행(conversation)을
-// 뒤에 둔다: 같은 항목이 두 줄이면 뒤가 최신이라 이긴다. 이 층은 새벽 정리 때만 바뀐다.
-const orderedIdentity = (rows: MemoryRow[]): MemoryRow[] => {
-  const creation = rows
-    .filter((r) => r.origin === "creation")
-    .sort((a, b) => a.id - b.id);
-  const accrued = rows
-    .filter((r) => r.origin === "conversation")
-    .sort((a, b) =>
-      a.updated_at === b.updated_at
-        ? a.id - b.id
-        : a.updated_at < b.updated_at
-          ? -1
-          : 1,
-    );
-  return [...creation, ...accrued];
-};
-
+// 정체성 — 캐릭터 쪽 사실 전부. 줄 순서(creation 먼저·conversation 뒤, 뒤가 최신)는
+// memory.ts orderedIdentity가 정한다. 이 층은 새벽 정리 때만 바뀐다.
 const identitySection = (rows: MemoryRow[]): string => {
   const ordered = orderedIdentity(rows);
   if (!ordered.length) return "";

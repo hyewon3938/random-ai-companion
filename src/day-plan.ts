@@ -10,7 +10,12 @@ import {
   getDaySeed,
   type DaySeed,
 } from "./db.js";
-import type { Bible } from "./character.js";
+import {
+  alwaysIncluded,
+  orderedIdentity,
+  identityValue,
+  memoryLine,
+} from "./memory.js";
 import { ensureRhythmRunway } from "./life-plan.js";
 import { kstDateString, todayLabel } from "./kst.js";
 import {
@@ -71,7 +76,9 @@ const seedLine = (seed: DaySeed | undefined): string => {
 };
 
 const planPrompt = (
-  bible: Bible,
+  persona: string,
+  sleep: string | null,
+  weeklyRoutine: string | null,
   date: string,
   label: string,
   schedules: string,
@@ -80,8 +87,12 @@ const planPrompt = (
   seed: DaySeed | undefined,
 ): string => `아래 인물의 ${date} (${label}) 하루를 시간 블록으로 짜줘.
 
-[인물]
-${JSON.stringify({ identity: bible.identity, life: bible.life, tastes: bible.tastes }, null, 2)}
+[인물 — 같은 항목이 두 줄이면 아래쪽이 최신]
+${persona || "(없음)"}
+
+[생활 리듬 — 시간표의 기준. 여기 없는 시각·습관을 지어내지 않는다]
+- 잠: ${sleep ?? "(값 없음 — 무리 없는 일반적인 수면으로)"}
+- 매주 루틴: ${weeklyRoutine ?? "(없음)"}
 
 [오늘의 컨디션 시드 — 미리 정해진 오늘의 몸 상태·기상 성향]
 ${seedLine(seed)}
@@ -100,8 +111,8 @@ ${diary || "(없음)"}
 - 단, 어제 일기에 실제 여파(회식·술·새벽까지 대화 등)가 있으면 그게 시드보다 우선이다 — 실제로 늦게 잤으면 시드가 '보통'이어도 오늘 아침은 피곤하게.
 
 [원칙]
-- 근무일이면: 기상은 위 컨디션 시드에 맞춰 그날의 시각을 정한다 — 보통이면 5시 50분~6시 20분, '이른'이면 5시 30분 무렵(눈이 일찍 떠짐), '늦잠'이면 6시 40분~7시(허둥지둥한 아침). 씻고 준비, 자차로 출근, 오전 업무, 점심(12:00~13:00), 오후 업무, 퇴근(보통 18시 넘어서, 가끔 더 늦게), 저녁 운동(그날 컨디션·사정에 따라 밥 전/후·건너뛰기도), 집에서 이 사람의 성격·취향에 맞는 저녁, 자정 전후 취침.
-- 쉬는 날(주말·공휴일)이면: 늦잠, 밀린 잠·집안일과 이 사람 취향의 여가로 여유로운 흐름.
+- 근무일이면: 기상·취침 시각은 위 [생활 리듬]의 잠 값이 기준이고, 컨디션 시드가 그날의 시각을 정한다 — '보통'이면 기준대로, '이른'이면 기준보다 일찍 눈이 떠지고, '늦잠'이면 기준을 놓쳐 허둥지둥한 아침. 출퇴근 방식·근무 형태·점심·퇴근 시각 같은 하루의 뼈대는 [인물]의 직업·생활 값에서 뽑는다. 저녁은 [생활 리듬]의 매주 루틴 중 그 요일 몫과 [인물]의 취향에서 — 루틴 활동도 그날 컨디션·사정에 따라 건너뛰거나 시간이 밀린다.
+- 쉬는 날(주말·공휴일)이면: 늦잠, 밀린 잠·집안일과 이 사람 취향의 여가로 여유로운 흐름. 매주 루틴 중 그 요일 것이 있으면 넣는다.
 - 이벤트 1~3개를 배치(들쭉날쭉하게 — 이벤트 많은 날도 없는 날도 있다). 두 종류가 있다:
   - 미리 아는 일정 (advance_known=true): 점심 회식, 팀원과 저녁 약속, 퇴근 후 서점 들르기 같은 예정된 일
   - 닥쳐야 아는 일 (advance_known=false): 오후에 갑자기 바빠짐, 급한 업무, 예정에 없던 호출, 갑자기 마트에 감, 친구의 급한 전화 같은 그때 가서야 겪는 일 — 이런 갑작스러운 일을 하루 한둘은 자연스럽게 껴 넣는다.
@@ -137,26 +148,11 @@ const normalize = (plan: DayPlan): DayPlan => ({
   })),
 });
 
-// nightly=true는 밤 정리 경로: 어제 일기가 확정된 뒤의 정식 생성이라, 새벽 대화가 미리 만든
-// lazy 각본(어제 일기 없이 이틀 전 일기를 참조한 것)이 있으면 교체한다. 기본(false)은 대화 중
-// lazy 생성 — 이미 각본이 있으면 무엇이든 그대로 둔다.
-export const ensureTodayPlan = async (
-  characterId: number,
-  bible: Bible,
-  nightly = false,
-): Promise<void> => {
-  const date = kstDateString();
-  const existing = getDayPlan(characterId, date);
-  // 이미 있으면 비용 없이 종료(런웨이 확인도 생략). 단 밤 정리 경로는 lazy분이면 다시 만든다.
-  if (
-    existing &&
-    !(nightly && getDayPlanMadeBy(characterId, date) === "ondemand")
-  )
-    return;
-  // 오늘의 컨디션 시드가 담긴 이번 달 리듬을 확보(이미 있으면 no-op). 실패해도 각본은 계속
-  await ensureRhythmRunway(characterId, bible, date).catch((e) =>
-    console.error("[day-plan] rhythm runway error:", e),
-  );
+// 각본 생성 프롬프트 조립 — 재료는 전부 DB에서 읽는다: 정체성(생활/잠·생활/매주 루틴 포함),
+// 컨디션 시드, 그날 일정, 아크, 어제 일기. ensureTodayPlan이 쓰고, 검증 도구가 조립 결과를
+// 눈으로 확인할 때도 부른다.
+export const buildPlanPrompt = (characterId: number, date: string): string => {
+  const identity = orderedIdentity(alwaysIncluded(characterId));
   const seed = getDaySeed(characterId, date);
   // 일정 슬롯에서 이 날의 캐릭터 예정을 가져와 각본에 반영한다
   const todays = getUpcomingSchedules(characterId, date)
@@ -175,9 +171,41 @@ export const ensureTodayPlan = async (
       }
     })
     .join("");
+  return planPrompt(
+    identity.map(memoryLine).join("\n"),
+    identityValue(identity, "생활", "잠"),
+    identityValue(identity, "생활", "매주 루틴"),
+    date,
+    todayLabel(),
+    todays,
+    arcs,
+    lastDiary,
+    seed,
+  );
+};
+
+// nightly=true는 밤 정리 경로: 어제 일기가 확정된 뒤의 정식 생성이라, 새벽 대화가 미리 만든
+// lazy 각본(어제 일기 없이 이틀 전 일기를 참조한 것)이 있으면 교체한다. 기본(false)은 대화 중
+// lazy 생성 — 이미 각본이 있으면 무엇이든 그대로 둔다.
+export const ensureTodayPlan = async (
+  characterId: number,
+  nightly = false,
+): Promise<void> => {
+  const date = kstDateString();
+  const existing = getDayPlan(characterId, date);
+  // 이미 있으면 비용 없이 종료(런웨이 확인도 생략). 단 밤 정리 경로는 lazy분이면 다시 만든다.
+  if (
+    existing &&
+    !(nightly && getDayPlanMadeBy(characterId, date) === "ondemand")
+  )
+    return;
+  // 오늘의 컨디션 시드가 담긴 이번 달 리듬을 확보(이미 있으면 no-op). 실패해도 각본은 계속
+  await ensureRhythmRunway(characterId, date).catch((e) =>
+    console.error("[day-plan] rhythm runway error:", e),
+  );
   const plan = await chatJson<DayPlan>(
     PLAN_SYSTEM,
-    planPrompt(bible, date, todayLabel(), todays, arcs, lastDiary, seed),
+    buildPlanPrompt(characterId, date),
     3000,
     config.modelDeep,
   );

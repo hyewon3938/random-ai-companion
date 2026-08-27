@@ -239,6 +239,43 @@ export const searchTaggedRefs = (
 export const alwaysIncluded = (characterId: number): MemoryRow[] =>
   listMemoryItems(characterId, "fact").filter((r) => r.owner === "char");
 
+// 정체성 줄 정렬 — 생성 때 정한 행(creation)을 먼저, 대화로 쌓인 행(conversation)을
+// 뒤에 둔다: 같은 항목이 두 줄이면 뒤가 최신이라 이긴다. 대화 프롬프트(context.ts)와
+// 각본·월 리듬 생성(day-plan·life-plan)이 같은 순서를 쓴다.
+export const orderedIdentity = (rows: MemoryRow[]): MemoryRow[] => {
+  const creation = rows
+    .filter((r) => r.origin === "creation")
+    .sort((a, b) => a.id - b.id);
+  const accrued = rows
+    .filter((r) => r.origin === "conversation")
+    .sort((a, b) =>
+      a.updated_at === b.updated_at
+        ? a.id - b.id
+        : a.updated_at < b.updated_at
+          ? -1
+          : 1,
+    );
+  return [...creation, ...accrued];
+};
+
+/** 정체성 전부를 프롬프트 재료 줄로 — 각본·월 리듬 생성의 [인물] 자리가 쓴다. */
+export const identityLines = (characterId: number): string =>
+  orderedIdentity(alwaysIncluded(characterId)).map(memoryLine).join("\n");
+
+/** 정체성에서 키 하나의 값. 같은 키가 여러 줄이면 가장 최신(뒤쪽) 것. */
+export const identityValue = (
+  rows: MemoryRow[],
+  area: string,
+  subject: string,
+): string | null => {
+  const ordered = orderedIdentity(rows);
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    const r = ordered[i];
+    if (r.area === area && r.subject === subject) return r.value;
+  }
+  return null;
+};
+
 // 갱신 날짜를 함께 적는다 — 오늘 일인지 지난달 일인지를 모델이 지금 시각과 견줘 판단한다.
 const dayLabel = (updatedAt: string): string => {
   const [y, m, d] = updatedAt.slice(0, 10).split("-");
