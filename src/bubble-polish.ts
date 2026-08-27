@@ -5,6 +5,21 @@
 // 큰따옴표는 특유의 AI 느낌이라 발화에서 지운다(인용·강조 모두 따옴표 없이).
 export const stripDquotes = (s: string): string => s.replace(/[“”„‟"]/gu, "");
 
+// 이모지는 프롬프트의 표기 규칙(context.ts OUTPUT_FORMAT)으로 막고, 새어 나온 것을 여기서 지운다.
+// 기본 표시가 그림인 문자와 변이 선택자가 붙어 그림이 된 문자만 본다 — ™·↔처럼 글자로 쓰는 기호와
+// 웃음 자음(ㅋㅋ·ㅎㅎ)은 건드리지 않는다. 지운 자리에 남는 공백도 함께 정리한다.
+export const stripEmoji = (s: string): string =>
+  s
+    .replace(/[\u{1F1E6}-\u{1F1FF}]{2}/gu, "")
+    .replace(/[0-9#*]\uFE0F?\u20E3/gu, "")
+    .replace(
+      /(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F)[\u{1F3FB}-\u{1F3FF}\uFE0F\u200D\u20E3\p{Extended_Pictographic}]*/gu,
+      "",
+    )
+    .replace(/[\uFE0F\u200D\u20E3]/gu, "")
+    .replace(/[ \t]{2,}/gu, " ")
+    .trim();
+
 // 쉼표도 마찬가지 — 사람은 메신저에서 쉼표를 거의 안 찍는다. 한글 사이와 말풍선 끝의
 // 쉼표만 지운다(1,000 같은 숫자 표기나 영문 안의 쉼표는 그대로).
 export const stripCommas = (s: string): string =>
@@ -54,6 +69,6 @@ export const fixQuestion = (bubble: string): string => {
   return bubble;
 };
 
-// 말풍선 하나에 후처리 전부 적용. 쉼표·따옴표를 먼저 지워야 물음표 판정이 실제 끝 어미를 본다.
+// 말풍선 하나에 후처리 전부 적용. 이모지·쉼표·따옴표를 먼저 지워야 물음표 판정이 실제 끝 어미를 본다.
 export const polishBubble = (raw: string): string =>
-  fixQuestion(stripCommas(stripDquotes(raw)));
+  fixQuestion(stripCommas(stripDquotes(stripEmoji(raw))));

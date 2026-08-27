@@ -13,7 +13,7 @@ import {
   type CharacterRow,
 } from "./db.js";
 import type { Bible } from "./character.js";
-import { SPEECH_TEXTURE_COMPACT } from "./context.js";
+import { OUTPUT_FORMAT_COMPACT, SPEECH_TEXTURE_COMPACT } from "./context.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory } from "./day-plan.js";
 import {
@@ -83,7 +83,7 @@ const presencePrompt = (
   lastLine: string,
   fixed: boolean,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
 ${renderUserBlock(chatId)}
 지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다.
 ${
@@ -102,7 +102,7 @@ ${pending ? `상대가 방금 남긴 말이 있다: "${lastLine.replace(/\n/g, "
 - 나가는 경우: 이제 그 일을 하러 가고 그동안 답이 늦어질 거라고 가볍게 알리는 결.
 - 방금 뭔가 하고 와서 또 나가는 경우: 방금 한 걸 자연스럽게 언급하며 이제 다음 걸 하러 간다고 말한다.
 - (예시 문구를 그대로 베끼지 말고, 위 [말투] 지시의 말투로 지금 상황에 맞게 직접 쓴다.)
-- 짧게 1~2개 말풍선(줄바꿈으로 구분). 이모지 없음. 재촉·서운함·매달림 없음. 말투는 위 [말투] 지시대로.
+- 짧게 1~2개 말풍선(줄바꿈으로 구분). 재촉·서운함·매달림 없음. 말투는 위 [말투] 지시대로.
 - 억지스러우면(딱히 알릴 만한 상황이 아니면) send=false.
 JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
 
@@ -112,11 +112,11 @@ const returnPrompt = (
   bible: Bible,
   activity: string,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
 ${renderUserBlock(chatId)}
 지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다. 너는 방금 ${activity} 을(를) 끝내고 돌아왔다. 그 사이 상대에게선 답이 없었다.
 - 돌아왔음을 가볍게 알린다(그 일이 이제 끝났고 돌아왔다는 결). 아까 하려던 안부를 자연스럽게 이어도 좋다.
-- 짧게 1~2개 말풍선(줄바꿈). 이모지 없음. 재촉·서운함 없음. 말투는 위 [말투] 지시대로.
+- 짧게 1~2개 말풍선(줄바꿈). 재촉·서운함 없음. 말투는 위 [말투] 지시대로.
 JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
 
 // 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.

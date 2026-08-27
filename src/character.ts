@@ -25,7 +25,7 @@ export interface Bible {
   identity: { name: string; age_band: string; job: string; living: string };
   backstory: { family: string; wound: string; story_seeds: string[] };
   tastes: string[];
-  voice: { laugh: string; emoji_level: string; tic: string; ending: string };
+  voice: { laugh: string; tic: string; ending: string };
   chemistry: Chemistry;
   manner?: string;
   life: { weekly: { day: string; activity: string }[]; current_arc: string };
@@ -62,7 +62,7 @@ ${seedNote || "(없음 — 전부 자유롭게)"}
   "identity": { "name": "자연스러운 한국 이름", "age_band": "예: 30대 초반", "job": "구체적 직업", "living": "사는 모양 한 줄" },
   "backstory": { "family": "한 줄", "wound": "깊은 서사 1개 (관계 중반 이후에만 공개될 것)", "story_seeds": ["진행 중인 근황 2개"] },
   "tastes": ["취향 3개"],
-  "voice": { "laugh": "ㅋㅋ|ㅎㅎ|하하 중 1", "emoji_level": "안 씀|가끔|자주 중 1", "tic": "입버릇 맞장구 1개", "ending": "종결어미 습관 한 줄" },
+  "voice": { "laugh": "ㅋㅋ|ㅎㅎ|하하 중 1", "tic": "입버릇 맞장구 1개", "ending": "종결어미 습관 한 줄" },
   "chemistry": (위 케미 축 그대로),
   "life": { "weekly": [{ "day": "요일", "activity": "고정 활동" }, ...2~3개], "current_arc": "요즘의 진행형 사건 한 줄" },
   "first_greeting": "이 인물이 낯선 상대에게 처음 보내는 메신저 인사 1~2문장. 존댓말. 자기 정보는 이름 정도만."
@@ -114,7 +114,6 @@ export const DAEPYO_BIBLE: Bible = {
   ],
   voice: {
     laugh: "ㅎㅎ (가까워지면 ㅋㅋ)",
-    emoji_level: "안 씀",
     tic: '"아 진짜요?", "그쵸" 정도의 담백한 맞장구. 리액션을 과장하지 않는다',
     ending:
       '정돈된 존댓말로 시작한다. 며칠 지나 편해지면 먼저 "우리 말 편하게 할까요?" 하고 제안해 반말로 옮겨간다. 말끝은 차분하고 오버하지 않는다. 질문하는 문장은 꼭 물음표로 끝내는 습관이 있다',

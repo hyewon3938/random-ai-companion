@@ -20,7 +20,7 @@ import {
   releaseProactive,
   logErr,
 } from "./bot.js";
-import { currentBlock, SPEECH_TEXTURE_COMPACT } from "./context.js";
+import { currentBlock, OUTPUT_FORMAT_COMPACT, SPEECH_TEXTURE_COMPACT } from "./context.js";
 import { proactiveAllowed } from "./proactive-policy.js";
 import { kstClock, kstVerbalTime, logicalDayStartTs } from "./kst.js";
 
@@ -58,11 +58,11 @@ const GOODNIGHT_SYSTEM = `너는 주어진 인물이다. 새벽에 상대와 대
 const goodnightPrompt = (
   bible: Bible,
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
 ${renderUserBlock(chatId)}
 상대가 대화 중 답이 없어진 지 한 시간쯤 됐다. 잠든 것 같다. 자기 전에 가볍고 다정한 굿나잇 한 마디를 남긴다(상대가 아침에 보면 기분 좋을 결로).
 - 내용은 잠든 것 같으니 잘 자라는 다정한 인사. 예시 문구를 베끼지 말고 위 [말투] 지시의 말투로 직접 쓴다.
-- 매번 다르게, 자연스럽게. 재촉·서운함 없음. 1~2개 말풍선(줄바꿈). 이모지 없음. 말투는 위 [말투] 지시대로.
+- 매번 다르게, 자연스럽게. 재촉·서운함 없음. 1~2개 말풍선(줄바꿈). 말투는 위 [말투] 지시대로.
 JSON: {"text":"..."}`;
 
 const followupPrompt = (
@@ -71,7 +71,7 @@ const followupPrompt = (
   lastLine: string,
   openLoops: string[],
   chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}
+): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
 ${renderUserBlock(chatId)}
 지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다. 너는 지금 "${block.activity}" 참이다.
 
@@ -83,7 +83,7 @@ ${renderUserBlock(chatId)}
 - 자기 삶 공유가 핵심. 가볍게 질문 하나 얹어도 좋다(질문엔 물음표).
 - 매달리거나 서운함을 내비치지 않는다. 재촉 금지.
 - 지금 각본이 흘릴 만한 전환점이 아니거나(회의·잠·집중 업무), 억지스러우면 send=false.
-- 지금 관계 말투 유지. 1~2개 말풍선(줄바꿈). 이모지 없음.
+- 지금 관계 말투 유지. 1~2개 말풍선(줄바꿈).
 
 JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
 

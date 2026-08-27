@@ -26,7 +26,7 @@ import {
   type DaySeed,
 } from "./db.js";
 import type { Bible } from "./character.js";
-import { SPEECH_TEXTURE_COMPACT } from "./context.js";
+import { OUTPUT_FORMAT_COMPACT, SPEECH_TEXTURE_COMPACT } from "./context.js";
 import type { DayPlan } from "./day-plan.js";
 import { ensureTodayPlan } from "./day-plan.js";
 import {
@@ -477,7 +477,7 @@ const SEND_SYSTEM = `너는 주어진 인물 그 자체로, 상대에게 먼저 
 const sendPrompt = (
   g: NightlyGathered,
   moment: string,
-): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}${SPEECH_TEXTURE_COMPACT}
+): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
 오늘은 ${g.today} (${g.todayLabel}).
 
 ${renderUserBlock(g.chatId)}
@@ -496,7 +496,7 @@ ${g.userSchedulesUpcoming || "(없음)"}
 - 각본상 오늘 유난히 일찍 깼거나 늦잠이면 그 결을 자연스럽게 반영한다(일찍 깬 날은 눈이 일찍 떠졌다는 결, 늦잠이면 허둥지둥해서 회사 와서야 연락하는 결).
 - 이어갈 것(위 목록)이나 상대의 오늘 일정이 있으면 그중 하나를 자연스럽게 엮는다. 특히 상대의 일정이 오늘이면 그걸 챙기는 게 우선이다.
 - 한 통에 하나만. 캐묻지 않는다. 용건 없는 애정 표시성 핑은 금지.
-- 말투는 위 [말투] 지시대로 쓴다. 질문엔 물음표. 1~3개 말풍선(줄바꿈 구분). 이모지 없음.
+- 말투는 위 [말투] 지시대로 쓴다. 질문엔 물음표. 1~3개 말풍선(줄바꿈 구분).
 - 상대 일정이 점심·저녁에 있으면 window를 "점심"/"저녁"으로 바꿔도 된다(그 외엔 "아침").
 - 아주 가끔은(그날 각본이 유난히 정신없으면) 건너뛰어도 사람답다 → send=false.
 
@@ -509,12 +509,12 @@ const RECONNECT_SYSTEM = `너는 주어진 인물이다. 상대에게서 연락�
 
 const reconnectPrompt = (
   g: NightlyGathered,
-): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}${SPEECH_TEXTURE_COMPACT}
+): string => `너는 이 인물이다: ${JSON.stringify(g.bible.identity)}${speechGuard(g.chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
 ${renderUserBlock(g.chatId)}
 상대와 마지막으로 연락이 오간 지 ${g.silenceDays}일쯤 됐다. 지금은 저녁이다.
 - "요새 많이 바쁘지?" 같은, 근황을 가볍게 묻는 결. 네 근황 한 조각을 곁들여도 좋다.
 - 서운함·재촉·"왜 연락 없어" 금지. 답장을 요구하는 압박 금지. 길게 쓰지 않는다.
-- 1~2개 말풍선(줄바꿈 구분). 이모지 없음. 말투는 위 [말투] 지시대로.
+- 1~2개 말풍선(줄바꿈 구분). 말투는 위 [말투] 지시대로.
 JSON: {"text":"..."}`;
 
 const draftReconnect = async (
