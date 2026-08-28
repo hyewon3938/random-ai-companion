@@ -309,10 +309,10 @@ erDiagram
 | --- | --- | --- | --- |
 | character_id | INTEGER | O | PK, FK characters.id |
 | date | TEXT | O | PK, 논리일 |
-| plan_json | TEXT | O | 블록 5필드 — 시각 · 활동 · 답장 여건 · 활동 성격 · 출처 |
-| made_by | TEXT | O | 누가 만들었나 — `nightly` · `ondemand` |
+| plan_json | TEXT | O | 블록 6필드 — 시작·종료 시각 · 활동 · 답장 여건 · 활동 성격 · 미리 아는 일정인지 여부 |
+| made_by | TEXT | O | 만든 경로 — `nightly` · `ondemand` |
 
-plan_json 안 블록의 두 태그도 영어 식별자로 저장한다. 답장 여건은 `instant` · `intermittent` · `unavailable`, 활동 성격은 `personal` · `social` · `official`이다. JSON 안이라 CHECK가 걸리지 않아 쓰기 코드에서 검사한다.
+plan_json 안 블록의 두 태그도 영어 식별자로 저장한다. 답장 여건은 `instant` · `intermittent` · `unavailable`, 활동 성격은 `personal` · `social` · `official`이다. JSON 안이라 CHECK가 걸리지 않아 쓰기 코드에서 검사한다. 블록의 `advance_known`은 미리 아는 일정인지를 담는데, 미리 아는 일정이면 시작 10분 전에 자리를 비운다고 예고하고 닥쳐야 아는 일이면 시작한 뒤에 알린다.
 
 **day_actuals** — 계획과 다르게 지낸 기록. 각본을 교체해도 남도록 별도 테이블
 
