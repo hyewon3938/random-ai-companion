@@ -336,7 +336,10 @@ erDiagram
     characters ||--o{ pending_replies : "대기 중인 답장"
     characters ||--o{ scheduled_messages : "미리 만든 선톡"
     characters ||--o{ send_failures : "전송 실패 기록"
+    characters ||--o{ llm_calls : "모델 호출 기록"
+    characters ||--o{ trace_events : "슬랙에 게시할 내용"
     pending_replies }o..|| messages : "user_msg_at이 가리킴"
+    llm_calls }o..o{ prompt_blobs : "내용 해시가 가리킴"
 
     characters {
         INTEGER id PK
@@ -366,6 +369,20 @@ erDiagram
     llm_usage {
         TEXT date PK
         TEXT model PK
+    }
+    llm_calls {
+        INTEGER id PK
+        INTEGER character_id FK
+        TEXT purpose "어느 자리의 호출인가"
+        TEXT system_hashes "본문을 가리키는 해시"
+    }
+    prompt_blobs {
+        TEXT hash PK
+    }
+    trace_events {
+        INTEGER id PK
+        INTEGER character_id FK
+        TEXT dedupe_key "같은 키는 한 번만"
     }
 ```
 
@@ -464,6 +481,69 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | cache_read_tokens | INTEGER | O | |
 | output_tokens | INTEGER | O | |
 
+**llm_calls** — 모델 호출 하나가 행 하나. 답이 이상할 때 그 호출에 무엇을 넣었고 무엇이 나왔는지 열어 본다
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | O | PK |
+| character_id | INTEGER | | FK characters.id |
+| chat_id | TEXT | | |
+| purpose | TEXT | O | 어느 자리의 호출인가 — `reply` 답장 · `hold` 붙잡기 판정 · `day_plan` 하루 각본 · `life_plan` 월 리듬 · `arc` 흐름 · `diary` 일기 · `extract` 기억 정리 · `genesis` 캐릭터 생성 · 선톡 여섯(`morning` · `reconnect` · `catchup` · `goodnight` · `away` · `comeback`) · `tool` 개발 도구 |
+| model | TEXT | O | |
+| max_tokens | INTEGER | | 출력 상한 |
+| attempt | INTEGER | O | 같은 자리에서 몇 번째로 부른 호출인가. 응답 형식이 어긋나 다시 부르면 attempt가 2인 행이 따로 생긴다 |
+| system_hashes | TEXT | | 시스템 프롬프트 층별 해시 목록(JSON 배열) |
+| turns_hash | TEXT | | 함께 보낸 대화 기록의 해시 |
+| output_hash | TEXT | | 모델이 낸 글의 해시 |
+| input_tokens | INTEGER | | |
+| cache_write_tokens | INTEGER | | |
+| cache_read_tokens | INTEGER | | |
+| output_tokens | INTEGER | | |
+| latency_ms | INTEGER | | 호출에 걸린 시간 |
+| error | TEXT | | 실패한 호출의 사유 |
+| context_json | TEXT | | 판단 근거 — 검색한 태그와 꺼낸 기억, 개수 상한에 걸려 빠진 후보, 답장 텀이 나온 길과 결과, 다듬기 전후, 말풍선 수와 길이 |
+| code_version | TEXT | | 호출한 코드의 판을 가리키는 src 파일 지문 12자. 컨테이너에 git 기록이 없어 커밋 해시 대신 쓴다 |
+| created_at | TEXT | O | |
+
+키·인덱스: PK `id`, 인덱스 `(created_at)`, 인덱스 `(character_id, purpose, id)`
+
+purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때마다 스키마를 옮겨야 하고, 제약에 걸린 INSERT는 기록을 통째로 잃기 때문이다. 목록에 없는 값은 코드의 타입이 컴파일할 때 막는다.
+
+판단 근거를 호출한 그 시점에 함께 적는 이유는 나중에 같은 프롬프트를 다시 만들 수 없어서다. 기억 검색은 꺼낸 기록을 남기는 쓰기 동작이라 같은 검색을 다시 돌리면 값이 달라지고, 각본과 기억은 새벽마다 새로 쓰인다.
+
+**prompt_blobs** — 프롬프트와 출력 본문. 키가 내용 해시라 같은 글자는 한 벌만 쌓인다
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| hash | TEXT | O | PK, 본문의 sha256 앞 16자 |
+| text | TEXT | O | 본문 |
+| bytes | INTEGER | O | 본문 크기 |
+| first_seen_at | TEXT | O | 이 내용을 처음 저장한 시각 |
+| last_seen_at | TEXT | O | 같은 내용이 마지막으로 다시 나온 시각 |
+
+불변층과 일간층은 하루 종일 같은 글자라, 호출마다 본문을 다시 담으면 데이터베이스가 호출 수에 비례해 커진다. 내용 해시를 키로 두면 답장 한 건에 새로 쌓이는 양이 40KB에서 7.5KB로 줄어든다. 본문은 90일이 지나면 지우고 메타와 사용량은 남긴다. 새벽 5시 50분에 오래된 행의 해시와 판단 근거를 비우고, 아무 호출도 가리키지 않게 된 본문을 함께 지운다.
+
+**trace_events** — 슬랙 트레이스 채널에 게시할 내용을 쌓아 두는 자리. 파이프라인이 행으로 적어 두면 1분 간격 틱이 가져가 게시한다
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | O | PK |
+| character_id | INTEGER | | FK characters.id |
+| kind | TEXT | O | 게시 종류 |
+| dedupe_key | TEXT | | 같은 내용을 두 번 쌓지 않게 하는 키, UNIQUE |
+| thread_key | TEXT | | 스레드의 부모가 자기 이름으로 적는 키 |
+| parent_key | TEXT | | 스레드의 자식이 부모를 가리키는 키 |
+| text | TEXT | O | 게시할 본문 |
+| status | TEXT | O | `pending` 대기 · `sent` 게시 · `failed` 실패 · `skipped` 건너뜀 |
+| slack_ts | TEXT | | 게시된 슬랙 메시지의 시각. 자식이 이 스레드에 붙을 때 쓴다 |
+| attempts | INTEGER | O | |
+| last_error | TEXT | | |
+| created_at | TEXT | O | |
+
+키·인덱스: PK `id`, UNIQUE `dedupe_key`, 인덱스 `(status, id)`, 인덱스 `(thread_key)`
+
+보낼 것을 행으로 남겨 두기 때문에 봇이 다시 뜨거나 슬랙이 응답하지 않아도 게시가 밀리기만 한다. 부모가 아직 게시되지 않은 자식은 다음 틱으로 미루고, 채널에 봇이 없는 경우처럼 다시 시도해도 결과가 같은 오류는 재시도하지 않고 실패로 적는다.
+
 ## 쓰는 곳과 읽는 곳
 
 쓰는 주체는 다섯이다. 생성 배치(캐릭터를 만들 때 한 번), 새벽 정리(하루 한 번), 답장 파이프라인(대화할 때), 선톡 모듈(발송할 때), 월 리듬(한 달치를 만들 때). 대화 중에는 저장 항목을 판정하지 않고 오늘 메모에만 적고, 기억으로 옮기는 일은 새벽 정리가 한다.
@@ -490,6 +570,9 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | send_failures | 선톡 모듈 | 운영 점검 |
 | user_preferences | 없음 (자리만) | 없음 |
 | llm_usage | llm 래퍼 | 운영 점검 |
+| llm_calls | llm 래퍼(호출할 때), 답장 파이프라인(판단 근거) | 운영 점검 |
+| prompt_blobs | llm 래퍼 | 운영 점검(llm_calls의 해시로 찾아 읽음) |
+| trace_events | 각본 알림 틱, 파이프라인 | 슬랙 게시 틱 |
 
 ## 값이 정해진 컬럼
 
@@ -516,21 +599,23 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | pending_replies.status | `waiting` 대기 · `sent` 발송 · `superseded` 새 메시지로 폐기 · `failed` 실패 |
 | characters.status | `active` 대화 중 · `ended` 이별 |
 | messages.role | `user` 유저 · `assistant` 캐릭터 |
+| trace_events.status | `pending` 대기 · `sent` 게시 · `failed` 실패 · `skipped` 건너뜀 |
 | messages 메타의 발송 종류, send_failures.kind | `reply` 답장 · `recover` 복구 · `morning` 아침 · `checkin` 안부 · `away` 자리비움 · `catchup` 근황 · `goodnight` 밤 인사 (send_failures는 뒤 셋만) |
 
-영역 이름은 캐릭터마다 목록이 달라서 CHECK 대신 areas 테이블로 관리한다. 각본 블록의 두 태그는 plan_json 안에 있어 CHECK가 걸리지 않으므로 쓰기 코드에서 검사한다.
+영역 이름은 캐릭터마다 목록이 달라서 CHECK 대신 areas 테이블로 관리한다. 각본 블록의 두 태그는 plan_json 안에 있어 CHECK가 걸리지 않으므로 쓰기 코드에서 검사한다. llm_calls.purpose는 값이 목록으로 정해져 있는데도 CHECK를 걸지 않는다. 호출하는 자리가 늘 때마다 제약을 다시 만들어야 하고 제약에 걸린 INSERT는 기록을 통째로 잃어서, 코드의 타입으로 막는 쪽을 택했다.
 
 plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한다. 어떤 값이 들어가는지는 테이블마다 적어 두었고, 이름만 남은 결정이다.
 
 ## 외래 키가 아닌 참조
 
-의도한 트레이드오프 여섯 곳이다. 전부 쓰는 주체가 한두 곳으로 정해져 있어 정합성은 쓰기 코드에서 검증한다.
+의도한 트레이드오프 일곱 곳이다. 전부 쓰는 주체가 한두 곳으로 정해져 있어 정합성은 쓰기 코드에서 검증한다.
 
 - **tags의 kind + ref_id** — 기억 · 일기 · 예정된 일 세 테이블을 한 테이블이 가리키므로 FK를 걸 수 없다. 테이블을 셋으로 쪼개면 FK가 생기는 대신, 사람 이름 하나로 인물 · 일정 · 일기를 함께 찾는 검색이 쿼리 세 번이 되어서 한 테이블을 택했다.
 - **schedules의 parent_kind + parent_id** — 일정을 만든 항목이 기억 데이터(memory_items)일 수도, 앞선 일정(schedules)일 수도 있어 tags처럼 종류 열과 id 둘로 가리킨다.
 - **day_actuals.block_start** — day_plans의 plan_json 안 블록을 시각으로 가리킨다. 블록이 JSON 문서 안에 있어 FK 대상이 아니다.
 - **이름 문자열 일치** — memory_items 주변 인물 행의 subject, schedules.with_name, tags.tag는 같은 사람을 같은 문자열로 적는 규칙으로 이어진다. 연결 테이블 대신 이름을 식별자로 쓰는 것이 이 시스템의 설계라, 동명이인은 이름을 늘려 가른다(예: 회사 민수).
 - **영역 이름** — memory_items · schedules의 area는 areas에 있는 이름을 문자열로 적는다. 새벽의 목록 관리가 항목을 다른 영역으로 다시 앉힐 때 여러 테이블을 같이 고치는 자리라, FK 대신 저장할 때의 이름 검사로 지킨다.
+- **llm_calls의 세 해시** — system_hashes · turns_hash · output_hash가 prompt_blobs.hash를 가리킨다. 본문을 90일 뒤에 지우면서 호출 메타와 사용량은 남기므로, 가리키는 본문이 없는 행이 정상으로 생긴다.
 - **today_notes.message_id** — 메모의 원문이 있는 messages 행을 가리킨다. 나중에 원문을 확인할 때만 쓰는 참조라 FK 없이 id만 적는다.
 
 ## 지금 구조에서 바뀌는 것
