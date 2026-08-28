@@ -209,6 +209,8 @@ const TABLES: Record<string, string> = {
   meta_json TEXT`,
 
   // 만들어 둔 답장을 보관했다가 정한 시각에 보낸다. 봇이 내려가도 보낼 것이 남는다.
+  // kind='wake'는 답장이 아니라 깨우기 표시다 — 불가 구간에는 답장을 미리 만들지 않고,
+  // 구간이 끝나는 시각에 이 행이 울리면 그때 쌓인 메시지를 읽고 한 번에 답장을 만든다.
   pending_replies: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id TEXT NOT NULL,
@@ -217,7 +219,8 @@ const TABLES: Record<string, string> = {
   bubbles_json TEXT NOT NULL,
   note_to_save TEXT,
   send_at TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover')),
+  kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover','wake')),
+  meta_json TEXT,
   status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','sent','superseded','failed')),
   attempts INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
@@ -699,6 +702,50 @@ const migrateToV5 = (): void => {
 
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < SCHEMA_VERSION) migrateToV5();
+
+// pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
+// 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를
+// 다투지 않고, 어느 쪽이 먼저 적용돼도 안전하다.
+const migratePendingWake = (): void => {
+  const row = db
+    .prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pending_replies'`,
+    )
+    .get() as { sql: string } | undefined;
+  if (!row || (row.sql.includes("'wake'") && row.sql.includes("meta_json")))
+    return;
+
+  db.pragma("foreign_keys = OFF");
+  db.pragma("legacy_alter_table = ON");
+  db.transaction(() => {
+    db.exec(`ALTER TABLE pending_replies RENAME TO pending_replies_old`);
+    db.exec(`DROP INDEX IF EXISTS idx_pending_replies_due`);
+    db.exec(`DROP INDEX IF EXISTS idx_pending_replies_chat`);
+    db.exec(`CREATE TABLE pending_replies (${TABLES.pending_replies}\n)`);
+    db.exec(`
+      INSERT INTO pending_replies
+        (id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save,
+         send_at, kind, status, attempts, last_error, created_at, sent_at)
+      SELECT id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save,
+             send_at, kind, status, attempts, last_error, created_at, sent_at
+        FROM pending_replies_old`);
+    db.exec(`DROP TABLE pending_replies_old`);
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_pending_replies_due ON pending_replies (status, send_at)`,
+    );
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_pending_replies_chat ON pending_replies (chat_id, status)`,
+    );
+    const broken = db.pragma("foreign_key_check") as unknown[];
+    if (broken.length)
+      throw new Error(
+        `[db] pending_replies 재생성 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
+      );
+  })();
+  db.pragma("legacy_alter_table = OFF");
+  console.log(`[db] pending_replies에 wake·meta_json을 더했다`);
+};
+migratePendingWake();
 
 db.pragma("foreign_keys = ON");
 
@@ -2011,6 +2058,7 @@ export interface PendingReplyRow {
   note_to_save: string | null;
   send_at: string;
   kind: string;
+  meta_json: string | null;
   attempts: number;
   created_at: string;
 }
@@ -2023,14 +2071,15 @@ export const insertPendingReply = (p: {
   noteToSave: string | null;
   sendAt: string;
   kind: string;
+  metaJson?: string | null;
   createdAt: string;
 }): number =>
   Number(
     db
       .prepare(
         `INSERT INTO pending_replies
-           (chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, meta_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         p.chatId,
@@ -2040,6 +2089,7 @@ export const insertPendingReply = (p: {
         p.noteToSave,
         p.sendAt,
         p.kind,
+        p.metaJson ?? null,
         p.createdAt,
       ).lastInsertRowid,
   );
@@ -2047,7 +2097,7 @@ export const insertPendingReply = (p: {
 export const getWaitingPendingReplies = (): PendingReplyRow[] =>
   db
     .prepare(
-      `SELECT id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, attempts, created_at
+      `SELECT id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, meta_json, attempts, created_at
          FROM pending_replies WHERE status = 'waiting' ORDER BY send_at`,
     )
     .all() as PendingReplyRow[];
@@ -2059,18 +2109,42 @@ export const hasWaitingPendingReply = (chatId: string): boolean =>
     )
     .get(chatId);
 
+export const hasWaitingWakeRow = (chatId: string): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'wake' LIMIT 1`,
+    )
+    .get(chatId);
+
 // 유저가 대기 중에 말을 더 걸면 만들어 둔 답장을 버린다 — 그 사이 대화가 바뀌었기 때문.
+// 깨우기 표시는 답장이 아니라 남긴다 — 메시지가 더 쌓여도 구간 끝에 한 번 깨는 건 같다.
 export const supersedePendingReplies = (chatId: string): number[] => {
   const ids = (
     db
       .prepare(
-        `SELECT id FROM pending_replies WHERE chat_id = ? AND status = 'waiting'`,
+        `SELECT id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind != 'wake'`,
       )
       .all(chatId) as { id: number }[]
   ).map((r) => r.id);
   if (ids.length)
     db.prepare(
-      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting'`,
+      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind != 'wake'`,
+    ).run(chatId);
+  return ids;
+};
+
+// 깨우기 표시를 거둔다 — 불가 구간이 아닌 길로 답장이 나가게 됐을 때(붙잡힘 등).
+export const supersedeWakeRows = (chatId: string): number[] => {
+  const ids = (
+    db
+      .prepare(
+        `SELECT id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'wake'`,
+      )
+      .all(chatId) as { id: number }[]
+  ).map((r) => r.id);
+  if (ids.length)
+    db.prepare(
+      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind = 'wake'`,
     ).run(chatId);
   return ids;
 };

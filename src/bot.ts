@@ -9,7 +9,12 @@ import {
   createUserCharacter,
   type CharacterGender,
 } from "./character.js";
-import { ensureTodayPlan } from "./day-plan.js";
+import {
+  ensureTodayPlan,
+  isAwayUnavail,
+  type DayPlan,
+  type PlanBlock,
+} from "./day-plan.js";
 import { ensureMonthPlan } from "./life-plan.js";
 import { buildSystemBlocks, type BuildTrace } from "./context.js";
 import { polishBubble } from "./bubble-polish.js";
@@ -20,29 +25,43 @@ import {
 } from "./reply-timing.js";
 import {
   dropPendingReplies,
+  dropWakeRows,
   isWaiting,
   schedulePendingReply,
+  scheduleWakeRow,
   setPendingSender,
+  setWakeHandler,
 } from "./pending.js";
-import { chat, type CallMeta, type ChatTurn } from "./llm.js";
+import { chat, chatJson, type CallMeta, type ChatTurn } from "./llm.js";
+import { saveTodayNote } from "./memory.js";
 import {
   currentSpeechLevel,
   db,
   getActiveCharacter,
+  getDayPlan,
   getRecentMessages,
   getRecoveryMark,
   getRelationship,
+  hasWaitingWakeRow,
   lastMessage,
   logMessage,
+  proactiveCountToday,
   recentUserGaps,
   setCallContext,
   setRecoveryMark,
   setSpeechLevel,
+  PROACTIVE_DAILY_MAX,
   type CharacterRow,
   type MessageRow,
   type PendingReplyRow,
 } from "./db.js";
-import { getKstNow, kstDateString, timeMarkerFor } from "./kst.js";
+import {
+  getKstNow,
+  kstClock,
+  kstDateString,
+  logicalDayStartTs,
+  timeMarkerFor,
+} from "./kst.js";
 
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
 // reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 선톡,
@@ -556,12 +575,82 @@ const pendingUserTurn = (
   return { at: last.sent_at, text: mine.map((m) => m.text).join("\n") };
 };
 
+const toMinOfDay = (hhmm: string): number => {
+  const [h, m] = hhmm.split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+};
+
+// 예고를 이미 보낸 자리 비움 블록이 곧 시작되는가 — 그 사이에 온 말은 배웅 답이 된다.
+// 예고가 아직 안 나갔으면(닥친 일이거나 예고 틱이 못 돌았으면) 평범한 답장으로 간다.
+const upcomingAnnouncedAway = (
+  chatId: string,
+  characterId: number,
+): PlanBlock | null => {
+  const raw = getDayPlan(characterId, kstDateString());
+  if (!raw) return null;
+  let blocks: PlanBlock[];
+  try {
+    blocks = (JSON.parse(raw) as DayPlan).blocks;
+  } catch {
+    return null;
+  }
+  const nowMin = toMinOfDay(kstClock());
+  for (const b of blocks) {
+    if (!isAwayUnavail(b)) continue;
+    const rel = toMinOfDay(b.start) - nowMin;
+    if (rel <= 0 || rel > 15) continue;
+    const announced = db
+      .prepare(
+        `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
+      )
+      .get(
+        chatId,
+        logicalDayStartTs(),
+        '%"kind":"away"%',
+        `%"block":"${b.start}"%`,
+      );
+    if (announced) return b;
+  }
+  return null;
+};
+
+// 배웅 답 — 나간다고 이미 알린 뒤, 나가기 전까지 온 말에 짧게 받는 상황 문단.
+const farewellSituation = (b: PlanBlock): string =>
+  [
+    `[배웅 답 — 곧 자리를 비운다]`,
+    `너는 곧 ${b.start}부터 "${b.activity}" 때문에 자리를 비운다. 상대에게는 이미 예고해 뒀다.`,
+    `나가기 직전의 짧은 주고받음이다 — 지금 온 말에 짧게만 받고, 새 화제를 벌이지 않는다. 필요하면 다녀와서 이어 가자는 결로.`,
+  ].join("\n");
+
+// 몰아 답장 — 불가 구간이 끝나 깨어난 자리. 그 사이 온 메시지를 한 번에 읽고 답하는 상황 문단.
+const gatherSituation = (activity: string): string =>
+  [
+    `[몰아 답장 — 방금 자리에서 돌아왔다]`,
+    `너는 방금 "${activity}"을(를) 끝냈다. 대화 기록 끝의 상대 메시지들은 그 동안 온 것이라 이제야 본다.`,
+    `이제 끝나고 봤다는 결로, 쌓인 말을 한 번에 자연스럽게 받는다. 메시지가 여러 개면 억지로 하나하나 다 짚지 말고 흐름으로 답한다.`,
+  ].join("\n");
+
+// 복귀 인사 — 예고하고 나간 사이 상대가 답이 없었을 때, 돌아왔음을 먼저 알리는 상황 문단.
+const returnSituation = (activity: string): string =>
+  [
+    `[문안 — 지금 보낼 복귀 인사 한 통]`,
+    `너는 아까 곧 자리를 비운다고 알리고 다녀왔다. 방금 "${activity}"을(를) 끝내고 돌아왔는데, 그 사이 상대에게선 답이 없었다.`,
+    `- 돌아왔음을 가볍게 알린다(그 일이 이제 끝났고 돌아왔다는 결). 아까 하려던 안부를 자연스럽게 이어도 좋다. 매달림이 아니라 자연스러운 복귀 인사다.`,
+    `- 짧게 1~2개 말풍선(줄바꿈 구분). 재촉·서운함 없음.`,
+    `- 억지스러우면 send=false.`,
+    ``,
+    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
+  ].join("\n");
+
 // 답장 한 번의 순서: 텀 결정 → 생성 → 대기 → 발송.
 //
 // 예전에는 각본상 자리를 비운 시간만큼 먼저 기다린 뒤 생성했다. 그러면 30분 뒤에 나가는 답장도
 // 방금 대화를 보고 쓴 것처럼 읽혔고, 그사이 일정이 바뀐 것도 반영하지 못했다.
 // 지금은 유저 말이 도착한 참에 답장을 만들어 두고, 정한 시각에 그대로 내보낸다.
 // 만들어 둔 답장은 pending_replies에 남아 프로세스가 다시 떠도 이어진다.
+//
+// 답장 불가 구간만 예외다 — 몇 시간 뒤의 답장을 지금 만들지 않고, 깨우기 표시(wake 행)를 걸어
+// 구간이 끝날 때 쌓인 메시지를 한 번에 읽고 답한다(setWakeHandler 아래).
 const respond = async (
   chatId: string,
   kind: "reply" | "recover" = "reply",
@@ -588,12 +677,40 @@ const respond = async (
         ? {
             waitMs: 0,
             held: null,
+            gather: null,
             trace: { path: "recover", block: null, asked: false },
           }
         : await decideReplyTiming(character.id, turn.text);
     if (timing.held)
       console.log(
         `[hold] ${chatId} ${timing.held.activity} → ${timing.held.outcome}`,
+      );
+
+    // 답장 불가 구간 — 지금 만들지 않는다. 구간 끝에 울릴 깨우기 표시만 걸어 두면
+    // 그때 쌓인 메시지를 한 번에 읽고 답한다. 표시가 이미 걸려 있으면 메시지만 쌓는다.
+    if (timing.gather) {
+      if (!hasWaitingWakeRow(chatId))
+        scheduleWakeRow({
+          chatId,
+          characterId: character.id,
+          userMsgAt: turn.at,
+          waitMs: timing.waitMs,
+          meta: timing.gather,
+        });
+      else
+        console.log(
+          `[pending] 깨우기 이미 걸림 — 메시지만 쌓는다 (chat=${chatId})`,
+        );
+      // 이 메시지의 답장 책임은 깨우기 행이 진다 — 복구 틱이 다시 답하지 않게 표시한다.
+      setRecoveryMark(chatId, turn.at);
+      return;
+    }
+    // 불가 구간이 아닌 길로 답장이 나간다 — 걸려 있던 깨우기 표시가 있으면 거둔다.
+    // (붙잡혀 일정을 접었거나 구간이 끝난 경우. 지금 만드는 답장이 쌓인 메시지까지 함께 답한다.)
+    const droppedWake = dropWakeRows(chatId);
+    if (droppedWake)
+      console.log(
+        `[pending] 깨우기 ${droppedWake}건 거둠 — 지금 답장이 대신한다 (chat=${chatId})`,
       );
 
     // 말투 래칫: 최근 답장이 반말로 정착했으면(휴리스틱 판정) 관계의 말투 값을 casual로
@@ -607,19 +724,21 @@ const respond = async (
 
     // 2. 지금 만든다
     // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
-    // 대기가 길면 답장이 도착하는 시점을 꼬리에 적어 준다 — 세 시간 뒤에 나갈 말을
-    // 방금 본 것처럼 쓰지 않게. searchText는 이번 발화 — 태그 검색의 재료.
-    // 무엇을 찾아 넣었는지(검색 태그·기억)를 받아 둔다 — 답장 호출 기록에 함께 남긴다.
+    // searchText는 이번 발화 — 태그 검색의 재료. 무엇을 찾아 넣었는지(검색 태그·기억)를
+    // 받아 둔다 — 답장 호출 기록에 함께 남긴다. 예고해 둔 자리 비움이 곧 시작되면
+    // 배웅 답 상황 문단을 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다).
     const built: BuildTrace = {
       tags: [],
       memories: [],
       oldDiaries: [],
       dropped: [],
     };
+    const away =
+      kind === "reply" ? upcomingAnnouncedAway(chatId, character.id) : null;
     const system = buildSystemBlocks(character.id, chatId, {
-      sendsInMs: timing.waitMs,
       searchText: turn.text,
       trace: built,
+      ...(away ? { situation: farewellSituation(away) } : {}),
     });
     const turns = toTurns(getRecentMessages(chatId, 40));
     const meta: CallMeta = {
@@ -740,6 +859,131 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
         : {}),
     },
   );
+});
+
+// 깨우기 표시가 울리는 자리 — 답장 불가 구간이 끝났다. 갈래는 셋:
+// ① 그 사이 온 메시지가 있으면 몰아 답장 한 번 ("방금 끝났고 이제 봤다"가 사실인 시점에 만든다)
+// ② 온 말은 없지만 자리 비움을 예고해 뒀으면 복귀 인사 ("이제 끝났어")
+// ③ 둘 다 아니면 조용히 지나간다.
+// presence.ts에 따로 있던 복귀 알림 경로를 여기로 합쳤다 — 답장과 복귀 인사가 겹쳐 나가는
+// 이중 발송이 구조적으로 사라진다(깨우기 행이 있는 동안 isWaiting이 선톡 틱을 전부 막는다).
+setWakeHandler(async (row: PendingReplyRow) => {
+  const chatId = row.chat_id;
+  // 디바운스·답장 생성이 진행 중이면 그쪽이 답한다(불가 구간은 이미 끝났으니 평범한 길로 나간다).
+  if (pending.has(chatId) || responding.has(chatId)) return;
+  let meta: { activity?: string; blockStart?: string } = {};
+  try {
+    meta = JSON.parse(row.meta_json ?? "{}") as typeof meta;
+  } catch {
+    /* 깨우기 자체는 유효 — 활동 이름 없이 진행한다 */
+  }
+  const activity = meta.activity ?? "하던 일";
+  const last = lastMessage(chatId);
+
+  // ① 몰아 답장 — 마지막 말이 유저 차례로 남아 있으면 그 사이 온 메시지가 있다는 뜻.
+  if (last?.role === "user") {
+    const turn = pendingUserTurn(chatId);
+    if (!turn) return;
+    const system = buildSystemBlocks(row.character_id, chatId, {
+      searchText: turn.text,
+      situation: gatherSituation(activity),
+    });
+    const turns = toTurns(getRecentMessages(chatId, 40));
+    const wakeMeta: CallMeta = {
+      purpose: "reply",
+      characterId: row.character_id,
+      chatId,
+    };
+    let { text, stay, note } = parseReplyTags(
+      await chat(system, turns, 1024, config.model, wakeMeta),
+    );
+    if (!text) {
+      const retry = parseReplyTags(
+        await chat(system, turns, 1024, config.model, {
+          ...wakeMeta,
+          attempt: 2,
+        }),
+      );
+      text = retry.text;
+      stay = stay || retry.stay;
+      note = retry.note ?? note;
+    }
+    if (stay) recordHold(row.character_id);
+    if (!text) {
+      console.warn(`[wake] empty reply — skip (chat=${chatId})`);
+      return;
+    }
+    // 만드는 동안 유저가 말을 더 보냈으면 버린다 — 디바운스 타이머가 합쳐서 다시 만든다.
+    const now = pendingUserTurn(chatId);
+    if (now && now.at !== turn.at) {
+      console.log(`[wake] 생성 중 새 메시지 도착 — 폐기 (chat=${chatId})`);
+      return;
+    }
+    // 바로 보낸다 — 구간이 끝나는 시각이 이미 이 답장의 텀이다.
+    const bubbles = toBubbles(text);
+    const { sent, error } = await sendBubbleList(chatId, bubbles);
+    if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
+    if (error)
+      console.warn(`[wake] 부분 발송 ${sent.length}/${bubbles.length}`);
+    logMessage(
+      chatId,
+      row.character_id,
+      "assistant",
+      sent.join("\n"),
+      nowIso(),
+      {
+        kind: "reply",
+        gathered: meta.blockStart ?? true,
+        ...(sent.length < bubbles.length
+          ? { partial: `${sent.length}/${bubbles.length}` }
+          : {}),
+      },
+    );
+    if (note) saveTodayNote(row.character_id, note);
+    setRecoveryMark(chatId, turn.at);
+    console.log(
+      `[wake] 몰아 답장 chat=${chatId} @ ${activity} len=${text.length}`,
+    );
+    return;
+  }
+
+  // ② 복귀 인사 — 예고하고 나간 자리였고, 그 사이 상대가 답이 없었던 경우만.
+  const dayStart = logicalDayStartTs();
+  const announced =
+    meta.blockStart &&
+    db
+      .prepare(
+        `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
+      )
+      .get(
+        chatId,
+        dayStart,
+        '%"kind":"away"%',
+        `%"block":"${meta.blockStart}"%`,
+      );
+  if (!announced || !last || last.role !== "assistant") return;
+  // 복귀 인사도 선톡이다 — 하루 총량을 넘기지 않는다.
+  if (proactiveCountToday(chatId, dayStart) >= PROACTIVE_DAILY_MAX) return;
+  const draft = await chatJson<{ send: boolean; text?: string }>(
+    buildSystemBlocks(row.character_id, chatId, {
+      situation: returnSituation(activity),
+    }),
+    "위 상황 문단대로 문안을 만들어.",
+    400,
+    config.model,
+    { purpose: "away", characterId: row.character_id, chatId },
+  );
+  // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나 다른 경로가 보냈으면 접는다.
+  if (
+    draft.send &&
+    draft.text &&
+    lastMessage(chatId)?.sent_at === last.sent_at
+  ) {
+    await sendProactive(chatId, row.character_id, draft.text, "away", {
+      return: meta.blockStart ?? true,
+    });
+    console.log(`[wake] return @ ${activity} → ${chatId}`);
+  }
 });
 
 // 마지막 메시지 뒤 waitMs 동안 조용하면 응답. 이미 답장 보내는 중이면 끝날 때까지 다시 대기(겹침 방지)

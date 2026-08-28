@@ -138,6 +138,12 @@ export interface TimingDecision {
   waitMs: number;
   /** 유저가 붙잡아 일정을 접었으면 무엇을 어떻게 했는지. 오늘 실제 기록에 이미 적혀 있다. */
   held: { outcome: string; activity: string } | null;
+  /**
+   * 답장 불가 구간이라 지금 만들지 않고 구간 끝에 몰아 답해야 하면 그 구간 정보.
+   * 이 값이 있으면 waitMs는 구간이 끝나는 시각까지의 시간이다 — 답장을 만드는 대신
+   * 깨우기 표시(pending의 wake 행)를 걸고, 구간 끝에 쌓인 메시지를 읽어 한 번에 답한다.
+   */
+  gather: { activity: string; blockStart: string; blockEnd: string } | null;
   /** 이 값이 나온 경위. */
   trace: TimingTrace;
 }
@@ -156,6 +162,7 @@ export const decideReplyTiming = async (
     return {
       waitMs: skewLow(0, INSTANT_MAX_MS),
       held: null,
+      gather: null,
       trace: { path: "no_plan", block: null, asked: false },
     };
 
@@ -174,12 +181,14 @@ export const decideReplyTiming = async (
     return {
       waitMs: 0,
       held: null,
+      gather: null,
       trace: { path: "sleeping", block: seen, asked: false },
     };
   if (isHeldNow(characterId))
     return {
       waitMs: 0,
       held: null,
+      gather: null,
       trace: { path: "already_held", block: seen, asked: false },
     };
 
@@ -187,20 +196,28 @@ export const decideReplyTiming = async (
     return {
       waitMs: tableDelay(resp, cat),
       held: null,
+      gather: null,
       trace: { path: "table", block: seen, asked: false },
     };
 
-  // 답장 불가.
+  // 답장 불가 — 지금 답장을 만들지 않는다. 구간이 끝날 때 깨어 몰아 답한다.
+  const gather = {
+    activity: b.activity,
+    blockStart: b.start,
+    blockEnd: b.end,
+  };
   if (cat === "official")
     return {
       waitMs: untilBlockEndMs(b),
       held: null,
+      gather,
       trace: { path: "until_end", block: seen, asked: false },
     };
   if (!(await askHold(characterId, b.activity, userText)))
     return {
       waitMs: untilBlockEndMs(b),
       held: null,
+      gather,
       trace: { path: "until_end", block: seen, asked: true, heldJudged: false },
     };
 
@@ -219,6 +236,7 @@ export const decideReplyTiming = async (
   return {
     waitMs: rand(NUDGE_MIN_MS, NUDGE_MAX_MS),
     held: { outcome, activity: b.activity },
+    gather: null,
     trace: { path: "held", block: seen, asked: true, heldJudged: true },
   };
 };
