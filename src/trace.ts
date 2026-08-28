@@ -124,7 +124,12 @@ interface TraceRow {
   parent_key: string | null;
   text: string;
   attempts: number;
+  created_at: string;
 }
+
+// 부모를 이만큼 기다려도 안 생기면 접는다. 자식이 부모보다 먼저 쌓이는 자리가 있어서
+// (발송 결과가 답장 게시 준비보다 빠를 수 있다) 잠깐은 기다리되, 영영 기다리지는 않는다.
+const ORPHAN_WAIT_MS = 30 * 60_000;
 
 const parentOf = (
   parentKey: string,
@@ -158,7 +163,7 @@ export const runTraceTick = async (): Promise<void> => {
   }
   const rows = db
     .prepare(
-      `SELECT id, kind, parent_key, text, attempts
+      `SELECT id, kind, parent_key, text, attempts, created_at
          FROM trace_events WHERE status = 'pending' ORDER BY id LIMIT ?`,
     )
     .all(BATCH) as TraceRow[];
@@ -167,7 +172,16 @@ export const runTraceTick = async (): Promise<void> => {
     if (row.parent_key) {
       const parent = parentOf(row.parent_key);
       // 부모가 아직 안 나갔으면 다음 틱에 — 스레드 순서를 지킨다.
-      if (!parent || parent.status === "pending") continue;
+      if (!parent || parent.status === "pending") {
+        const waited =
+          Date.now() -
+          new Date(row.created_at.replace(" ", "T") + "+09:00").getTime();
+        if (!parent && waited > ORPHAN_WAIT_MS)
+          db.prepare(
+            `UPDATE trace_events SET status = 'skipped', last_error = '부모 행이 없다' WHERE id = ?`,
+          ).run(row.id);
+        continue;
+      }
       if (parent.status !== "sent" || !parent.slack_ts) {
         db.prepare(
           `UPDATE trace_events SET status = 'skipped', last_error = '부모 게시 실패' WHERE id = ?`,
@@ -202,12 +216,12 @@ const PLAN_POST_HOUR = 7;
 const PLAN_WARN_HOUR = 12;
 
 // 슬랙 표기 규칙 — &·<·>는 링크·멘션 문법과 겹쳐 그대로 보내면 깨진다.
-const esc = (s: string): string =>
+export const esc = (s: string): string =>
   s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 const DAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"] as const;
 
-const dateLabel = (date: string): string => {
+export const dateLabel = (date: string): string => {
   const d = new Date(`${date}T00:00:00Z`);
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${DAY_NAMES[d.getUTCDay()]})`;
 };
@@ -244,7 +258,7 @@ const seedText = (seed: DaySeed | undefined): string =>
 
 // 슬랙 메시지 한 개 상한(4000자)보다 여유 있게 자른다. 프롬프트 전문이 대상이다.
 const CHUNK = 3500;
-const chunked = (s: string): string[] => {
+export const chunked = (s: string): string[] => {
   const out: string[] = [];
   for (let i = 0; i < s.length; i += CHUNK) out.push(s.slice(i, i + CHUNK));
   return out;
@@ -270,7 +284,7 @@ const promptSections = (prompt: string): { label: string; body: string }[] => {
   ];
 };
 
-const hasTraceEvent = (dedupeKey: string): boolean =>
+export const hasTraceEvent = (dedupeKey: string): boolean =>
   Boolean(
     db.prepare(`SELECT 1 FROM trace_events WHERE dedupe_key = ?`).get(dedupeKey),
   );

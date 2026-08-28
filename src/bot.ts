@@ -32,6 +32,7 @@ import {
   setPendingSender,
   setWakeHandler,
 } from "./pending.js";
+import { traceProactiveSend } from "./reply-trace.js";
 import { chat, chatJson, type CallMeta, type ChatTurn } from "./llm.js";
 import { saveTodayNote } from "./memory.js";
 import {
@@ -271,6 +272,15 @@ export const sendProactive = async (
     console.warn(
       `[send] 부분 발송 kind=${kind} ${sent.length}/${total} — 중복 방지로 재발송 안 함`,
     );
+  // 아침·안부는 전날 밤에 만든 문안이라 문안 호출과 발송이 몇 시간 떨어져 있다 —
+  // 문안 쪽 트레이스에 잇지 않고 발송을 독립 행으로 둔다.
+  traceProactiveSend({
+    characterId,
+    kind,
+    text: sent.join("\n"),
+    delivered: sent.length,
+    total,
+  });
   return { delivered: sent.length, total };
 };
 
@@ -823,6 +833,8 @@ const respond = async (
       noteToSave: note,
       waitMs: timing.waitMs,
       kind,
+      // 발송·폐기 결과를 이 답장을 만든 호출의 트레이스에 잇는다.
+      callId: meta.callId ?? null,
     });
     // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
     setRecoveryMark(chatId, turn.at);
@@ -884,8 +896,15 @@ setWakeHandler(async (row: PendingReplyRow) => {
   if (last?.role === "user") {
     const turn = pendingUserTurn(chatId);
     if (!turn) return;
+    const built: BuildTrace = {
+      tags: [],
+      memories: [],
+      oldDiaries: [],
+      dropped: [],
+    };
     const system = buildSystemBlocks(row.character_id, chatId, {
       searchText: turn.text,
+      trace: built,
       situation: gatherSituation(activity),
     });
     const turns = toTurns(getRecentMessages(chatId, 40));
@@ -908,19 +927,47 @@ setWakeHandler(async (row: PendingReplyRow) => {
       stay = stay || retry.stay;
       note = retry.note ?? note;
     }
+    // 몰아 답장의 근거. 텀 대신 어느 구간이 끝나 답하는지를 남긴다 — 이 길은 표를 타지 않는다.
+    const attach = (extra: Record<string, unknown>): void => {
+      if (!wakeMeta.callId) return;
+      try {
+        setCallContext(wakeMeta.callId, {
+          gathered: { activity, blockStart: meta.blockStart ?? null },
+          search: built,
+          turns: turns.length,
+          ...extra,
+        });
+      } catch (e) {
+        logErr("[llm] 판단 근거 기록 실패:", e);
+      }
+    };
     if (stay) recordHold(row.character_id);
     if (!text) {
+      attach({ dropped: "빈 답장" });
       console.warn(`[wake] empty reply — skip (chat=${chatId})`);
       return;
     }
     // 만드는 동안 유저가 말을 더 보냈으면 버린다 — 디바운스 타이머가 합쳐서 다시 만든다.
     const now = pendingUserTurn(chatId);
     if (now && now.at !== turn.at) {
+      attach({ dropped: "생성 중 새 메시지 도착" });
       console.log(`[wake] 생성 중 새 메시지 도착 — 폐기 (chat=${chatId})`);
       return;
     }
     // 바로 보낸다 — 구간이 끝나는 시각이 이미 이 답장의 텀이다.
-    const bubbles = toBubbles(text);
+    const split = splitBubbles(text);
+    const bubbles = split.map(polishBubble);
+    attach({
+      stay,
+      note,
+      bubbles: bubbles.length,
+      bubbleLens: bubbles.map((b) => b.length),
+      polished: split
+        .map((b, i) =>
+          b === bubbles[i] ? null : { before: b, after: bubbles[i] },
+        )
+        .filter(Boolean),
+    });
     const { sent, error } = await sendBubbleList(chatId, bubbles);
     if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
     if (error)

@@ -9,6 +9,7 @@ import {
   type PendingReplyRow,
 } from "./db.js";
 import { saveTodayNote } from "./memory.js";
+import { traceReplyOutcome } from "./reply-trace.js";
 import { getKstNow, kstDateString } from "./kst.js";
 
 // 대기 중인 답장.
@@ -98,11 +99,21 @@ const fire = async (row: PendingReplyRow): Promise<void> => {
   const bubbles = parseBubbles(row);
   if (!bubbles.length) {
     markPendingReply(row.id, "failed", null, "만들어 둔 답장을 읽지 못함");
+    traceReplyOutcome({
+      callId: row.call_id,
+      outcome: "failed",
+      detail: "만들어 둔 답장을 읽지 못함",
+    });
     return;
   }
   try {
     await sender(row, bubbles);
     markPendingReply(row.id, "sent", stamp());
+    traceReplyOutcome({
+      callId: row.call_id,
+      outcome: "sent",
+      detail: `말풍선 ${bubbles.length}개`,
+    });
     // 남길 내용은 답장을 만들 때 같이 나온다. 보낸 뒤에 오늘 메모로 옮긴다 —
     // 못 보낸 답장의 내용이 오늘 있었던 일로 남지 않게.
     if (row.note_to_save) saveTodayNote(row.character_id, row.note_to_save);
@@ -111,6 +122,7 @@ const fire = async (row: PendingReplyRow): Promise<void> => {
     bumpPendingAttempt(row.id, msg);
     if (row.attempts + 1 >= MAX_ATTEMPTS) {
       markPendingReply(row.id, "failed", null, msg);
+      traceReplyOutcome({ callId: row.call_id, outcome: "failed", detail: msg });
       console.error(`[pending] 발송 포기 #${row.id}: ${msg}`);
       return;
     }
@@ -149,6 +161,8 @@ export const schedulePendingReply = (p: {
   noteToSave: string | null;
   waitMs: number;
   kind: string;
+  /** 이 답장을 만든 모델 호출 번호. 발송·폐기 결과를 그 호출의 트레이스에 잇는다. */
+  callId?: number | null;
 }): number => {
   const sendAt = stampAfter(p.waitMs);
   const createdAt = stamp();
@@ -160,6 +174,7 @@ export const schedulePendingReply = (p: {
     noteToSave: p.noteToSave,
     sendAt,
     kind: p.kind,
+    callId: p.callId ?? null,
     createdAt,
   });
   arm({
@@ -172,6 +187,7 @@ export const schedulePendingReply = (p: {
     send_at: sendAt,
     kind: p.kind,
     meta_json: null,
+    call_id: p.callId ?? null,
     attempts: 0,
     created_at: createdAt,
   });
@@ -213,6 +229,7 @@ export const scheduleWakeRow = (p: {
     send_at: sendAt,
     kind: "wake",
     meta_json: metaJson,
+    call_id: null,
     attempts: 0,
     created_at: createdAt,
   });
@@ -228,24 +245,29 @@ export const scheduleWakeRow = (p: {
  * 깨우기 표시는 남는다 — 메시지가 더 쌓여도 구간 끝에 한 번 깨서 몰아 읽는 건 같다.
  */
 export const dropPendingReplies = (chatId: string): number => {
-  const ids = supersedePendingReplies(chatId);
-  for (const id of ids) {
-    const t = timers.get(id);
+  const rows = supersedePendingReplies(chatId);
+  for (const r of rows) {
+    const t = timers.get(r.id);
     if (t) clearTimeout(t);
-    timers.delete(id);
+    timers.delete(r.id);
+    traceReplyOutcome({
+      callId: r.call_id,
+      outcome: "superseded",
+      detail: "유저가 말을 더 보내 다시 만든다",
+    });
   }
-  return ids.length;
+  return rows.length;
 };
 
 /** 깨우기 표시를 거둔다 — 불가 구간이 아닌 길로 답장이 나가게 됐을 때. */
 export const dropWakeRows = (chatId: string): number => {
-  const ids = supersedeWakeRows(chatId);
-  for (const id of ids) {
-    const t = timers.get(id);
+  const rows = supersedeWakeRows(chatId);
+  for (const r of rows) {
+    const t = timers.get(r.id);
     if (t) clearTimeout(t);
-    timers.delete(id);
+    timers.delete(r.id);
   }
-  return ids.length;
+  return rows.length;
 };
 
 export const isWaiting = (chatId: string): boolean =>

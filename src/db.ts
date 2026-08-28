@@ -221,6 +221,7 @@ const TABLES: Record<string, string> = {
   send_at TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover','wake')),
   meta_json TEXT,
+  call_id INTEGER,
   status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','sent','superseded','failed')),
   attempts INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
@@ -312,7 +313,8 @@ const TABLES: Record<string, string> = {
   error TEXT,
   context_json TEXT,
   code_version TEXT,
-  created_at TEXT NOT NULL`,
+  created_at TEXT NOT NULL,
+  traced INTEGER NOT NULL DEFAULT 0`,
 
   // 프롬프트·출력 본문. 키가 내용 해시라 같은 글자는 한 벌만 쌓인다 — 불변층·일간층은
   // 하루 종일 같은 내용이라, 호출마다 본문을 다시 담으면 DB가 호출 수에 비례해 커진다.
@@ -746,6 +748,30 @@ const migratePendingWake = (): void => {
   console.log(`[db] pending_replies에 wake·meta_json을 더했다`);
 };
 migratePendingWake();
+
+// 컬럼만 늘리는 변경. 위 wake 이관과 같은 이유로 버전을 올리지 않고 컬럼 유무를 보고 붙인다.
+const addColumn = (
+  table: string,
+  column: string,
+  ddl: string,
+  after?: () => void,
+): void => {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  if (!cols.length || cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  after?.();
+  console.log(`[db] ${table}에 ${column} 칸을 더했다`);
+};
+
+// 어디까지 슬랙에 게시했는지 표시한다. 이미 쌓여 있던 호출은 게시한 것으로 친다 —
+// 트레이스를 처음 켤 때 지난 기록이 한꺼번에 채널로 쏟아지지 않게.
+addColumn("llm_calls", "traced", "traced INTEGER NOT NULL DEFAULT 0", () => {
+  db.exec(`UPDATE llm_calls SET traced = 1`);
+});
+// 이 답장을 만든 호출 번호. 발송·폐기 결과를 그 답장 스레드에 달 때 쓴다.
+addColumn("pending_replies", "call_id", "call_id INTEGER");
 
 db.pragma("foreign_keys = ON");
 
@@ -1352,6 +1378,14 @@ export const putBlob = (text: string): string => {
   ).run(hash, text, Buffer.byteLength(text, "utf8"), now, now);
   return hash;
 };
+
+/** 해시로 본문을 되찾는다. 보관 기간이 지나 지워졌으면 null. */
+export const getBlob = (hash: string): string | null =>
+  (
+    db.prepare(`SELECT text FROM prompt_blobs WHERE hash = ?`).get(hash) as
+      | { text: string }
+      | undefined
+  )?.text ?? null;
 
 export interface LlmCallInput {
   purpose: string;
@@ -2059,6 +2093,8 @@ export interface PendingReplyRow {
   send_at: string;
   kind: string;
   meta_json: string | null;
+  /** 이 답장을 만든 모델 호출 번호. 트레이스에서 발송 결과를 그 답장 아래에 단다. */
+  call_id: number | null;
   attempts: number;
   created_at: string;
 }
@@ -2072,14 +2108,15 @@ export const insertPendingReply = (p: {
   sendAt: string;
   kind: string;
   metaJson?: string | null;
+  callId?: number | null;
   createdAt: string;
 }): number =>
   Number(
     db
       .prepare(
         `INSERT INTO pending_replies
-           (chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, meta_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, meta_json, call_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         p.chatId,
@@ -2090,6 +2127,7 @@ export const insertPendingReply = (p: {
         p.sendAt,
         p.kind,
         p.metaJson ?? null,
+        p.callId ?? null,
         p.createdAt,
       ).lastInsertRowid,
   );
@@ -2097,7 +2135,7 @@ export const insertPendingReply = (p: {
 export const getWaitingPendingReplies = (): PendingReplyRow[] =>
   db
     .prepare(
-      `SELECT id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, meta_json, attempts, created_at
+      `SELECT id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, meta_json, call_id, attempts, created_at
          FROM pending_replies WHERE status = 'waiting' ORDER BY send_at`,
     )
     .all() as PendingReplyRow[];
@@ -2116,37 +2154,39 @@ export const hasWaitingWakeRow = (chatId: string): boolean =>
     )
     .get(chatId);
 
+/** 버린 대기 행 — 트레이스가 그 답장 스레드에 폐기 사실을 달 수 있게 호출 번호까지 준다. */
+export interface SupersededRow {
+  id: number;
+  call_id: number | null;
+}
+
 // 유저가 대기 중에 말을 더 걸면 만들어 둔 답장을 버린다 — 그 사이 대화가 바뀌었기 때문.
 // 깨우기 표시는 답장이 아니라 남긴다 — 메시지가 더 쌓여도 구간 끝에 한 번 깨는 건 같다.
-export const supersedePendingReplies = (chatId: string): number[] => {
-  const ids = (
-    db
-      .prepare(
-        `SELECT id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind != 'wake'`,
-      )
-      .all(chatId) as { id: number }[]
-  ).map((r) => r.id);
-  if (ids.length)
+export const supersedePendingReplies = (chatId: string): SupersededRow[] => {
+  const rows = db
+    .prepare(
+      `SELECT id, call_id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind != 'wake'`,
+    )
+    .all(chatId) as SupersededRow[];
+  if (rows.length)
     db.prepare(
       `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind != 'wake'`,
     ).run(chatId);
-  return ids;
+  return rows;
 };
 
 // 깨우기 표시를 거둔다 — 불가 구간이 아닌 길로 답장이 나가게 됐을 때(붙잡힘 등).
-export const supersedeWakeRows = (chatId: string): number[] => {
-  const ids = (
-    db
-      .prepare(
-        `SELECT id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'wake'`,
-      )
-      .all(chatId) as { id: number }[]
-  ).map((r) => r.id);
-  if (ids.length)
+export const supersedeWakeRows = (chatId: string): SupersededRow[] => {
+  const rows = db
+    .prepare(
+      `SELECT id, call_id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'wake'`,
+    )
+    .all(chatId) as SupersededRow[];
+  if (rows.length)
     db.prepare(
       `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind = 'wake'`,
     ).run(chatId);
-  return ids;
+  return rows;
 };
 
 export const markPendingReply = (
