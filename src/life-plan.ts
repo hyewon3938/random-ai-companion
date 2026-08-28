@@ -135,6 +135,7 @@ export const ensureMonthPlan = async (
     ),
     6000,
     config.modelDeep,
+    { purpose: "life_plan", characterId },
   );
   applyMonthPlan(characterId, ym, plan);
   return true;

@@ -1,6 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import { recordLlmUsage } from "./db.js";
+import { recordLlmUsage, recordLlmCall } from "./db.js";
+import type { CallPurpose } from "./labels.js";
 
 const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
@@ -17,6 +22,39 @@ export interface SystemBlock {
   cache?: boolean;
 }
 
+// 호출 하나하나를 원본 그대로 남긴다 — 답이 이상할 때 그때 무엇을 넣었는지 다시 볼 수 있게.
+// 새로 만드는 호출 자리는 전부 이 값을 넘긴다. 넘기지 않으면 그 호출만 기록에서 빠진다.
+export interface CallMeta {
+  purpose: CallPurpose;
+  characterId?: number;
+  chatId?: string;
+  /** 같은 자리에서 두 번 부른 경우의 차례 — JSON 재요청이 2가 된다. */
+  attempt?: number;
+  /** 남긴 행 번호. chat()이 채워 준다 — 뒤에 판단 근거를 붙일 때 쓴다. */
+  callId?: number;
+}
+
+// 지금 도는 코드가 어느 판인지. 컨테이너에는 .git이 없고 src만 들어오므로(Dockerfile),
+// 커밋 해시 대신 src 파일 내용으로 만든 지문을 적는다. 배포 전후를 가르는 데 쓴다.
+let codeFingerprint: string | null = null;
+const codeVersion = (): string => {
+  if (codeFingerprint) return codeFingerprint;
+  try {
+    const dir = fileURLToPath(new URL(".", import.meta.url));
+    const h = createHash("sha256");
+    for (const f of readdirSync(dir)
+      .filter((n) => n.endsWith(".ts"))
+      .sort()) {
+      h.update(f);
+      h.update(readFileSync(join(dir, f)));
+    }
+    codeFingerprint = h.digest("hex").slice(0, 12);
+  } catch {
+    codeFingerprint = "unknown";
+  }
+  return codeFingerprint;
+};
+
 const textOf = (blocks: Anthropic.ContentBlock[]): string =>
   blocks
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
@@ -28,6 +66,7 @@ export const chat = async (
   turns: ChatTurn[],
   maxTokens = 1024,
   model = config.model,
+  meta?: CallMeta,
 ): Promise<string> => {
   // TTL 1시간: 대화는 답장 텀이 10~30분씩 벌어지는 게 보통이라 5분 캐시는 그 사이 증발한다.
   // 1시간 쓰기는 2배지만 저녁 대화 내내 읽기(0.1배)로 회수 — 3회 이상 재사용이면 이득.
@@ -46,12 +85,54 @@ export const chat = async (
               }
             : {}),
         }));
-  const response = await client.messages.create({
-    model,
-    max_tokens: maxTokens,
-    system: sys,
-    messages: turns,
-  });
+  const blocks: SystemBlock[] =
+    typeof system === "string" ? [{ text: system }] : system;
+  const turnsText = turns.map((t) => `[${t.role}] ${t.content}`).join("\n");
+  const started = Date.now();
+
+  // 호출 원본을 남긴다. 기록이 실패해도 대화는 그대로 간다.
+  const keep = (row: {
+    output?: string;
+    usage?: {
+      input: number;
+      cacheWrite: number;
+      cacheRead: number;
+      output: number;
+    };
+    error?: string;
+  }): void => {
+    if (!meta) return;
+    try {
+      meta.callId = recordLlmCall({
+        purpose: meta.purpose,
+        model,
+        characterId: meta.characterId,
+        chatId: meta.chatId,
+        maxTokens,
+        attempt: meta.attempt,
+        system: blocks,
+        turns: turnsText,
+        latencyMs: Date.now() - started,
+        codeVersion: codeVersion(),
+        ...row,
+      });
+    } catch (e) {
+      console.error("[llm] 호출 기록 실패:", e);
+    }
+  };
+
+  let response: Anthropic.Message;
+  try {
+    response = await client.messages.create({
+      model,
+      max_tokens: maxTokens,
+      system: sys,
+      messages: turns,
+    });
+  } catch (e) {
+    keep({ error: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
   // 캐시 효과 관측: cw=캐시 쓰기(1회성), cr=캐시 읽기(절감분), in=전액 과금분.
   // 로그와 별개로 논리일 단위 DB 누적(llm_usage) — 사람이 로그를 뒤지지 않아도 확인 가능하게.
   const u = response.usage;
@@ -69,7 +150,17 @@ export const chat = async (
   } catch {
     /* 사용량 기록 실패가 대화를 막지 않는다 */
   }
-  return textOf(response.content).trim();
+  const out = textOf(response.content).trim();
+  keep({
+    output: out,
+    usage: {
+      input: u.input_tokens,
+      cacheWrite: u.cache_creation_input_tokens ?? 0,
+      cacheRead: u.cache_read_input_tokens ?? 0,
+      output: u.output_tokens,
+    },
+  });
+  return out;
 };
 
 // JSON 응답 강제 + 파싱 실패 시 1회 재시도.
@@ -80,14 +171,22 @@ export const chatJson = async <T>(
   userPrompt: string,
   maxTokens = 2048,
   model = config.model,
+  meta?: CallMeta,
 ): Promise<T> => {
-  const ask = async (extra: string): Promise<string> =>
-    chat(
+  // 재요청은 호출 원본에 별개의 행으로 남는다(attempt=2) — 무엇을 다시 물었는지가 보여야
+  // JSON이 깨진 자리를 찾을 수 있다. 부른 쪽이 들고 있는 meta에는 마지막 행 번호를 돌려준다.
+  const ask = async (extra: string, attempt: number): Promise<string> => {
+    const sub = meta ? { ...meta, attempt } : undefined;
+    const out = await chat(
       system,
       [{ role: "user", content: userPrompt + extra }],
       maxTokens,
       model,
+      sub,
     );
+    if (meta && sub) meta.callId = sub.callId;
+    return out;
+  };
 
   const parse = (raw: string): T => {
     const stripped = raw
@@ -97,12 +196,13 @@ export const chatJson = async <T>(
     return JSON.parse(stripped) as T;
   };
 
-  const first = await ask("\n\n반드시 JSON 하나만 출력해. 다른 텍스트 금지.");
+  const first = await ask("\n\n반드시 JSON 하나만 출력해. 다른 텍스트 금지.", 1);
   try {
     return parse(first);
   } catch {
     const second = await ask(
       "\n\n직전 출력이 JSON 파싱에 실패했어. 코드펜스·설명 없이 순수 JSON 객체 하나만 다시 출력해.",
+      2,
     );
     return parse(second);
   }

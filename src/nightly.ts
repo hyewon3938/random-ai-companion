@@ -645,6 +645,7 @@ const draftReconnect = async (
     "위 상황 문단대로 문안을 만들어.",
     400,
     config.modelDeep,
+    { purpose: "reconnect", characterId: g.characterId, chatId: g.chatId },
   );
   if (!d.text) return null;
   const toMin = (t: string): number => {
@@ -781,6 +782,7 @@ export const ensureArcs = async (
     arcPrompt(personBlock, kstDateString()),
     1000,
     config.modelDeep,
+    { purpose: "arc", characterId },
   );
   saveArc(characterId, "year", arcs.year);
   saveArc(characterId, "season", arcs.season);
@@ -826,7 +828,11 @@ const refreshArcs = async (g: NightlyGathered): Promise<void> => {
     season: string;
     month: string;
     week: string;
-  }>(ARC_SYSTEM, arcRefreshPrompt(g, diaries), 1000, config.modelDeep);
+  }>(ARC_SYSTEM, arcRefreshPrompt(g, diaries), 1000, config.modelDeep, {
+    purpose: "arc",
+    characterId: g.characterId,
+    chatId: g.chatId,
+  });
   if (isMonday && arcs.week) saveArc(g.characterId, "week", arcs.week);
   if (isFirst) {
     if (arcs.month) saveArc(g.characterId, "month", arcs.month);
@@ -867,12 +873,14 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
         diaryPrompt(bg),
         2000,
         config.modelDeep,
+        { purpose: "diary", characterId: bg.characterId, chatId: bg.chatId },
       );
       const extract = await chatJson<ExtractOutput>(
         EXTRACT_SYSTEM,
         extractPrompt(bg),
         1500,
         config.modelDeep,
+        { purpose: "extract", characterId: bg.characterId, chatId: bg.chatId },
       );
       console.log(
         `[nightly] 백필 ${applyNightlyOutput(bg, { entry, extract })}`,
@@ -907,12 +915,14 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
       diaryPrompt(g),
       2000,
       config.modelDeep,
+      { purpose: "diary", characterId: g.characterId, chatId: g.chatId },
     );
     extract = await chatJson<ExtractOutput>(
       EXTRACT_SYSTEM,
       extractPrompt(g),
       1500,
       config.modelDeep,
+      { purpose: "extract", characterId: g.characterId, chatId: g.chatId },
     );
   } else {
     entry = await chatJson<DiaryOutput>(
@@ -920,6 +930,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
       quietDayPrompt(g),
       1200,
       config.modelDeep,
+      { purpose: "diary", characterId: g.characterId, chatId: g.chatId },
     );
   }
 
@@ -960,6 +971,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
       "위 상황 문단대로 문안을 만들어.",
       800,
       config.modelDeep,
+      { purpose: "morning", characterId: g.characterId, chatId: g.chatId },
     );
     if (draft.send && draft.text) {
       if (draft.window && /점심|저녁/.test(draft.window)) {

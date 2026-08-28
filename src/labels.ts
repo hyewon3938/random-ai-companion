@@ -69,6 +69,44 @@ export const SPEECH_LEVEL_NAME: Record<SpeechLevel, string> = {
   casual: "반말",
 };
 
+/** 모델을 부른 자리 — 호출 원본(llm_calls)에 무슨 일로 부른 것인지 적는다. */
+export type CallPurpose =
+  | "reply"
+  | "hold"
+  | "day_plan"
+  | "life_plan"
+  | "arc"
+  | "diary"
+  | "extract"
+  | "genesis"
+  | "bible"
+  | "morning"
+  | "reconnect"
+  | "catchup"
+  | "goodnight"
+  | "away"
+  | "comeback"
+  | "tool";
+
+export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
+  reply: "답장",
+  hold: "붙잡기 판정",
+  day_plan: "하루 각본",
+  life_plan: "월 리듬",
+  arc: "아크",
+  diary: "일기",
+  extract: "기억 정리",
+  genesis: "캐릭터 생성",
+  bible: "옛 랜덤 생성",
+  morning: "아침 선톡",
+  reconnect: "안부 선톡",
+  catchup: "근황 선톡",
+  goodnight: "밤 인사 선톡",
+  away: "자리비움 선톡",
+  comeback: "복귀 선톡",
+  tool: "개발 도구",
+};
+
 // 각본 블록의 두 태그는 plan_json 안에 있어 DB CHECK가 닿지 않는다. 저장된 옛 각본과 외부
 // 생성분에는 한글 값이 남아 있으므로, 읽는 자리에서 식별자로 되돌린다.
 const RESPONSIVENESS_BY_TEXT: Record<string, Responsiveness> = {

@@ -20,6 +20,7 @@ import {
   orderedIdentity,
   tagsInText,
   searchMemories,
+  memoryKeyOf,
   searchTaggedRefs,
   memoryBlock,
   memoryLine,
@@ -347,6 +348,18 @@ const nowSection = (
     .join("\n");
 };
 
+/** 이번 조립이 무엇을 찾아 넣었는지 — 답장 호출 기록에 붙여 "왜 저 기억을 꺼냈나"를 되짚는다. */
+export interface BuildTrace {
+  /** 유저 발화에서 고른 검색어. */
+  tags: string[];
+  /** 꺼내 넣은 기억 — 항목·주인·키. */
+  memories: string[];
+  /** 함께 꺼낸 옛 일기 날짜. */
+  oldDiaries: string[];
+  /** 태그는 맞았지만 개수 상한에 걸려 빠진 후보 — 기억 키와 옛 일기 날짜. */
+  dropped: string[];
+}
+
 export interface BuildOptions {
   /** 답장이 실제로 나가기까지 남은 시간. 길면 도착 시점 결로 쓰게 꼬리에 적는다. */
   sendsInMs?: number;
@@ -354,6 +367,8 @@ export interface BuildOptions {
   searchText?: string;
   /** 선톡 문안용 상황 문단. 프롬프트 맨 끝에 붙는다(덩어리 3·5가 쓴다). */
   situation?: string;
+  /** 넘겨 주면 검색 결과를 여기에 적어 돌려준다(호출 기록용). */
+  trace?: BuildTrace;
 }
 
 // 시스템 프롬프트를 안정도 순 3층으로 조립한다 — 프롬프트 캐시(프리픽스 매칭)와 문서 구조가 같다.
@@ -413,7 +428,11 @@ export const buildSystemBlocks = (
 
   // 꼬리 — 이번 발화의 태그로 검색한 기억·옛 일기와 오늘 메모, 그리고 지금 이 순간의 사실.
   const tags = tagsInText(characterId, opts.searchText ?? "");
-  const found = tags.length ? searchMemories(characterId, tags) : [];
+  // 상한에 걸려 빠진 후보도 받아 둔다 — 넣은 것만 봐서는 왜 그 기억이 안 들어갔는지 알 수 없다.
+  const dropped: string[] = [];
+  const found = tags.length
+    ? searchMemories(characterId, tags, { dropped })
+    : [];
   const memorySection = found.length
     ? `[지금 얘기와 관련해 기억나는 것]\n${memoryBlock(found)}`
     : "";
@@ -423,13 +442,23 @@ export const buildSystemBlocks = (
     ? searchTaggedRefs(characterId, "diary", tags)
     : [];
   const byId = new Map(getDiariesByIds(diaryIds).map((d) => [d.id, d]));
-  const oldDiaries = diaryIds
+  const diaryHits = diaryIds
     .map((id) => byId.get(id))
-    .filter((d): d is NonNullable<typeof d> => !!d && !recentDates.has(d.date))
-    .slice(0, SEARCH_LIMIT.diary);
+    .filter((d): d is NonNullable<typeof d> => !!d && !recentDates.has(d.date));
+  const oldDiaries = diaryHits.slice(0, SEARCH_LIMIT.diary);
+  dropped.push(
+    ...diaryHits.slice(SEARCH_LIMIT.diary).map((d) => `일기 ${d.date}`),
+  );
   const oldDiarySection = oldDiaries.length
     ? `[지금 얘기와 관련 있는 옛 일기]\n${oldDiaries.map((d) => `${d.date}: ${d.entry_json}`).join("\n")}`
     : "";
+
+  if (opts.trace) {
+    opts.trace.tags = tags;
+    opts.trace.memories = found.map(memoryKeyOf);
+    opts.trace.oldDiaries = oldDiaries.map((d) => d.date);
+    opts.trace.dropped = dropped;
+  }
 
   const notes = todayNotes(characterId);
   const todaySection = notes.length
