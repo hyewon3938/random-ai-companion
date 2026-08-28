@@ -11,6 +11,7 @@ import { runDispatchTick } from "./dispatch.js";
 import { runFollowupTick } from "./followup.js";
 import { runPresenceTick } from "./presence.js";
 import { resumePendingReplies } from "./pending.js";
+import { runVizTick } from "./viz.js";
 
 // 이 프로세스는 실시간 대화(반응형)와 선톡 발송을 담당한다.
 //
@@ -71,6 +72,16 @@ cron.schedule(
     recoverMissedReplies().catch((e) => logErr("[recover] tick error:", e));
   },
   // 매 2분이라 지금은 시간대 무관하지만, 다른 크론과 같은 기준으로 명시(패턴 바뀔 때 함정 방지)
+  { timezone: "Asia/Seoul" },
+);
+
+// 슬랙 가시성 게시: 1분 틱. 파이프라인이 게시함(viz_events)에 쌓아 둔 기록을
+// 슬랙 채널로 내보낸다. 토큰·채널 설정이 없으면 아무것도 하지 않는다(viz.ts 참고).
+cron.schedule(
+  "* * * * *",
+  () => {
+    runVizTick().catch((e) => logErr("[viz] tick error:", e));
+  },
   { timezone: "Asia/Seoul" },
 );
 

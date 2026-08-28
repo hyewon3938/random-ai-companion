@@ -262,6 +262,24 @@ const TABLES: Record<string, string> = {
   cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (date, model)`,
+
+  // 슬랙 가시성 게시함(viz.ts). 보여줄 내용을 행으로 쌓아 두면 봇의 1분 틱이 슬랙으로
+  // 내보낸다 — 재시작·슬랙 장애에도 보낼 것이 남고, 봇 밖 배치가 남긴 행도 같은 길로 나간다.
+  // 스레드는 thread_key(부모)·parent_key(자식)로 잇고, 자식은 부모가 게시된 뒤에만 나간다.
+  // dedupe_key가 있는 행은 같은 키로 두 번 쌓이지 않는다(INSERT OR IGNORE).
+  viz_events: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER REFERENCES characters(id),
+  kind TEXT NOT NULL,
+  dedupe_key TEXT UNIQUE,
+  thread_key TEXT,
+  parent_key TEXT,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed','skipped')),
+  slack_ts TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL`,
 };
 
 // attention_override·capture_marks는 정의에서 뺐다 — 붙잡힌 상태는 day_actuals가, 세션 중 사실
@@ -278,6 +296,8 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_pending_replies_due ON pending_replies (status, send_at)`,
   `CREATE INDEX IF NOT EXISTS idx_pending_replies_chat ON pending_replies (chat_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_scheduled_messages_due ON scheduled_messages (status, date)`,
+  `CREATE INDEX IF NOT EXISTS idx_viz_events_pending ON viz_events (status, id)`,
+  `CREATE INDEX IF NOT EXISTS idx_viz_events_thread ON viz_events (thread_key)`,
 ];
 
 const createSchema = (): void => {
