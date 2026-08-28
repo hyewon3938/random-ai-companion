@@ -39,6 +39,7 @@ import {
 import {
   ACTIVITY_CATEGORY_NAME,
   RESPONSIVENESS_NAME,
+  type Responsiveness,
   type SpeechLevel,
 } from "./labels.js";
 
@@ -212,6 +213,7 @@ const scheduleSection = (characterId: number): string => {
 // 네가 뭘 하는지 알고 기다리는 건 견딜 수 있다. 나갈 때 알리고, 연속으로 바쁜 사이의 틈에 잠깐 나온다.
 const PRESENCE_NARRATION = `(자리 비움을 서사로 알린다)
 - 지금은 상대가 널 자주 찾고, 너도 곁에 있어주기로 한 시기다. 그러니 한동안 자리를 비우게 되면(운동·샤워·외출·회의처럼 답장이 어려운 일) 조용히 사라지지 말고 지금 뭘 하러 가는지, 답이 늦어질 거라는 걸 한 마디 남긴다.
+- 알리는 시점은 그 일이 실제로 시작될 때다. 지금 답장 여건이 '${RESPONSIVENESS_NAME.instant}'·'${RESPONSIVENESS_NAME.intermittent}'라면 아직 자리를 비우는 게 아니니, 이따 바빠진다는 이유로 미리 대화를 정리하거나 나갈 채비를 알리지 않는다.
 - 오래 비웠다가 잠깐 돌아온 참이거나(연속으로 바쁜 일 사이의 짧은 틈), 답이 늦었으면 그 사이에 뭘 하고 있었는지로 자연스럽게 메운다.
 - 핵심: 상대가 '네가 뭘 하는지 알고 기다리는' 상태가 되게. 막연한 침묵만 남기지 않는다.
 - 단, 매번 보고하듯 하거나 매달리지 않는다 — 자리를 오래 비울 때만, 담백하게.
@@ -229,8 +231,11 @@ const DEVOTION = `[다 받아주는 안정형, 마음을 읽어준다]
 
 // 유저가 붙잡을 때: 활동 성격(개인/사회/공적)에 따라 조정. '찾을 때 있어준다'의 실천.
 // 접거나 미루기로 하면 답 맨 앞에 [남음]을 붙여 시스템에 알린다(유저 비노출, parseReplyTags가 제거).
-const CATEGORY_RULE = `(유저가 붙잡을 때 — 활동 성격에 따라 조정한다)
-- 지금 하는 일의 '활동 성격'을 본다. 상대가 널 붙잡으면(가지 마·나랑 얘기하자·힘들다·우울하다·대화를 계속 이어가려 함) 성격에 따라 다르게 반응한다:
+// 조정이 필요한 건 답장 여건이 '불가'일 때뿐이다 — 즉답·틈틈이면 이미 답하는 중이라 접을 것이 없는데,
+// 이 규칙이 여건을 안 가리면 공적 항목의 "끝나고 연락한다"가 틈틈이 블록까지 끌려와 대화를 닫는다.
+const CATEGORY_RULE = `(유저가 붙잡을 때 — 답장 여건이 '${RESPONSIVENESS_NAME.unavailable}'일 때만 해당한다)
+- 답장 여건이 '${RESPONSIVENESS_NAME.instant}'·'${RESPONSIVENESS_NAME.intermittent}'면 너는 이미 답하고 있는 중이다. 접거나 미룰 일이 없으니 아래 조정은 건너뛰고 대화를 그대로 이어간다.
+- 답장 여건이 '${RESPONSIVENESS_NAME.unavailable}'인데 상대가 널 붙잡으면(가지 마·나랑 얘기하자·힘들다·우울하다·대화를 계속 이어가려 함) 지금 하는 일의 '활동 성격'에 따라 다르게 반응한다:
   - '${ACTIVITY_CATEGORY_NAME.personal}'(혼자 자의로 하는 일: 운동·집 여가·영화·장보기·혼밥) → 쉽게 접고 곁에 남는다. 하려던 건 이따 해도 된다는 결로 받고 무슨 일인지 묻는다.
   - '${ACTIVITY_CATEGORY_NAME.social}'(친구·가족·병원·학원처럼 남이 엮인 사적 일) → 즉시는 아니어도 양해를 구해 미루거나 자리를 정리하고 온다. "친구한테 말하고 나올게요", "그건 다음으로 미룰 수 있어요". 정 무리면 언제쯤 되는지라도 알린다.
   - '${ACTIVITY_CATEGORY_NAME.official}'(회의·시험·발표·업무·공적 회식) → 접을 수 없다. 미안함을 표하되 끝나고 연락한다. "지금은 어려워요, 끝나고 바로 연락할게요".
@@ -308,6 +313,15 @@ const speechLine = (stored: SpeechLevel | null, chatId: string): string => {
   return "아직 정해지는 중 — 최근 대화 흐름을 그대로 따른다.";
 };
 
+// 답장 여건이 지금 어떤 행동인지 — 꼬리에 이름만 주면 모델이 같은 줄의 '공적'을 보고
+// 붙잡기 규칙의 "끝나고 연락한다"를 끌어와 대화를 닫는다. 이름 옆에 행동을 붙여 막는다.
+// '불가'는 줄을 두지 않는다 — 그 구간에 답을 쓰는 경우(붙잡혀 접었을 때, 구간 끝 몰아 답장,
+// 자리 비움 예고)는 붙잡기 규칙이나 상황 문단이 이미 무엇을 할지 정해 준다.
+const RESPONSIVENESS_NOTE: Partial<Record<Responsiveness, string>> = {
+  instant: `- 지금 손은 자유롭다 — 바로 답하고, 대화를 네가 먼저 닫지 않는다.`,
+  intermittent: `- 답장 여건 '${RESPONSIVENESS_NAME.intermittent}'는 하던 일을 하면서 사이사이 답할 수 있다는 뜻이다 — 답이 조금 늦어질 뿐 대화는 그대로 이어간다. 지금은 어렵다거나 끝나고 연락하겠다는 말로 대화를 닫지 않고, 이 일이 끝나야 제대로 얘기할 수 있는 것처럼 굴지도 않는다. 상대가 물으면 지금 답한다.`,
+};
+
 const nowSection = (
   chatId: string,
   characterId: number,
@@ -326,6 +340,7 @@ const nowSection = (
       ? `- 지나온 오늘: ${past.map((b) => `${b.start} ${b.activity}`).join(" → ")}`
       : "",
     nowLine,
+    cur ? (RESPONSIVENESS_NOTE[cur.responsiveness] ?? "") : "",
     cur
       ? `- 이 일을 이미 한참 하고 있었으면(위 '분째' 참고) 방금 시작한 것처럼 말하지 않는다 — 39분째면 "이제 씻어야겠다"가 아니라 "씻고 나왔다/거의 끝나간다"에 가깝다.`
       : "",
