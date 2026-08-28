@@ -226,24 +226,22 @@ const timingRange = (b: PlanBlock): string => {
       : "1~8분";
 };
 
+// 각본은 코드 블록 안에 올려 표처럼 읽는다. 한글은 고정폭 글꼴에서 두 칸을 차지하므로
+// 태그 열을 맞추려면 글자 수가 아니라 이 폭으로 센다. 슬랙이 &amp;를 &로 되돌려 그리므로
+// 자리는 이스케이프 전 글자로 계산한다.
+const width = (s: string): number =>
+  [...s].reduce((n, ch) => n + ((ch.codePointAt(0) ?? 0) > 0x10ff ? 2 : 1), 0);
+
+const ACTIVITY_COLS = 22;
+
+// 각본 한 줄: 시각 · 활동 · (활동 성격)[답장 여건] 답장 텀
 const blockLine = (b: PlanBlock): string => {
   const resp = toResponsiveness(b.responsiveness) ?? "instant";
-  const tags = `${RESPONSIVENESS_NAME[resp]}·${ACTIVITY_CATEGORY_NAME[blockCategory(b)]}`;
-  const hidden = b.advance_known ? "" : " (당일에 닥치는 일)";
-  return `\`${b.start}~${b.end}\` ${esc(b.activity)}${hidden} · ${tags} · 답장 ${timingRange(b)}`;
-};
-
-// 정시마다 그 시각에 걸린 블록을 한 줄씩 — 하루를 훑어 읽는 용도.
-const hourStrip = (blocks: PlanBlock[]): string => {
-  const lines: string[] = [];
-  for (let h = 0; h < 24; h++) {
-    const at = `${String(h).padStart(2, "0")}:00`;
-    const b = blocks.find((x) => x.start <= at && at < x.end);
-    if (!b) continue;
-    const resp = toResponsiveness(b.responsiveness) ?? "instant";
-    lines.push(`${at}  ${esc(b.activity)} [${RESPONSIVENESS_NAME[resp]}]`);
-  }
-  return lines.join("\n");
+  const tags = `(${ACTIVITY_CATEGORY_NAME[blockCategory(b)]})[${RESPONSIVENESS_NAME[resp]}]`;
+  // 당일에 닥치는 일은 별표 하나로 표시하고 각본 아래에 뜻을 한 줄 붙인다(열을 밀지 않게).
+  const activity = `${b.activity}${b.advance_known ? "" : " *"}`;
+  const pad = " ".repeat(Math.max(1, ACTIVITY_COLS - width(activity)));
+  return `${b.start}~${b.end}  ${esc(activity)}${pad}${tags} ${timingRange(b)}`;
 };
 
 const seedText = (seed: DaySeed | undefined): string =>
@@ -257,6 +255,26 @@ const chunked = (s: string): string[] => {
   const out: string[] = [];
   for (let i = 0; i < s.length; i += CHUNK) out.push(s.slice(i, i + CHUNK));
   return out;
+};
+
+// 각본 생성 프롬프트는 고정 지시문 사이에 DB 값이 들어가는 한 장짜리 틀이라, 규칙이 시작하는
+// 자리에서 잘라 그날 데이터와 매일 같은 규칙을 따로 올린다(day-plan.ts planPrompt와 짝).
+const RULE_MARK = "[컨디션→기상→활동을 하나로 잇기]";
+
+const promptSections = (prompt: string): { label: string; body: string }[] => {
+  const at = prompt.indexOf(RULE_MARK);
+  if (at < 0) return [{ label: "각본 생성 프롬프트", body: prompt }];
+  return [
+    {
+      label:
+        "각본 생성 프롬프트 1 — 시스템 문장과 오늘 데이터 (게시 시점에 같은 DB 데이터로 다시 조립한 것)",
+      body: prompt.slice(0, at).trimEnd(),
+    },
+    {
+      label: "각본 생성 프롬프트 2 — 고정 규칙 (매일 같음)",
+      body: prompt.slice(at),
+    },
+  ];
 };
 
 const hasVizEvent = (dedupeKey: string): boolean =>
@@ -292,11 +310,14 @@ const enqueuePlanPost = (c: CharacterRow, date: string, raw: string): void => {
         : "새벽 정리 생성";
 
   const seed = getDaySeed(c.id, date);
+  const surprise = plan.blocks.some((b) => !b.advance_known);
   const head = [
     `:spiral_calendar_pad: *${dateLabel(date)} 하루 각본* — ${madeByLabel}`,
     `컨디션 시드: ${esc(seedText(seed))}`,
-    "",
+    "```",
     ...plan.blocks.map(blockLine),
+    "```",
+    ...(surprise ? ["`*` 당일에 닥치는 일"] : []),
   ].join("\n");
 
   // 생성 프롬프트는 지금 같은 DB 데이터로 다시 조립한다. 각본을 만든 뒤 게시할 때까지
@@ -307,7 +328,7 @@ const enqueuePlanPost = (c: CharacterRow, date: string, raw: string): void => {
   } catch (err) {
     prompt = `(프롬프트 조립 실패: ${String(err)})`;
   }
-  const parts = chunked(esc(prompt));
+  const sections = promptSections(prompt);
 
   db.transaction(() => {
     recordVizEvent({
@@ -317,24 +338,19 @@ const enqueuePlanPost = (c: CharacterRow, date: string, raw: string): void => {
       dedupeKey,
       threadKey: dedupeKey,
     });
-    recordVizEvent({
-      characterId: c.id,
-      kind: "day_plan_hours",
-      parentKey: dedupeKey,
-      text: `시간대별 정리\n\`\`\`\n${hourStrip(plan.blocks)}\n\`\`\``,
-    });
-    parts.forEach((p, i) => {
-      recordVizEvent({
-        characterId: c.id,
-        kind: "day_plan_prompt",
-        parentKey: dedupeKey,
-        text: `${
-          i === 0
-            ? "각본 생성 프롬프트 — 게시 시점에 같은 DB 데이터로 다시 조립한 것\n"
-            : `프롬프트 이어서 (${i + 1}/${parts.length})\n`
-        }\`\`\`\n${p}\n\`\`\``,
+    for (const s of sections) {
+      const parts = chunked(esc(s.body));
+      parts.forEach((p, i) => {
+        const label =
+          parts.length > 1 ? `${s.label} (${i + 1}/${parts.length})` : s.label;
+        recordVizEvent({
+          characterId: c.id,
+          kind: "day_plan_prompt",
+          parentKey: dedupeKey,
+          text: `${label}\n\`\`\`\n${p}\n\`\`\``,
+        });
       });
-    });
+    }
   })();
 };
 
