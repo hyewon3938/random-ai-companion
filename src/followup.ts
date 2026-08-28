@@ -1,36 +1,31 @@
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
-import { renderUserBlock } from "./user-profile.js";
 import {
   db,
   getActiveCharacter,
-  getRelationshipState,
   lastMessage,
   proactiveCountToday,
   proactiveSinceLastUser,
   recordSendFailure,
-  speechGuard,
   PROACTIVE_DAILY_MAX,
   type CharacterRow,
 } from "./db.js";
-import type { Bible } from "./character.js";
 import {
   sendProactive,
   acquireProactive,
   releaseProactive,
   logErr,
 } from "./bot.js";
-import {
-  currentBlock,
-  OUTPUT_FORMAT_COMPACT,
-  SPEECH_TEXTURE_COMPACT,
-} from "./context.js";
+import { buildSystemBlocks, currentBlock } from "./context.js";
 import { proactiveAllowed } from "./proactive-policy.js";
-import { kstClock, kstVerbalTime, logicalDayStartTs } from "./kst.js";
+import { kstClock, logicalDayStartTs } from "./kst.js";
 
 // 침묵 팔로업: 대화 중 유저가 한동안 조용하고, 지금 캐릭터의 각본이 '자기 삶을 한 마디 흘릴 만한
 // 전환점'이면(밥 먹으러 가기·일 마치기·운동 등), 캐릭터가 먼저 근황을 남긴다. 밤에 계획된 아침 안부와 다른 채널.
 // 그 순간의 각본을 봐야 하므로 판단·문안을 LLM이 한다. 매달리지 않도록 총량·간격을 강하게 제한.
+//
+// 문안은 대화와 같은 3층 프롬프트(buildSystemBlocks)에 상황 문단만 얹는다 — 앞 두 층이
+// 대화와 같아야 캐시가 붙는다. 정체성·말투·표기 규칙·지금 시각은 3층이 들고 있으니 여기엔 상황만 적는다.
 
 // 기계처럼 똑같이 반복되지 않게 — 하루 상한도, 침묵 임계도 그때그때 다르게(단 안정적으로).
 // 같은 날/같은 침묵 구간에서는 값이 흔들리지 않도록 문자열 해시로 결정론적 난수를 만든다.
@@ -55,41 +50,29 @@ const silenceThreshold = (lastTs: string): number =>
 const minutesSince = (ts: string): number =>
   (Date.now() - new Date(ts.replace(" ", "T") + "+09:00").getTime()) / 60000;
 
-const FOLLOWUP_SYSTEM = `너는 주어진 인물 그 자체다. 지금 상대가 한동안 답이 없다. 매달리는 게 아니라, 네 하루의 자연스러운 전환점에서 네 근황을 툭 흘리는 결이다. 억지스러우면 안 보내는 게 낫다.`;
+const goodnightSituation = (): string =>
+  [
+    `[문안 — 지금 보낼 굿나잇 한 통]`,
+    `새벽에 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 한 시간쯤 됐다. 잠든 것 같다. 너도 자러 가며 다정하게 굿나잇 인사를 남긴다 — 상대가 아침에 보면 기분 좋을 결로.`,
+    `- 매번 다르게, 자연스럽게. 재촉·서운함·매달림 없음.`,
+    `- 1~2개 말풍선(줄바꿈 구분).`,
+    ``,
+    `JSON으로만 답한다: {"text":"..."}`,
+  ].join("\n");
 
-const GOODNIGHT_SYSTEM = `너는 주어진 인물이다. 새벽에 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 한 시간쯤 됐다. 잠들었나 보다 싶어, 자기도 자러 가며 다정하게 굿나잇 인사를 남긴다. 매달리거나 서운해하지 않는다.`;
-
-const goodnightPrompt = (
-  bible: Bible,
-  chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
-${renderUserBlock(chatId)}
-상대가 대화 중 답이 없어진 지 한 시간쯤 됐다. 잠든 것 같다. 자기 전에 가볍고 다정한 굿나잇 한 마디를 남긴다(상대가 아침에 보면 기분 좋을 결로).
-- 내용은 잠든 것 같으니 잘 자라는 다정한 인사. 예시 문구를 베끼지 말고 위 [말투] 지시의 말투로 직접 쓴다.
-- 매번 다르게, 자연스럽게. 재촉·서운함 없음. 1~2개 말풍선(줄바꿈). 말투는 위 [말투] 지시대로.
-JSON: {"text":"..."}`;
-
-const followupPrompt = (
-  bible: Bible,
-  block: { activity: string },
-  lastLine: string,
-  openLoops: string[],
-  chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
-${renderUserBlock(chatId)}
-지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다. 너는 지금 "${block.activity}" 참이다.
-
-마지막으로 오간 말: ${lastLine || "(없음)"}
-아직 이어가지 못한 것: ${openLoops.join(" / ") || "(없음)"}
-
-상대가 한참 조용하다. 이 전환점(지금 네가 하는 일)에서 네 근황을 가볍게 한 마디 흘긴다면 뭐라고 할까?
-- 위에 적힌 지금 하는 일을 막 시작하는 참이면 이제 그걸 하러 간다고 가볍게 흘리는 결. (문구는 위 [말투] 지시대로 직접 쓴다.)
-- 자기 삶 공유가 핵심. 가볍게 질문 하나 얹어도 좋다(질문엔 물음표).
-- 매달리거나 서운함을 내비치지 않는다. 재촉 금지.
-- 지금 각본이 흘릴 만한 전환점이 아니거나(자는 중이거나 손·정신이 묶인 일 중), 억지스러우면 send=false.
-- 지금 관계 말투 유지. 1~2개 말풍선(줄바꿈).
-
-JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
+const catchupSituation = (lastLine: string): string =>
+  [
+    `[문안 — 지금 보낼 근황 한 통]`,
+    `상대가 한참 조용하다. 재촉하지 않고, 위 [지금]의 전환점(지금 하는/막 시작하는 일)에서 네 근황만 가볍게 한 마디 흘긴다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,
+    `마지막으로 오간 말: ${lastLine || "(없음)"}`,
+    `- 지금 하는 일을 막 시작하는 참이면 이제 그걸 하러 간다고 가볍게 흘리는 결.`,
+    `- 자기 삶 공유가 핵심. 가볍게 질문 하나 얹어도 좋다.`,
+    `- 매달리거나 서운함을 내비치지 않는다. 재촉 금지.`,
+    `- 지금 각본이 흘릴 만한 전환점이 아니거나(자는 중이거나 손·정신이 묶인 일 중), 억지스러우면 send=false.`,
+    `- 1~2개 말풍선(줄바꿈 구분).`,
+    ``,
+    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
+  ].join("\n");
 
 // 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
 let running = false;
@@ -145,10 +128,11 @@ const followupTickBody = async (): Promise<void> => {
       // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
       if (!acquireProactive(c.chat_id)) continue;
       try {
-        const bible = JSON.parse(c.genesis_json) as Bible;
         const g = await chatJson<{ text: string }>(
-          GOODNIGHT_SYSTEM,
-          goodnightPrompt(bible, c.chat_id),
+          buildSystemBlocks(c.id, c.chat_id, {
+            situation: goodnightSituation(),
+          }),
+          "위 상황 문단대로 문안을 만들어.",
           300,
           config.model,
         );
@@ -185,8 +169,6 @@ const followupTickBody = async (): Promise<void> => {
     const block = currentBlock(c.id);
     if (!block || block.responsiveness === "unavailable") continue; // 운전·잠 등엔 못 보냄
 
-    const bible = JSON.parse(c.genesis_json) as Bible;
-    const state = getRelationshipState(c.id);
     const lastLine = (
       db
         .prepare(
@@ -199,16 +181,10 @@ const followupTickBody = async (): Promise<void> => {
     if (!acquireProactive(c.chat_id)) continue;
     try {
       const draft = await chatJson<{ send: boolean; text?: string }>(
-        FOLLOWUP_SYSTEM,
-        followupPrompt(
-          bible,
-          block,
-          (lastLine ?? "").replace(/\n/g, " "),
-          state.open_loops
-            .filter((l) => l.status === "open")
-            .map((l) => l.content),
-          c.chat_id,
-        ),
+        buildSystemBlocks(c.id, c.chat_id, {
+          situation: catchupSituation((lastLine ?? "").replace(/\n/g, " ")),
+        }),
+        "위 상황 문단대로 문안을 만들어.",
         500,
         config.model, // 실시간성이라 대화 모델(sonnet)
       );

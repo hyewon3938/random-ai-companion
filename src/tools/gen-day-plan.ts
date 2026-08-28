@@ -2,7 +2,6 @@
 // 사용: npx tsx src/tools/gen-day-plan.ts
 import { db, getDayPlan, type CharacterRow } from "../db.js";
 import { ensureTodayPlan } from "../day-plan.js";
-import type { Bible } from "../character.js";
 import { kstDateString } from "../kst.js";
 
 const row = db
@@ -14,7 +13,6 @@ const row = db
 if (!row) {
   console.log("no active character");
 } else {
-  const bible = JSON.parse(row.genesis_json) as Bible;
-  await ensureTodayPlan(row.id, bible);
+  await ensureTodayPlan(row.id);
   console.log(getDayPlan(row.id, kstDateString()));
 }

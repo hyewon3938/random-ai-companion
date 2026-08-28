@@ -8,7 +8,8 @@ import {
   monthHasSeeds,
   saveDaySeed,
 } from "./db.js";
-import type { Bible } from "./character.js";
+import { identityLines } from "./memory.js";
+import { RHYTHM_RUNWAY_DAYS } from "./thresholds.js";
 import { dayLabel, getKstNow, kstDateString } from "./kst.js";
 
 // 월 리듬(중간 지평): 한 달치 이벤트 + 매일의 컨디션/기상 시드를 미리 깔아둔다.
@@ -56,7 +57,7 @@ const daysLeftInMonth = (today: string): number => {
 const MONTH_SYSTEM = `너는 한 인물의 한 달을 미리 설계하는 작가다. 실제 그 사람의 삶처럼, 이벤트와 그 여파가 인과로 이어지는 흐름을 짠다. 기력은 급변하지 않고 며칠에 걸친 파도처럼 오르내린다.`;
 
 const monthPrompt = (
-  bible: Bible,
+  persona: string,
   ym: string,
   days: { date: string; label: string }[],
   arcs: string,
@@ -65,8 +66,8 @@ const monthPrompt = (
   existingUser: string,
 ): string => `아래 인물의 ${ym} 한 달을 미리 설계해줘. 두 가지를 만든다: (1) 이 달의 이벤트 몇 개, (2) 매일의 컨디션 시드.
 
-[인물]
-${JSON.stringify({ identity: bible.identity, life: bible.life, tastes: bible.tastes }, null, 2)}
+[인물 — 같은 항목이 두 줄이면 아래쪽이 최신]
+${persona || "(없음)"}
 
 [삶의 큰 흐름 — 이 달이 이 결 위에 놓이게]
 ${arcs || "(없음)"}
@@ -97,7 +98,6 @@ days에는 위 '이 달의 날짜'를 하나도 빠짐없이 전부 포함한다
 // 한 달치 리듬을 생성해 DB에 반영한다(이미 있으면 스킵). API 폴백·수동 도구가 직접 호출.
 export const ensureMonthPlan = async (
   characterId: number,
-  bible: Bible,
   ym: string,
 ): Promise<boolean> => {
   if (monthHasSeeds(characterId, ym)) return false;
@@ -125,7 +125,7 @@ export const ensureMonthPlan = async (
   const plan = await chatJson<MonthPlan>(
     MONTH_SYSTEM,
     monthPrompt(
-      bible,
+      identityLines(characterId),
       ym,
       monthDays(ym),
       arcs,
@@ -172,13 +172,12 @@ export const applyMonthPlan = (
 // 항상 ~1개월 런웨이를 앞서 둔다: 이번 달 + (월말 임박 시) 다음 달. 이미 있으면 no-op(비용 0).
 export const ensureRhythmRunway = async (
   characterId: number,
-  bible: Bible,
   today: string,
 ): Promise<void> => {
   const ym = today.slice(0, 7);
-  await ensureMonthPlan(characterId, bible, ym);
-  if (daysLeftInMonth(today) <= 6)
-    await ensureMonthPlan(characterId, bible, nextMonthYm(ym));
+  await ensureMonthPlan(characterId, ym);
+  if (daysLeftInMonth(today) <= RHYTHM_RUNWAY_DAYS)
+    await ensureMonthPlan(characterId, nextMonthYm(ym));
 };
 
 // 시드가 없어 지금 생성이 필요한 달 목록(밤 정리가 이 신호를 받아 리듬을 생성).
@@ -189,7 +188,7 @@ export const monthsNeedingRhythm = (
   const ym = today.slice(0, 7);
   const out: string[] = [];
   if (!monthHasSeeds(characterId, ym)) out.push(ym);
-  if (daysLeftInMonth(today) <= 6) {
+  if (daysLeftInMonth(today) <= RHYTHM_RUNWAY_DAYS) {
     const nm = nextMonthYm(ym);
     if (!monthHasSeeds(characterId, nm)) out.push(nm);
   }

@@ -21,7 +21,10 @@ const RETRY_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 
 /** 발송은 bot.ts가 한다 — 여기서 부르면 순환 참조가 되므로 등록받아 쓴다. */
-export type PendingSender = (row: PendingReplyRow, bubbles: string[]) => Promise<void>;
+export type PendingSender = (
+  row: PendingReplyRow,
+  bubbles: string[],
+) => Promise<void>;
 
 let sender: PendingSender | null = null;
 export const setPendingSender = (fn: PendingSender): void => {
@@ -43,7 +46,9 @@ const stamp = (): string => stampAfter(0);
 const parseBubbles = (row: PendingReplyRow): string[] => {
   try {
     const v = JSON.parse(row.bubbles_json) as unknown;
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    return Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === "string")
+      : [];
   } catch {
     return [];
   }
@@ -71,7 +76,9 @@ const fire = async (row: PendingReplyRow): Promise<void> => {
       console.error(`[pending] 발송 포기 #${row.id}: ${msg}`);
       return;
     }
-    console.warn(`[pending] 발송 실패 #${row.id}, ${RETRY_MS / 1000}초 뒤 재시도: ${msg}`);
+    console.warn(
+      `[pending] 발송 실패 #${row.id}, ${RETRY_MS / 1000}초 뒤 재시도: ${msg}`,
+    );
     timers.set(
       row.id,
       setTimeout(() => {
@@ -84,7 +91,9 @@ const fire = async (row: PendingReplyRow): Promise<void> => {
 const arm = (row: PendingReplyRow): void => {
   const prev = timers.get(row.id);
   if (prev) clearTimeout(prev);
-  const delay = Math.max(0, epochOf(row.send_at) - getKstNow().getTime());
+  // epochOf는 진짜 UTC epoch를 주므로 비교도 Date.now()로 — getKstNow().getTime()은
+  // +9h 시프트된 값이라 대기가 9시간 짧아져 전부 즉시 발송된다(스모크에서 확인된 버그).
+  const delay = Math.max(0, epochOf(row.send_at) - Date.now());
   timers.set(
     row.id,
     setTimeout(() => {
@@ -147,7 +156,8 @@ export const dropPendingReplies = (chatId: string): number => {
   return ids.length;
 };
 
-export const isWaiting = (chatId: string): boolean => hasWaitingPendingReply(chatId);
+export const isWaiting = (chatId: string): boolean =>
+  hasWaitingPendingReply(chatId);
 
 /** 프로세스가 다시 떴을 때 남아 있는 대기 답장을 이어서 건다. */
 export const resumePendingReplies = (): void => {

@@ -1,9 +1,16 @@
-import { Bot, type ApiClientOptions } from "grammy";
+import { Bot, InlineKeyboard, type ApiClientOptions } from "grammy";
 import { Agent } from "node:https";
 import { inspect } from "node:util";
 import { config } from "./config.js";
-import { createDaepyoCharacter, type Bible } from "./character.js";
+import {
+  CHARACTER_AGE_BANDS,
+  CHARACTER_GENDERS,
+  FREE_TEXT_MAX,
+  createUserCharacter,
+  type CharacterGender,
+} from "./character.js";
 import { ensureTodayPlan } from "./day-plan.js";
+import { ensureMonthPlan } from "./life-plan.js";
 import { buildSystemBlocks } from "./context.js";
 import { polishBubble } from "./bubble-polish.js";
 import { decideReplyTiming, recordHold } from "./reply-timing.js";
@@ -15,20 +22,22 @@ import {
 } from "./pending.js";
 import { chat, type ChatTurn } from "./llm.js";
 import {
+  currentSpeechLevel,
   db,
   getActiveCharacter,
   getRecentMessages,
   getRecoveryMark,
-  getRelationshipState,
+  getRelationship,
   lastMessage,
   logMessage,
   recentUserGaps,
   setRecoveryMark,
+  setSpeechLevel,
   type CharacterRow,
   type MessageRow,
   type PendingReplyRow,
 } from "./db.js";
-import { getKstNow, timeMarkerFor } from "./kst.js";
+import { getKstNow, kstDateString, timeMarkerFor } from "./kst.js";
 
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
 // reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 선톡,
@@ -241,20 +250,37 @@ export const sendProactive = async (
   return { delivered: sent.length, total };
 };
 
-// LLM이 답장 맨 앞에 붙인 시스템 태그를 전부 읽고 떼어낸다(유저에게 노출 방지).
-// 지금 값을 읽는 태그는 [남음] 하나 — 조정 가능한 자기 일정을 접거나 미루고 곁에 남기로 한 신호.
+// LLM이 답장 앞뒤에 붙인 시스템 태그를 전부 읽고 떼어낸다(유저에게 노출 방지).
+// 앞머리에서 값을 읽는 태그는 [남음] 하나 — 조정 가능한 자기 일정을 접거나 미루고 곁에 남기로 한 신호.
 // 응답 속도 태그([한참후]·[잠시후]·[즉시])는 지연을 각본 블록에서 계산하게 바뀐 뒤로 값을 쓰지
 // 않지만, 유저에게 보이면 안 되므로 떼어내는 대상에는 그대로 남는다.
+// 답장 끝의 [메모] 줄은 NOTE_RULE(context.ts)이 시킨 오늘 메모 — 내용을 note로 돌려주고,
+// 발송 시 pending.ts가 saveTodayNote로 저장한다.
 interface ReplyTags {
   stay: boolean;
+  note: string | null;
   text: string;
 }
 
 // 앞머리 대괄호는 어떤 형태든 태그로 보고 전부 떼어낸다. [남음][즉시]처럼 겹쳐 나오면
 // 하나만 벗기던 버그가 있어 연속으로 벗기고, 종류 판정도 벗기는 자리에서 함께 한다 —
 // 맨 앞 하나만 정규식으로 따로 보면 태그가 겹친 순간 뒤쪽 신호를 통째로 놓친다.
-const parseReplyTags = (reply: string): ReplyTags => {
-  let text = reply;
+// export는 단독 회귀 검증용(bubble-polish와 같은 이유) — 봇 밖에서 부르는 곳은 없다.
+export const parseReplyTags = (reply: string): ReplyTags => {
+  // [메모] 줄 추출 — 규칙은 맨 끝 한 줄이지만, 모델이 중간에 찍거나 여러 줄을 찍어도
+  // 유저에게 새어 나가면 안 되므로 위치와 개수에 관계없이 전부 떼어낸다.
+  // 앞머리 태그 벗기기보다 먼저 한다 — 답장이 [메모]로 시작하면(메모만 있는 답장 등)
+  // 아래 루프가 태그만 삼키고 메모 내용이 유저에게 보이는 문장으로 남는다.
+  const notes: string[] = [];
+  let text = reply
+    .split("\n")
+    .filter((line) => {
+      const nm = line.match(/^\s*\[메모\]\s*(.*)$/);
+      if (!nm) return true;
+      if (nm[1].trim()) notes.push(nm[1].trim());
+      return false;
+    })
+    .join("\n");
   let stay = false;
   let m: RegExpMatchArray | null;
   // 길이 상한 20 — 응답 속도 태그(4자)뿐 아니라 대화 기록에 붙는 시간 마커를 모델이 흉내 내
@@ -263,7 +289,11 @@ const parseReplyTags = (reply: string): ReplyTags => {
     if (m[1].includes("남음")) stay = true;
     text = text.slice(m[0].length);
   }
-  return { stay, text: text.trim() };
+  return {
+    stay,
+    note: notes.length > 0 ? notes.join(" / ") : null,
+    text: text.trim(),
+  };
 };
 
 // 연속 동일 role 메시지 병합 + 시간이 벌어진 지점에 시간 마커.
@@ -286,20 +316,174 @@ const toTurns = (rows: MessageRow[]): ChatTurn[] => {
   return turns;
 };
 
+// ── /start 온보딩 — 유저 입력 다섯으로 캐릭터를 만든다 ──────────────────────
+// 선택지 둘(성별·나이대)은 인라인 버튼, 서술형 셋(성격·관계·바라는 모습)은 메시지로 받는다.
+// 서술형은 비워도 된다 — 빈 항목은 생성이 앞뒤 맞게 채운다(character.ts).
+// 진행 상태는 메모리에만 둔다: 아직 캐릭터가 없어 잃을 것이 없고, 온보딩 중 재시작되면
+// /start부터 다시 하면 된다.
+type FreeStep = "personality" | "relationship" | "wish";
+interface Onboarding {
+  step: "gender" | "age" | FreeStep | "creating";
+  gender?: CharacterGender;
+  ageBand?: string;
+  personality?: string;
+  relationship?: string;
+  wish?: string;
+}
+const onboarding = new Map<string, Onboarding>();
+
+const FREE_QUESTIONS: readonly { step: FreeStep; ask: string }[] = [
+  { step: "personality", ask: "성격이나 분위기는 어떤 사람이면 좋겠어?" },
+  { step: "relationship", ask: "너랑 어떤 사이로 시작하면 좋겠어?" },
+  { step: "wish", ask: "그 밖에 바라는 모습이 있으면 적어줘." },
+];
+
+const skipKeyboard = new InlineKeyboard().text("비워두고 넘어가기", "ob:s");
+
+const ageKeyboard = (): InlineKeyboard => {
+  const kb = new InlineKeyboard();
+  CHARACTER_AGE_BANDS.forEach((band, i) => {
+    kb.text(band, `ob:a:${i}`);
+    if (i % 3 === 2) kb.row();
+  });
+  return kb;
+};
+
+const askFreeStep = async (
+  chatId: string,
+  ob: Onboarding,
+  step: FreeStep,
+): Promise<void> => {
+  const q = FREE_QUESTIONS.find((f) => f.step === step);
+  if (!q) return;
+  ob.step = step;
+  await bot.api.sendMessage(chatId, q.ask, { reply_markup: skipKeyboard });
+};
+
+// 서술형 답(또는 비우기)을 받아 다음 질문으로. 마지막 답이면 생성으로 넘어간다.
+const advanceOnboarding = async (
+  chatId: string,
+  ob: Onboarding,
+  answer: string | null,
+): Promise<void> => {
+  if (ob.step === "gender" || ob.step === "age" || ob.step === "creating")
+    return;
+  if (answer) ob[ob.step] = answer;
+  const i = FREE_QUESTIONS.findIndex((f) => f.step === ob.step);
+  const next = FREE_QUESTIONS[i + 1]?.step;
+  if (next) {
+    await askFreeStep(chatId, ob, next);
+    return;
+  }
+  await finishOnboarding(chatId, ob);
+};
+
+// 다섯 입력이 모이면 생성 두 콜(사람 전부 → 삶의 흐름)을 돌리고 첫 인사를 보낸다.
+const finishOnboarding = async (
+  chatId: string,
+  ob: Onboarding,
+): Promise<void> => {
+  if (!ob.gender || !ob.ageBand) return;
+  ob.step = "creating";
+  await bot.api.sendMessage(
+    chatId,
+    "여기까지면 됐어. 이제 만날 사람을 만들게 — 조금 걸려.",
+  );
+  await bot.api.sendChatAction(chatId, "typing").catch(() => {
+    /* 타이핑 표시 실패는 무시 */
+  });
+  try {
+    const { id, output } = await createUserCharacter(chatId, {
+      gender: ob.gender,
+      ageBand: ob.ageBand,
+      personality: ob.personality,
+      relationship: ob.relationship,
+      wish: ob.wish,
+    });
+    onboarding.delete(chatId);
+    const { sent } = await sendBubblesTo(chatId, output.firstGreeting);
+    if (sent.length > 0)
+      logMessage(chatId, id, "assistant", sent.join("\n"), nowIso(), {
+        first: true,
+      });
+    // 월 리듬·오늘 각본 첫 실행. 첫 인사를 기다리게 하지 않으려고 뒤에서 돌린다 —
+    // 실패해도 첫 답장 때 ensureTodayPlan(lazy)이 다시 시도한다.
+    void ensureMonthPlan(id, kstDateString().slice(0, 7))
+      .then(() => ensureTodayPlan(id))
+      .catch((e) => logErr("[start] first plan error:", e));
+  } catch (e) {
+    logErr("[start] create error:", e);
+    onboarding.delete(chatId);
+    await bot.api
+      .sendMessage(
+        chatId,
+        "만드는 데 문제가 생겼어. 잠깐 있다가 /start 로 다시 해줘.",
+      )
+      .catch(() => {
+        /* 안내 실패는 무시 — 다음 /start가 처음부터 다시 간다 */
+      });
+  }
+};
+
 bot.command("start", async (ctx) => {
   const chatId = String(ctx.chat.id);
   if (getActiveCharacter(chatId)) {
     await ctx.reply("이미 연결된 상대가 있어. 그냥 말을 걸면 돼.");
     return;
   }
-  await ctx.reply("누군가와 연결해줄게. 어떤 사람인지는 대화하면서 알아가.");
-  await ctx.replyWithChatAction("typing");
-  // PoC: 랜덤 생성 대신 고정 대표 캐릭터(정우진). 카드 온보딩·랜덤 매칭은 이후.
-  const { id, bible } = createDaepyoCharacter(chatId);
-  await sendBubblesTo(chatId, bible.first_greeting);
-  logMessage(chatId, id, "assistant", bible.first_greeting, nowIso(), {
-    first: true,
+  if (onboarding.get(chatId)?.step === "creating") {
+    await ctx.reply("지금 만들고 있어. 조금만 기다려줘.");
+    return;
+  }
+  // 온보딩 중 /start 재실행은 처음부터 다시 — 아직 아무것도 저장되지 않았다.
+  onboarding.set(chatId, { step: "gender" });
+  await ctx.reply(
+    "어떤 사람을 만나고 싶은지 다섯 가지만 물어볼게. 먼저, 성별은?",
+    {
+      reply_markup: new InlineKeyboard()
+        .text(CHARACTER_GENDERS[0], "ob:g:0")
+        .text(CHARACTER_GENDERS[1], "ob:g:1"),
+    },
+  );
+});
+
+// 온보딩 인라인 버튼 처리. 지나간 단계의 버튼을 늦게 눌러도 상태가 어긋나지 않게
+// 현재 단계와 맞는 입력만 받는다(안 맞으면 스피너만 멈추고 무시).
+bot.on("callback_query:data", async (ctx) => {
+  const chatId = String(ctx.chat?.id ?? ctx.callbackQuery.from.id);
+  const data = ctx.callbackQuery.data;
+  await ctx.answerCallbackQuery().catch(() => {
+    /* 응답 실패는 무시 — 오래된 콜백은 텔레그램이 거부한다 */
   });
+  if (!data.startsWith("ob:")) return;
+  if (getActiveCharacter(chatId)) return; // 생성이 끝난 뒤 남은 버튼
+  const ob = onboarding.get(chatId);
+  if (!ob) {
+    await bot.api
+      .sendMessage(chatId, "/start 로 처음부터 다시 해줘.")
+      .catch(() => {
+        /* 안내 실패는 무시 */
+      });
+    return;
+  }
+  if (ob.step === "gender" && data.startsWith("ob:g:")) {
+    const gender = CHARACTER_GENDERS[Number(data.slice(5))];
+    if (!gender) return;
+    ob.gender = gender;
+    ob.step = "age";
+    await bot.api.sendMessage(chatId, "나이대는?", {
+      reply_markup: ageKeyboard(),
+    });
+    return;
+  }
+  if (ob.step === "age" && data.startsWith("ob:a:")) {
+    const band = CHARACTER_AGE_BANDS[Number(data.slice(5))];
+    if (!band) return;
+    ob.ageBand = band;
+    await askFreeStep(chatId, ob, "personality");
+    return;
+  }
+  if (data === "ob:s") await advanceOnboarding(chatId, ob, null);
 });
 
 // TODO(D1 전): /새로만나기 — 비가역 확인 → 아카이브 → "어떤 점이 아쉬웠어?" → user_preferences 반영 → 신규 매칭
@@ -381,9 +565,8 @@ const respond = async (
   try {
     const character = getActiveCharacter(chatId);
     if (!character) return;
-    const bible = JSON.parse(character.genesis_json) as Bible;
     // 오늘의 하루 각본이 없으면 생성(그날 첫 대화 때 한 번). 실패해도 대화는 계속
-    await ensureTodayPlan(character.id, bible).catch((e) =>
+    await ensureTodayPlan(character.id).catch((e) =>
       logErr("[bot] day plan error:", e),
     );
     // 지금 답장하는 유저 메시지. 생성이 끝났을 때 이보다 새 메시지가 와 있으면 이 답장은 버린다.
@@ -404,21 +587,26 @@ const respond = async (
         `[hold] ${chatId} ${timing.held.activity} → ${timing.held.outcome}`,
       );
 
+    // 말투 래칫: 최근 답장이 반말로 정착했으면(휴리스틱 판정) 관계의 말투 값을 casual로
+    // 굳힌다. casual이 된 뒤에는 되돌리지 않는다 — 존댓말 회귀를 막는 한 방향 래칫.
+    // 저장해 두면 최근 대화를 안 보는 경로(선톡 문안)도 같은 값을 읽는다.
+    if (
+      getRelationship(character.id)?.speech_level !== "casual" &&
+      currentSpeechLevel(chatId) === "반말"
+    )
+      setSpeechLevel(character.id, "casual", nowIso());
+
     // 2. 지금 만든다
-    const state = getRelationshipState(character.id);
-    // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다
+    // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
     // 대기가 길면 답장이 도착하는 시점을 꼬리에 적어 준다 — 세 시간 뒤에 나갈 말을
-    // 방금 본 것처럼 쓰지 않게.
-    const system = buildSystemBlocks(
-      character.id,
-      bible,
-      state,
-      chatId,
-      timing.waitMs,
-    );
+    // 방금 본 것처럼 쓰지 않게. searchText는 이번 발화 — 태그 검색의 재료.
+    const system = buildSystemBlocks(character.id, chatId, {
+      sendsInMs: timing.waitMs,
+      searchText: turn.text,
+    });
     const turns = toTurns(getRecentMessages(chatId, 40));
     // 태그는 여기서 전부 떼어낸다(유저 비노출).
-    let { text, stay } = parseReplyTags(await chat(system, turns));
+    let { text, stay, note } = parseReplyTags(await chat(system, turns));
     // 빈 답장 방어: LLM이 태그만 뱉거나 빈 문자열을 주는 경우가 있다 → 한 번 재생성, 그래도 비면 스킵.
     // (빈 텍스트를 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.)
     // 태그만 뱉은 답이 바로 이 경우라, 재생성분의 신호도 함께 살린다.
@@ -426,6 +614,7 @@ const respond = async (
       const retry = parseReplyTags(await chat(system, turns));
       text = retry.text;
       stay = stay || retry.stay;
+      note = retry.note ?? note;
     }
     // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음]).
     // 붙잡기 판정이 이미 접었으면 그 기록이 남아 있어 recordHold가 알아서 넘어간다.
@@ -449,8 +638,8 @@ const respond = async (
       characterId: character.id,
       userMsgAt: turn.at,
       bubbles,
-      // 오늘 메모로 남길 한 줄은 아직 답장 프롬프트가 만들지 않는다(배관만 깔아 둔다).
-      noteToSave: null,
+      // 답장 끝 [메모] 줄(NOTE_RULE) — 발송이 성공하면 pending.ts가 saveTodayNote로 저장한다.
+      noteToSave: note,
       waitMs: timing.waitMs,
       kind,
     });
@@ -473,7 +662,9 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
   // 일부라도 나갔으면 답장 책임을 완료로 확정한다: 재시도하면 이미 나간 앞부분이 중복되기 때문.
   if (sent.length === 0 && error) throw error;
   if (error)
-    console.warn(`[send] 부분 발송 kind=${kind} ${sent.length}/${bubbles.length}`);
+    console.warn(
+      `[send] 부분 발송 kind=${kind} ${sent.length}/${bubbles.length}`,
+    );
   logMessage(
     row.chat_id,
     row.character_id,
@@ -510,14 +701,37 @@ bot.on("message:text", async (ctx) => {
   const chatId = String(ctx.chat.id);
   const character = getActiveCharacter(chatId);
   if (!character) {
-    await ctx.reply("아직 연결된 상대가 없어. /start 로 시작해줘.");
+    // 온보딩 중이면 이 메시지는 서술형 질문의 답이다. 질문 하나에 메시지 하나로 받는다.
+    const ob = onboarding.get(chatId);
+    if (!ob) {
+      await ctx.reply("아직 연결된 상대가 없어. /start 로 시작해줘.");
+      return;
+    }
+    if (ob.step === "gender" || ob.step === "age") {
+      await ctx.reply("위 버튼에서 골라줘.");
+      return;
+    }
+    if (ob.step === "creating") {
+      await ctx.reply("지금 만들고 있어. 조금만 기다려줘.");
+      return;
+    }
+    const answer = ctx.message.text.trim();
+    if (answer.length > FREE_TEXT_MAX) {
+      await ctx.reply(
+        `조금 길어. ${FREE_TEXT_MAX}자 안으로 줄여서 다시 보내줘.`,
+      );
+      return;
+    }
+    await advanceOnboarding(chatId, ob, answer || null);
     return;
   }
   logMessage(chatId, character.id, "user", ctx.message.text, nowIso());
   // 만들어 두고 기다리던 답장이 있으면 버린다 — 유저가 말을 더 보탰으니 내용도 텀도 다시 정한다.
   const dropped = dropPendingReplies(chatId);
   if (dropped)
-    console.log(`[pending] 유저 추가 발화로 ${dropped}건 폐기 (chat=${chatId})`);
+    console.log(
+      `[pending] 유저 추가 발화로 ${dropped}건 폐기 (chat=${chatId})`,
+    );
   // 여기서 기다리는 건 유저 말이 다 도착할 때까지의 시간뿐이다(20~40초).
   // 각본상 자리를 비운 만큼의 텀은 답장을 만든 뒤 pending_replies가 맡는다.
   arm(chatId, computeWait(chatId));
@@ -538,7 +752,8 @@ export const recoverMissedReplies = async (): Promise<void> => {
     // 최근(3시간 내) 놓친 것만 복구한다 — 그보다 오래된 건 아침 안부·팔로업이 담당.
     // (예전엔 "오늘 새벽 5시 이후"로 걸렀는데, 자정~새벽 대화가 통째로 걸러지는 버그가 있었다.)
     const ageMin =
-      (Date.now() - new Date(last.sent_at.replace(" ", "T") + "+09:00").getTime()) /
+      (Date.now() -
+        new Date(last.sent_at.replace(" ", "T") + "+09:00").getTime()) /
       60000;
     if (ageMin > 180) continue;
     if (pending.has(c.chat_id) || responding.has(c.chat_id)) continue; // 이미 처리 중
@@ -552,7 +767,9 @@ export const recoverMissedReplies = async (): Promise<void> => {
     }
     const prev = getRecoveryMark(c.chat_id);
     setRecoveryMark(c.chat_id, last.sent_at); // 보내기 전에 책임 표시(재부팅 중복 방지)
-    console.log(`[recover] 놓친 답장 복구: ${c.chat_id} (마지막 ${last.sent_at})`);
+    console.log(
+      `[recover] 놓친 답장 복구: ${c.chat_id} (마지막 ${last.sent_at})`,
+    );
     try {
       await respond(c.chat_id, "recover");
     } catch (e) {

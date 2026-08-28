@@ -72,9 +72,11 @@ export const chat = async (
   return textOf(response.content).trim();
 };
 
-// JSON 응답 강제 + 파싱 실패 시 1회 재시도
+// JSON 응답 강제 + 파싱 실패 시 1회 재시도.
+// system은 chat과 같은 형태를 받는다 — SystemBlock[]로 주면 캐시 경계가 대화 경로와 같이 걸려,
+// 선톡 문안처럼 3층 프롬프트를 그대로 쓰는 호출이 캐시를 공유한다.
 export const chatJson = async <T>(
-  system: string,
+  system: string | SystemBlock[],
   userPrompt: string,
   maxTokens = 2048,
   model = config.model,

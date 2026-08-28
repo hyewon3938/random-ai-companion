@@ -1,6 +1,5 @@
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
-import { renderUserBlock } from "./user-profile.js";
 import { isHeldNow } from "./reply-timing.js";
 import {
   db,
@@ -8,12 +7,10 @@ import {
   lastMessage,
   proactiveCountToday,
   recordSendFailure,
-  speechGuard,
   PROACTIVE_DAILY_MAX,
   type CharacterRow,
 } from "./db.js";
-import type { Bible } from "./character.js";
-import { OUTPUT_FORMAT_COMPACT, SPEECH_TEXTURE_COMPACT } from "./context.js";
+import { buildSystemBlocks } from "./context.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory } from "./day-plan.js";
 import {
@@ -22,17 +19,15 @@ import {
   releaseProactive,
   logErr,
 } from "./bot.js";
-import {
-  kstClock,
-  kstDateString,
-  kstVerbalTime,
-  logicalDayStartTs,
-} from "./kst.js";
+import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
 
 // 자리 비움 예고(선-불가 선톡): 곧 한동안 답장이 어려운 일(운동·샤워·외출·회의 등)로
 // 들어가기 직전이면 조용히 사라지지 않고 "이제 ~하러 가요, 답 늦어요"를 먼저 남긴다.
 // 연속으로 바쁜 일 사이의 짧은 틈에는 그 경계에서 방금 한 일과 다음 일을 함께 알려 메운다.
 // '찾을 때 있어주기'의 연장 — 막연한 침묵(이탈)을 '알고 하는 기다림'으로 바꾼다. 블록당 한 번.
+//
+// 문안은 대화와 같은 3층 프롬프트(buildSystemBlocks)에 상황 문단만 얹는다 — 앞 두 층이
+// 대화와 같아야 캐시가 붙는다. 정체성·말투·표기 규칙·지금 시각은 3층이 들고 있으니 여기엔 상황만 적는다.
 
 const toMin = (hhmm: string): number => {
   const [h, m] = hhmm.split(":").map(Number);
@@ -72,52 +67,47 @@ const lastLineOf = (chatId: string): string =>
       .get(chatId) as { text: string } | undefined
   )?.text ?? "";
 
-const PRESENCE_SYSTEM = `너는 주어진 인물이다. 지금 곧 한동안 자리를 비우게 된다(운동·샤워·외출 등 답장이 어려운 일). 조용히 사라지지 않고, 상대가 막연히 기다리지 않도록 지금 뭘 하러 가는지 가볍게 한 마디 남긴다. 매달림이 아니라 배려다.`;
-
-const presencePrompt = (
-  bible: Bible,
+const presenceSituation = (
   activity: string,
   between: boolean,
   prevAct: string,
   pending: boolean,
   lastLine: string,
   fixed: boolean,
-  chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
-${renderUserBlock(chatId)}
-지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다.
-${
-  between
-    ? `너는 방금 "${prevAct}"을(를) 막 끝냈고, 이제 곧 "${activity}"을(를) 하러 간다. 그 동안은 답장이 어렵다.`
-    : `너는 이제 곧 "${activity}"을(를) 하러 간다. 그 동안은 답장이 어렵거나 느려진다.`
-}
-${
-  fixed
-    ? `이건 미룰 수 없는 공적 의무(회의·시험·발표 등)라 폰을 못 본다. 끝나고 연락하겠다는 결로 알린다.`
-    : `이건 급하면 미루거나 조정할 수도 있는 일이다. 가볍게 잠깐 다녀오겠다, 급하면 말하라는 결로.`
-}
-${pending ? `상대가 방금 남긴 말이 있다: "${lastLine.replace(/\n/g, " ")}". 지금 제대로 답하긴 어려우니 짧게 아는 척만 하고, 다녀와서/이따 얘기하자는 정도로 미뤄도 된다.` : ""}
+): string =>
+  [
+    `[문안 — 지금 보낼 자리 비움 예고 한 통]`,
+    between
+      ? `너는 방금 "${prevAct}"을(를) 막 끝냈고, 이제 곧 "${activity}"을(를) 하러 간다. 그 동안은 답장이 어렵다.`
+      : `너는 이제 곧 "${activity}"을(를) 하러 간다. 그 동안은 답장이 어렵거나 느려진다.`,
+    fixed
+      ? `이건 미룰 수 없는 공적 의무(회의·시험·발표 등)라 폰을 못 본다. 끝나고 연락하겠다는 결로 알린다.`
+      : `이건 급하면 미루거나 조정할 수도 있는 일이다. 가볍게 잠깐 다녀오겠다, 급하면 말하라는 결로.`,
+    ...(pending
+      ? [
+          `상대가 방금 남긴 말이 있다: "${lastLine.replace(/\n/g, " ")}". 지금 제대로 답하긴 어려우니 짧게 아는 척만 하고, 다녀와서/이따 얘기하자는 정도로 미뤄도 된다.`,
+        ]
+      : []),
+    ``,
+    `조용히 사라지지 말고, 상대가 '네가 뭘 하는지 알고 기다리게' 지금 상황을 가볍게 한 마디 남긴다. 매달림이 아니라 배려다.`,
+    `- 나가는 경우: 이제 그 일을 하러 가고 그동안 답이 늦어질 거라고 가볍게 알리는 결.`,
+    `- 방금 뭔가 하고 와서 또 나가는 경우: 방금 한 걸 자연스럽게 언급하며 이제 다음 걸 하러 간다고 말한다.`,
+    `- 짧게 1~2개 말풍선(줄바꿈 구분). 재촉·서운함·매달림 없음.`,
+    `- 억지스러우면(딱히 알릴 만한 상황이 아니면) send=false.`,
+    ``,
+    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
+  ].join("\n");
 
-조용히 사라지지 말고, 상대가 '네가 뭘 하는지 알고 기다리게' 지금 상황을 가볍게 한 마디 남긴다.
-- 나가는 경우: 이제 그 일을 하러 가고 그동안 답이 늦어질 거라고 가볍게 알리는 결.
-- 방금 뭔가 하고 와서 또 나가는 경우: 방금 한 걸 자연스럽게 언급하며 이제 다음 걸 하러 간다고 말한다.
-- (예시 문구를 그대로 베끼지 말고, 위 [말투] 지시의 말투로 지금 상황에 맞게 직접 쓴다.)
-- 짧게 1~2개 말풍선(줄바꿈으로 구분). 재촉·서운함·매달림 없음. 말투는 위 [말투] 지시대로.
-- 억지스러우면(딱히 알릴 만한 상황이 아니면) send=false.
-JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
-
-const RETURN_SYSTEM = `너는 주어진 인물이다. 아까 곧 자리를 비운다고 알리고 다녀왔다. 방금 그 일이 끝나서 돌아왔음을 상대에게 가볍게 한 마디 알린다. 매달림이 아니라 자연스러운 복귀 인사다.`;
-
-const returnPrompt = (
-  bible: Bible,
-  activity: string,
-  chatId: string,
-): string => `너는 이 인물이다: ${JSON.stringify(bible.identity)} / 말투 습관: ${bible.voice.ending}${speechGuard(chatId)}${SPEECH_TEXTURE_COMPACT}${OUTPUT_FORMAT_COMPACT}
-${renderUserBlock(chatId)}
-지금 시각은 ${kstVerbalTime()} — 분 단위까지 이 표현 그대로 인식한다. 너는 방금 ${activity} 을(를) 끝내고 돌아왔다. 그 사이 상대에게선 답이 없었다.
-- 돌아왔음을 가볍게 알린다(그 일이 이제 끝났고 돌아왔다는 결). 아까 하려던 안부를 자연스럽게 이어도 좋다.
-- 짧게 1~2개 말풍선(줄바꿈). 재촉·서운함 없음. 말투는 위 [말투] 지시대로.
-JSON: {"send":true,"text":"..."} 또는 {"send":false}`;
+const returnSituation = (activity: string): string =>
+  [
+    `[문안 — 지금 보낼 복귀 인사 한 통]`,
+    `너는 아까 곧 자리를 비운다고 알리고 다녀왔다. 방금 "${activity}"을(를) 끝내고 돌아왔는데, 그 사이 상대에게선 답이 없었다.`,
+    `- 돌아왔음을 가볍게 알린다(그 일이 이제 끝났고 돌아왔다는 결). 아까 하려던 안부를 자연스럽게 이어도 좋다. 매달림이 아니라 자연스러운 복귀 인사다.`,
+    `- 짧게 1~2개 말풍선(줄바꿈 구분). 재촉·서운함 없음.`,
+    `- 억지스러우면 send=false.`,
+    ``,
+    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
+  ].join("\n");
 
 // 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
 let running = false;
@@ -204,10 +194,11 @@ const presenceTickBody = async (): Promise<void> => {
         // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
         if (!acquireProactive(c.chat_id)) continue;
         try {
-          const bible = JSON.parse(c.genesis_json) as Bible;
           const draft = await chatJson<{ send: boolean; text?: string }>(
-            RETURN_SYSTEM,
-            returnPrompt(bible, ended.activity, c.chat_id),
+            buildSystemBlocks(c.id, c.chat_id, {
+              situation: returnSituation(ended.activity),
+            }),
+            "위 상황 문단대로 문안을 만들어.",
             400,
             config.model,
           );
@@ -273,19 +264,18 @@ const presenceTickBody = async (): Promise<void> => {
     // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
     if (!acquireProactive(c.chat_id)) continue;
     try {
-      const bible = JSON.parse(c.genesis_json) as Bible;
       const draft = await chatJson<{ send: boolean; text?: string }>(
-        PRESENCE_SYSTEM,
-        presencePrompt(
-          bible,
-          target.activity,
-          between,
-          prevAct,
-          last.role === "user",
-          lastLineOf(c.chat_id),
-          blockCategory(target) === "official",
-          c.chat_id,
-        ),
+        buildSystemBlocks(c.id, c.chat_id, {
+          situation: presenceSituation(
+            target.activity,
+            between,
+            prevAct,
+            last.role === "user",
+            lastLineOf(c.chat_id),
+            blockCategory(target) === "official",
+          ),
+        }),
+        "위 상황 문단대로 문안을 만들어.",
         400,
         config.model, // 실시간성이라 대화 모델(sonnet)
       );

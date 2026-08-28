@@ -746,6 +746,90 @@ export const saveRelationshipFirstValues = (
   );
 };
 
+/** 관계 여덟 항목 컬럼을 그대로 읽는 행. 프롬프트 조립이 쓴다. */
+export interface RelationshipRow {
+  stage: string | null;
+  speech_level: SpeechLevel | null;
+  speech_note: string | null;
+  address_terms: string | null;
+  texture: string | null;
+  rapport: string | null;
+  cautions: string | null;
+  history: string | null;
+  feelings: string | null;
+  met_at: string | null;
+  last_contact_at: string | null;
+  updated_at: string | null;
+}
+
+export const getRelationship = (
+  characterId: number,
+): RelationshipRow | undefined =>
+  db
+    .prepare(
+      `SELECT stage, speech_level, speech_note, address_terms, texture,
+              rapport, cautions, history, feelings,
+              met_at, last_contact_at, updated_at
+         FROM relationships WHERE character_id = ?`,
+    )
+    .get(characterId) as RelationshipRow | undefined;
+
+/** 말투 값만 바꾼다. 반말이 된 뒤 존댓말로 되돌리지 않는 판단은 부르는 쪽 몫. */
+export const setSpeechLevel = (
+  characterId: number,
+  level: SpeechLevel,
+  now: string,
+): void => {
+  db.prepare(
+    `UPDATE relationships SET speech_level = ?, updated_at = ? WHERE character_id = ?`,
+  ).run(level, now, characterId);
+};
+
+/** 새벽 정리가 갱신하는 관계 서술 항목들. 준 항목만 바꾼다. */
+export interface RelationshipNotes {
+  stage?: string;
+  speechNote?: string;
+  addressTerms?: string;
+  texture?: string;
+  rapport?: string;
+  cautions?: string;
+  history?: string;
+  feelings?: string;
+}
+
+const NOTE_COLUMNS: Record<keyof RelationshipNotes, string> = {
+  stage: "stage",
+  speechNote: "speech_note",
+  addressTerms: "address_terms",
+  texture: "texture",
+  rapport: "rapport",
+  cautions: "cautions",
+  history: "history",
+  feelings: "feelings",
+};
+
+export const updateRelationshipNotes = (
+  characterId: number,
+  notes: RelationshipNotes,
+  now: string,
+): void => {
+  const sets: string[] = [];
+  const values: string[] = [];
+  for (const [key, column] of Object.entries(NOTE_COLUMNS) as [
+    keyof RelationshipNotes,
+    string,
+  ][]) {
+    const v = notes[key];
+    if (v === undefined) continue;
+    sets.push(`${column} = ?`);
+    values.push(v);
+  }
+  if (!sets.length) return;
+  db.prepare(
+    `UPDATE relationships SET ${sets.join(", ")}, updated_at = ? WHERE character_id = ?`,
+  ).run(...values, now, characterId);
+};
+
 export const logMessage = (
   chatId: string,
   characterId: number | null,
@@ -1329,6 +1413,19 @@ export const getRecentDiaries = (
   return rows.reverse();
 };
 
+/** 태그 검색으로 찾은 일기를 id로 읽는다. 날짜 오름차순. */
+export const getDiariesByIds = (
+  ids: number[],
+): { id: number; date: string; entry_json: string }[] => {
+  if (!ids.length) return [];
+  const holes = ids.map(() => "?").join(",");
+  return db
+    .prepare(
+      `SELECT id, date, entry_json FROM diary_entries WHERE id IN (${holes}) ORDER BY date`,
+    )
+    .all(...ids) as { id: number; date: string; entry_json: string }[];
+};
+
 // ── 기억 한 건과 태그 ──────────────────────────────────────────────────────
 // 저장은 키(저장 항목·누구 쪽·영역·무엇)로 자리를 찾고, 검색은 태그로 모은다.
 // 키를 짓고 태그를 고르는 규칙은 memory.ts가 갖는다 — 여기는 행을 넣고 빼는 자리다.
@@ -1586,6 +1683,16 @@ export const findRefsByTags = (
     )
     .all(characterId, kind, ...wanted) as { ref_id: number; hits: number }[];
 };
+
+/** 이 캐릭터에 붙어 있는 태그 이름 전부. 유저 발화에서 태그를 골라낼 때 쓴다. */
+export const listTagNames = (characterId: number): string[] =>
+  (
+    db
+      .prepare(
+        `SELECT DISTINCT tag FROM tags WHERE character_id = ? ORDER BY tag`,
+      )
+      .all(characterId) as { tag: string }[]
+  ).map((r) => r.tag);
 
 export const listAreas = (
   characterId: number,

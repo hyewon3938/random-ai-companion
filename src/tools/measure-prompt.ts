@@ -1,10 +1,9 @@
 // 운영 도구: 시스템 프롬프트 3층(불변/일간/실시간) 크기를 측정하고,
 // --live를 주면 같은 프롬프트로 2회 실호출해 캐시 히트(cr>0)를 검증한다.
 // 사용: npx tsx src/tools/measure-prompt.ts [--live]
-import { db, getRelationshipState, type CharacterRow } from "../db.js";
+import { db, type CharacterRow } from "../db.js";
 import { buildSystemBlocks } from "../context.js";
 import { chat } from "../llm.js";
-import type { Bible } from "../character.js";
 
 const row = db
   .prepare(
@@ -15,13 +14,7 @@ const row = db
 if (!row) {
   console.log("no active character");
 } else {
-  const bible = JSON.parse(row.genesis_json) as Bible;
-  const blocks = buildSystemBlocks(
-    row.id,
-    bible,
-    getRelationshipState(row.id),
-    row.chat_id,
-  );
+  const blocks = buildSystemBlocks(row.id, row.chat_id);
   const names = ["불변층", "일간층", "실시간 꼬리"];
   blocks.forEach((b, i) =>
     console.log(

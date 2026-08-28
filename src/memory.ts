@@ -8,6 +8,7 @@ import {
   setTags,
   getTags,
   findRefsByTags,
+  listTagNames,
   listAreas,
   upsertArea,
   addTodayNote,
@@ -215,6 +216,15 @@ export const searchMemories = (
   return picked;
 };
 
+/**
+ * 유저 발화에 들어 있는 태그를 골라낸다. 붙어 있는 태그 이름을 문자열 포함으로 맞춰 보는
+ * 것이라 추가 모델 호출이 없다 — 답장 경로에서 검색어를 만드는 유일한 방법.
+ */
+export const tagsInText = (characterId: number, text: string): string[] => {
+  if (!text.trim()) return [];
+  return listTagNames(characterId).filter((t) => text.includes(t));
+};
+
 /** 일기·일정도 같은 태그로 찾는다. 행을 읽는 건 그 데이터를 가진 쪽 몫이라 id만 준다. */
 export const searchTaggedRefs = (
   characterId: number,
@@ -228,6 +238,43 @@ export const searchTaggedRefs = (
  */
 export const alwaysIncluded = (characterId: number): MemoryRow[] =>
   listMemoryItems(characterId, "fact").filter((r) => r.owner === "char");
+
+// 정체성 줄 정렬 — 생성 때 정한 행(creation)을 먼저, 대화로 쌓인 행(conversation)을
+// 뒤에 둔다: 같은 항목이 두 줄이면 뒤가 최신이라 이긴다. 대화 프롬프트(context.ts)와
+// 각본·월 리듬 생성(day-plan·life-plan)이 같은 순서를 쓴다.
+export const orderedIdentity = (rows: MemoryRow[]): MemoryRow[] => {
+  const creation = rows
+    .filter((r) => r.origin === "creation")
+    .sort((a, b) => a.id - b.id);
+  const accrued = rows
+    .filter((r) => r.origin === "conversation")
+    .sort((a, b) =>
+      a.updated_at === b.updated_at
+        ? a.id - b.id
+        : a.updated_at < b.updated_at
+          ? -1
+          : 1,
+    );
+  return [...creation, ...accrued];
+};
+
+/** 정체성 전부를 프롬프트 재료 줄로 — 각본·월 리듬 생성의 [인물] 자리가 쓴다. */
+export const identityLines = (characterId: number): string =>
+  orderedIdentity(alwaysIncluded(characterId)).map(memoryLine).join("\n");
+
+/** 정체성에서 키 하나의 값. 같은 키가 여러 줄이면 가장 최신(뒤쪽) 것. */
+export const identityValue = (
+  rows: MemoryRow[],
+  area: string,
+  subject: string,
+): string | null => {
+  const ordered = orderedIdentity(rows);
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    const r = ordered[i];
+    if (r.area === area && r.subject === subject) return r.value;
+  }
+  return null;
+};
 
 // 갱신 날짜를 함께 적는다 — 오늘 일인지 지난달 일인지를 모델이 지금 시각과 견줘 판단한다.
 const dayLabel = (updatedAt: string): string => {
