@@ -87,6 +87,7 @@ export const createCharacter = async (
     biblePrompt(chemistry, seedNote),
     2048,
     config.modelDeep,
+    { purpose: "bible", chatId },
   );
   bible.chemistry = chemistry;
   const id = insertCharacter(
@@ -520,6 +521,7 @@ export const genesisProblem = (out: GenesisOutput): string | null => {
 export const generateGenesis = async (
   input: CharacterInput,
   profile: UserProfileFull,
+  chatId?: string,
 ): Promise<GenesisOutput> => {
   let problem: string | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -531,6 +533,7 @@ export const generateGenesis = async (
       genesisPrompt(input, profile) + retryNote,
       6000,
       config.modelDeep,
+      { purpose: "genesis", chatId },
     );
     problem = genesisProblem(out);
     if (!problem) return out;
@@ -644,6 +647,7 @@ export const createUserCharacter = async (
   const output = await generateGenesis(
     input,
     profile ?? getUserProfileFull(chatId),
+    chatId,
   );
   const id = persistGenesis(chatId, input, output);
   await ensureArcs(id, arcMaterial(output));

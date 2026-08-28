@@ -11,16 +11,20 @@ import {
 } from "./character.js";
 import { ensureTodayPlan } from "./day-plan.js";
 import { ensureMonthPlan } from "./life-plan.js";
-import { buildSystemBlocks } from "./context.js";
+import { buildSystemBlocks, type BuildTrace } from "./context.js";
 import { polishBubble } from "./bubble-polish.js";
-import { decideReplyTiming, recordHold } from "./reply-timing.js";
+import {
+  decideReplyTiming,
+  recordHold,
+  type TimingDecision,
+} from "./reply-timing.js";
 import {
   dropPendingReplies,
   isWaiting,
   schedulePendingReply,
   setPendingSender,
 } from "./pending.js";
-import { chat, type ChatTurn } from "./llm.js";
+import { chat, type CallMeta, type ChatTurn } from "./llm.js";
 import {
   currentSpeechLevel,
   db,
@@ -31,6 +35,7 @@ import {
   lastMessage,
   logMessage,
   recentUserGaps,
+  setCallContext,
   setRecoveryMark,
   setSpeechLevel,
   type CharacterRow,
@@ -578,9 +583,13 @@ const respond = async (
 
     // 1. 텀부터 정한다. 붙잡기 판정도 여기서 끝나고, 접거나 미룬 일정은 오늘 실제 기록에 바로 적힌다.
     // 복구 답장은 이미 늦은 것이라 텀을 다시 얹지 않는다.
-    const timing =
+    const timing: TimingDecision =
       kind === "recover"
-        ? { waitMs: 0, held: null }
+        ? {
+            waitMs: 0,
+            held: null,
+            trace: { path: "recover", block: null, asked: false },
+          }
         : await decideReplyTiming(character.id, turn.text);
     if (timing.held)
       console.log(
@@ -600,39 +609,92 @@ const respond = async (
     // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
     // 대기가 길면 답장이 도착하는 시점을 꼬리에 적어 준다 — 세 시간 뒤에 나갈 말을
     // 방금 본 것처럼 쓰지 않게. searchText는 이번 발화 — 태그 검색의 재료.
+    // 무엇을 찾아 넣었는지(검색 태그·기억)를 받아 둔다 — 답장 호출 기록에 함께 남긴다.
+    const built: BuildTrace = {
+      tags: [],
+      memories: [],
+      oldDiaries: [],
+      dropped: [],
+    };
     const system = buildSystemBlocks(character.id, chatId, {
       sendsInMs: timing.waitMs,
       searchText: turn.text,
+      trace: built,
     });
     const turns = toTurns(getRecentMessages(chatId, 40));
+    const meta: CallMeta = {
+      purpose: "reply",
+      characterId: character.id,
+      chatId,
+    };
     // 태그는 여기서 전부 떼어낸다(유저 비노출).
-    let { text, stay, note } = parseReplyTags(await chat(system, turns));
+    let { text, stay, note } = parseReplyTags(
+      await chat(system, turns, 1024, config.model, meta),
+    );
     // 빈 답장 방어: LLM이 태그만 뱉거나 빈 문자열을 주는 경우가 있다 → 한 번 재생성, 그래도 비면 스킵.
     // (빈 텍스트를 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.)
     // 태그만 뱉은 답이 바로 이 경우라, 재생성분의 신호도 함께 살린다.
     if (!text) {
-      const retry = parseReplyTags(await chat(system, turns));
+      const retry = parseReplyTags(
+        await chat(system, turns, 1024, config.model, { ...meta, attempt: 2 }),
+      );
       text = retry.text;
       stay = stay || retry.stay;
       note = retry.note ?? note;
     }
+    // 이 답장이 어떤 근거로 나왔는지를 호출 기록에 붙인다 — 검색한 태그·기억, 텀 계산의
+    // 입력과 결과, 다듬기 전후, 말풍선 수. 기록이 실패해도 답장은 그대로 나간다.
+    const attach = (extra: Record<string, unknown>): void => {
+      if (!meta.callId) return;
+      try {
+        setCallContext(meta.callId, {
+          timing: {
+            waitMs: timing.waitMs,
+            ...timing.trace,
+            held: timing.held,
+          },
+          search: built,
+          turns: turns.length,
+          ...extra,
+        });
+      } catch (e) {
+        logErr("[llm] 판단 근거 기록 실패:", e);
+      }
+    };
+
     // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음]).
     // 붙잡기 판정이 이미 접었으면 그 기록이 남아 있어 recordHold가 알아서 넘어간다.
     if (stay) recordHold(character.id);
     if (!text) {
+      attach({ dropped: "빈 답장" });
       console.warn(`[bot] empty reply — skip (chat=${chatId})`);
       return;
     }
     // 만드는 동안 유저가 말을 더 보냈으면 이 답장은 버린다 — 새 타이머가 합쳐서 다시 만든다.
     const now = pendingUserTurn(chatId);
     if (now && now.at !== turn.at) {
+      attach({ dropped: "생성 중 새 메시지 도착" });
       console.log(`[send] 생성 중 새 메시지 도착 — 폐기 (chat=${chatId})`);
       return;
     }
 
     // 3. 정한 시각에 나가게 저장한다. 대기가 0이어도 같은 길로 보낸다 —
     // 발송 직전에 죽어도 pending_replies에 남아 다시 뜰 때 이어진다.
-    const bubbles = toBubbles(text);
+    const split = splitBubbles(text);
+    const bubbles = split.map(polishBubble);
+    attach({
+      stay,
+      note,
+      bubbles: bubbles.length,
+      // 말풍선 사이 간격은 발송할 때 글자 수에서 나온다(1초 안쪽 흔들림) — 길이를 남겨 둔다.
+      bubbleLens: bubbles.map((b) => b.length),
+      // 다듬기가 실제로 고친 말풍선만 — 손대지 않은 것까지 두 벌 남기면 저장만 커진다.
+      polished: split
+        .map((b, i) =>
+          b === bubbles[i] ? null : { before: b, after: bubbles[i] },
+        )
+        .filter(Boolean),
+    });
     schedulePendingReply({
       chatId,
       characterId: character.id,

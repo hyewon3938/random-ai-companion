@@ -685,6 +685,7 @@ const cmdRegen = async (candPath: string, outPath: string): Promise<void> => {
     userPrompt,
     8192,
     config.modelDeep,
+    { purpose: "tool" },
   );
 
   // ── 검증 ──

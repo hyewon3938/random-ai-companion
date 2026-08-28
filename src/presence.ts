@@ -201,6 +201,7 @@ const presenceTickBody = async (): Promise<void> => {
             "위 상황 문단대로 문안을 만들어.",
             400,
             config.model,
+            { purpose: "comeback", characterId: c.id, chatId: c.chat_id },
           );
           // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나 다른 경로가 보냈으면 접는다
           if (
@@ -278,6 +279,7 @@ const presenceTickBody = async (): Promise<void> => {
         "위 상황 문단대로 문안을 만들어.",
         400,
         config.model, // 실시간성이라 대화 모델(sonnet)
+        { purpose: "away", characterId: c.id, chatId: c.chat_id },
       );
       // 발송 직전 재확인 — LLM을 기다리는 사이 대화 상태가 바뀌었으면(유저 추가 발화·다른 발송) 접는다
       if (

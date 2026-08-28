@@ -176,6 +176,7 @@ if (process.argv.includes("--tag")) {
       `발화 목록:\n${s.userTexts.map((t) => `- ${t.replace(/\n/g, " ")}`).join("\n")}\n\nJSON: {"vulnerability": n, "relational": n, "examples": ["대표 예시 1~3개"]}`,
       600,
       config.modelDeep,
+      { purpose: "tool" },
     );
     console.log(
       `${s.date}: 취약성 ${r.vulnerability} · 관계감정 ${r.relational} · 예) ${r.examples.join(" / ")}`,
@@ -189,6 +190,7 @@ if (process.argv.includes("--tag")) {
       `평소보다 길게 반응한 발화들:\n${spikes.map((s) => `- ${s.text.replace(/\n/g, " ")}`).join("\n")}\n\nJSON: {"topics":[{"topic":"소재 이름","why":"왜 호감 소재로 보이는지 한 줄"}]}`,
       800,
       config.modelDeep,
+      { purpose: "tool" },
     );
     console.log(`\n=== 호감 소재 (길게 반응한 순간에서 추출) ===`);
     for (const t of r.topics) console.log(`  · ${t.topic} — ${t.why}`);

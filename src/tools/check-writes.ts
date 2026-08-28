@@ -6,9 +6,11 @@ import {
   MEMORY_ITEM_TYPE_NAME,
   MEMORY_OWNER_NAME,
   MEMORY_ORIGIN_NAME,
+  CALL_PURPOSE_NAME,
   type MemoryItemType,
   type MemoryOwner,
   type MemoryOrigin,
+  type CallPurpose,
 } from "../labels.js";
 
 const argv = process.argv.slice(2);
@@ -184,6 +186,119 @@ const usage = all<{ date: string; model: string; calls: number; cw: number; cr: 
   since,
 );
 
+// 호출 원문 — 어떤 용도로 몇 번 불렀고, 무엇이 실패했고, 본문이 얼마나 쌓였는지.
+const callsByPurpose = all<{
+  purpose: CallPurpose;
+  n: number;
+  failed: number;
+  retried: number;
+  avg_ms: number | null;
+}>(
+  `SELECT purpose, COUNT(*) AS n,
+     SUM(error IS NOT NULL) AS failed,
+     SUM(attempt > 1) AS retried,
+     AVG(latency_ms) AS avg_ms
+   FROM llm_calls WHERE date(created_at) >= ?
+   GROUP BY purpose ORDER BY n DESC`,
+  since,
+);
+const callRecentFails = all<{
+  created_at: string;
+  purpose: string;
+  model: string;
+  error: string;
+}>(
+  `SELECT created_at, purpose, model, error FROM llm_calls
+   WHERE error IS NOT NULL ORDER BY id DESC LIMIT 5`,
+);
+const callStore = {
+  blobs: count(`SELECT COUNT(*) AS n FROM prompt_blobs`),
+  bytes: one<{ n: number }>(`SELECT coalesce(SUM(bytes), 0) AS n FROM prompt_blobs`)?.n ?? 0,
+  total: count(`SELECT COUNT(*) AS n FROM llm_calls`),
+  // 보관 기간이 지나 본문을 비운 행 — 메타만 남아 있다.
+  pruned: count(`SELECT COUNT(*) AS n FROM llm_calls WHERE turns_hash IS NULL`),
+  withContext: count(
+    `SELECT COUNT(*) AS n FROM llm_calls WHERE context_json IS NOT NULL AND date(created_at) >= ?`,
+    since,
+  ),
+  replies: count(
+    `SELECT COUNT(*) AS n FROM llm_calls WHERE purpose = 'reply' AND date(created_at) >= ?`,
+    since,
+  ),
+};
+
+// 유저 반응 신호 — messages에 이미 있는 것을 집계만 한다.
+// 답장·선톡이 나간 뒤 유저가 다시 말하기까지 걸린 시간, 그 뒤로 이어진 발화 수.
+const REACTION_WINDOW_MIN = 360;
+const PROACTIVE_KINDS = new Set(["morning", "away", "catchup", "goodnight"]);
+
+const msgRows = all<{
+  chat_id: string;
+  role: string;
+  sent_at: string;
+  meta_json: string | null;
+}>(
+  `SELECT chat_id, role, sent_at, meta_json FROM messages
+   WHERE date(sent_at) >= ? ORDER BY chat_id, sent_at, id`,
+  since,
+);
+const kindOf = (meta: string | null): string => {
+  if (!meta) return "";
+  try {
+    return String((JSON.parse(meta) as { kind?: string }).kind ?? "");
+  } catch {
+    return "";
+  }
+};
+const minutesBetween = (a: string, b: string): number =>
+  (Date.parse(`${b.replace(" ", "T")}Z`) - Date.parse(`${a.replace(" ", "T")}Z`)) /
+  60000;
+const median = (xs: number[]): number | null => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return Math.round(s[Math.floor(s.length / 2)] ?? 0);
+};
+
+const replyGaps: number[] = [];
+const proactiveGaps: number[] = [];
+let proactiveSent = 0;
+const proactiveTurns: number[] = [];
+for (let i = 0; i < msgRows.length; i++) {
+  const m = msgRows[i];
+  if (!m || m.role !== "assistant") continue;
+  const kind = kindOf(m.meta_json);
+  const isProactive = PROACTIVE_KINDS.has(kind);
+  if (!isProactive && kind !== "reply" && kind !== "recover") continue;
+  if (isProactive) proactiveSent++;
+  // 같은 대화방에서 창 안에 온 유저 발화만 센다.
+  let gap: number | null = null;
+  let turns = 0;
+  for (let j = i + 1; j < msgRows.length; j++) {
+    const n = msgRows[j];
+    if (!n || n.chat_id !== m.chat_id) break;
+    const d = minutesBetween(m.sent_at, n.sent_at);
+    if (d > REACTION_WINDOW_MIN) break;
+    if (n.role !== "user") continue;
+    if (gap === null) gap = d;
+    turns++;
+  }
+  if (gap !== null) (isProactive ? proactiveGaps : replyGaps).push(gap);
+  if (isProactive) proactiveTurns.push(turns);
+}
+const reaction = {
+  windowMin: REACTION_WINDOW_MIN,
+  replyAnswered: replyGaps.length,
+  replyMedianMin: median(replyGaps),
+  proactiveSent,
+  proactiveAnswered: proactiveGaps.length,
+  proactiveMedianMin: median(proactiveGaps),
+  proactiveTurnsAvg: proactiveTurns.length
+    ? Math.round(
+        (proactiveTurns.reduce((a, b) => a + b, 0) / proactiveTurns.length) * 10,
+      ) / 10
+    : 0,
+};
+
 // ---- 출력 ----
 
 if (asJson) {
@@ -211,6 +326,10 @@ if (asJson) {
         scheduledMsgs,
         msgsByDay,
         usage,
+        callsByPurpose,
+        callRecentFails,
+        callStore,
+        reaction,
       },
       null,
       1,
@@ -299,5 +418,38 @@ line(`  ${msgsByDay.map((m) => `${m.d} ${m.role} ${m.n}`).join(" · ") || "기�
 for (const u of usage) {
   line(`  ${u.date} ${u.model} 호출 ${u.calls} · 캐시쓰기 ${u.cw} · 캐시읽기 ${u.cr} · 출력 ${u.out}`);
 }
+
+head("호출 원문");
+if (callsByPurpose.length === 0) line("  기간 안 없음");
+for (const c of callsByPurpose) {
+  line(
+    `  ${CALL_PURPOSE_NAME[c.purpose] ?? c.purpose} ${c.n}건 · 평균 ${
+      c.avg_ms === null ? "-" : `${(c.avg_ms / 1000).toFixed(1)}초`
+    } · 실패 ${c.failed} · 다시 물음 ${c.retried}`,
+  );
+}
+line(
+  `  전체 ${callStore.total}건(본문 비운 행 ${callStore.pruned}) · 본문 ${callStore.blobs}건 ${(
+    callStore.bytes / 1048576
+  ).toFixed(2)}MB`,
+);
+line(
+  `  기간 안 답장 호출 ${callStore.replies}건 중 판단 근거가 붙은 것 ${callStore.withContext}건`,
+);
+for (const f of callRecentFails) {
+  line(`  실패 ${f.created_at} ${f.purpose}/${f.model} — ${cut(f.error, 60)}`);
+}
+
+head("유저 반응 신호");
+line(
+  `  답장 뒤 ${reaction.windowMin / 60}시간 안에 유저가 다시 말한 것 ${
+    reaction.replyAnswered
+  }건 · 중앙값 ${reaction.replyMedianMin ?? "-"}분`,
+);
+line(
+  `  선톡 ${reaction.proactiveSent}통 중 답 온 것 ${reaction.proactiveAnswered}통 · 중앙값 ${
+    reaction.proactiveMedianMin ?? "-"
+  }분 · 뒤이은 유저 발화 평균 ${reaction.proactiveTurnsAvg}턴`,
+);
 
 console.log(out.join("\n"));

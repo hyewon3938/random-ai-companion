@@ -5,13 +5,18 @@ import {
   keepConnectionWarm,
   logErr,
 } from "./bot.js";
-import { db, type CharacterRow } from "./db.js";
+import {
+  db,
+  pruneLlmCalls,
+  LLM_CALL_RETENTION_DAYS,
+  type CharacterRow,
+} from "./db.js";
 import { runNightly } from "./nightly.js";
 import { runDispatchTick } from "./dispatch.js";
 import { runFollowupTick } from "./followup.js";
 import { runPresenceTick } from "./presence.js";
 import { resumePendingReplies } from "./pending.js";
-import { runVizTick } from "./viz.js";
+import { runTraceTick } from "./trace.js";
 
 // 이 프로세스는 실시간 대화(반응형)와 선톡 발송을 담당한다.
 //
@@ -75,15 +80,40 @@ cron.schedule(
   { timezone: "Asia/Seoul" },
 );
 
-// 슬랙 트레이스 게시: 1분 틱. 파이프라인이 게시함(viz_events)에 쌓아 둔 기록을
-// 슬랙 채널로 내보낸다. 토큰·채널 설정이 없으면 아무것도 하지 않는다(viz.ts 참고).
+// 슬랙 트레이스 게시: 1분 틱. 파이프라인이 게시함(trace_events)에 쌓아 둔 기록을
+// 슬랙 채널로 내보낸다. 토큰·채널 설정이 없으면 아무것도 하지 않는다(trace.ts 참고).
 cron.schedule(
   "* * * * *",
   () => {
-    runVizTick().catch((e) => logErr("[viz] tick error:", e));
+    runTraceTick().catch((e) => logErr("[trace] tick error:", e));
   },
   { timezone: "Asia/Seoul" },
 );
+
+// 호출 원본 정리: 하루 한 번. 보관 기간이 지난 호출은 본문 해시와 판단 근거만 지우고
+// 메타는 남긴다. 어느 본문도 가리키지 않게 된 글자는 같이 지운다.
+cron.schedule(
+  "50 5 * * *",
+  () => {
+    try {
+      const { calls, blobs } = pruneLlmCalls();
+      if (calls || blobs)
+        console.log(
+          `[llm] ${LLM_CALL_RETENTION_DAYS}일 지난 호출 ${calls}건의 본문을 비우고 글자 ${blobs}건을 지웠다`,
+        );
+    } catch (e) {
+      logErr("[llm] 호출 원본 정리 실패:", e);
+    }
+  },
+  { timezone: "Asia/Seoul" },
+);
+
+// 트레이스 채널 환경변수는 이름이 바뀌었다(SLACK_VIZ_CHANNEL → SLACK_TRACE_CHANNEL).
+// 옛 이름만 남아 있으면 게시가 조용히 전부 꺼지므로, 부팅할 때 한 번 알린다.
+if (process.env.SLACK_VIZ_CHANNEL && !process.env.SLACK_TRACE_CHANNEL)
+  console.warn(
+    "[trace] 채널 환경변수 이름이 옛것이다 — SLACK_TRACE_CHANNEL로 바꿔야 게시가 켜진다",
+  );
 
 console.log("[bot] starting (long polling)...");
 void bot.start();

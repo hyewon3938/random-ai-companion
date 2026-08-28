@@ -90,6 +90,7 @@ const HOLD_SYSTEM = `너는 메신저 대화를 읽고 한 가지만 판정한�
 답을 나중에 받아도 되는 평범한 말이면 "아님"이라고만 답한다. 다른 말은 하지 않는다.`;
 
 const askHold = async (
+  characterId: number,
   activity: string,
   userText: string,
 ): Promise<boolean> => {
@@ -100,6 +101,7 @@ const askHold = async (
       [{ role: "user", content: prompt }],
       16,
       config.model,
+      { purpose: "hold", characterId },
     );
     return out.includes("붙잡");
   } catch {
@@ -108,11 +110,36 @@ const askHold = async (
   }
 };
 
+/** 텀이 어떻게 나왔는지 — 답장 호출 기록에 함께 남겨 이상한 텀의 출처를 되짚는다. */
+export interface TimingTrace {
+  /** 표의 어느 길로 나온 값인가. recover는 표를 타지 않은 복구 발송이다. */
+  path:
+    | "no_plan"
+    | "sleeping"
+    | "already_held"
+    | "table"
+    | "until_end"
+    | "held"
+    | "recover";
+  block: {
+    start: string;
+    end: string;
+    activity: string;
+    responsiveness: Responsiveness;
+    category: ActivityCategory;
+  } | null;
+  /** 붙잡기 판정을 물었는가, 물었다면 붙잡혔는가. */
+  asked: boolean;
+  heldJudged?: boolean;
+}
+
 export interface TimingDecision {
   /** 답장이 나가기까지 기다릴 시간. */
   waitMs: number;
   /** 유저가 붙잡아 일정을 접었으면 무엇을 어떻게 했는지. 오늘 실제 기록에 이미 적혀 있다. */
   held: { outcome: string; activity: string } | null;
+  /** 이 값이 나온 경위. */
+  trace: TimingTrace;
 }
 
 /**
@@ -125,20 +152,57 @@ export const decideReplyTiming = async (
   userText: string,
 ): Promise<TimingDecision> => {
   const b = currentBlock(characterId);
-  if (!b) return { waitMs: skewLow(0, INSTANT_MAX_MS), held: null };
-
-  // 예외 둘 — 표를 따르지 않고 바로 답한다.
-  if (isSleeping(b)) return { waitMs: 0, held: null };
-  if (isHeldNow(characterId)) return { waitMs: 0, held: null };
+  if (!b)
+    return {
+      waitMs: skewLow(0, INSTANT_MAX_MS),
+      held: null,
+      trace: { path: "no_plan", block: null, asked: false },
+    };
 
   const resp = toResponsiveness(b.responsiveness) ?? "instant";
   const cat = blockCategory(b);
-  if (resp !== "unavailable") return { waitMs: tableDelay(resp, cat), held: null };
+  const seen = {
+    start: b.start,
+    end: b.end,
+    activity: b.activity,
+    responsiveness: resp,
+    category: cat,
+  };
+
+  // 예외 둘 — 표를 따르지 않고 바로 답한다.
+  if (isSleeping(b))
+    return {
+      waitMs: 0,
+      held: null,
+      trace: { path: "sleeping", block: seen, asked: false },
+    };
+  if (isHeldNow(characterId))
+    return {
+      waitMs: 0,
+      held: null,
+      trace: { path: "already_held", block: seen, asked: false },
+    };
+
+  if (resp !== "unavailable")
+    return {
+      waitMs: tableDelay(resp, cat),
+      held: null,
+      trace: { path: "table", block: seen, asked: false },
+    };
 
   // 답장 불가.
-  if (cat === "official") return { waitMs: untilBlockEndMs(b), held: null };
-  if (!(await askHold(b.activity, userText)))
-    return { waitMs: untilBlockEndMs(b), held: null };
+  if (cat === "official")
+    return {
+      waitMs: untilBlockEndMs(b),
+      held: null,
+      trace: { path: "until_end", block: seen, asked: false },
+    };
+  if (!(await askHold(characterId, b.activity, userText)))
+    return {
+      waitMs: untilBlockEndMs(b),
+      held: null,
+      trace: { path: "until_end", block: seen, asked: true, heldJudged: false },
+    };
 
   // 붙잡혔다 — 개인 일정은 취소하고, 사회 일정은 만나기로 한 상대에게 양해를 구해 미룬다.
   const outcome =
@@ -155,6 +219,7 @@ export const decideReplyTiming = async (
   return {
     waitMs: rand(NUDGE_MIN_MS, NUDGE_MAX_MS),
     held: { outcome, activity: b.activity },
+    trace: { path: "held", block: seen, asked: true, heldJudged: true },
   };
 };
 

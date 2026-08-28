@@ -35,6 +35,8 @@ if (!row) {
         blocks,
         [{ role: "user", content: "(캐시 검증용 — 한 단어로만 답해)" }],
         8,
+        undefined,
+        { purpose: "tool" },
       );
     }
   }

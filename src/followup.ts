@@ -135,6 +135,7 @@ const followupTickBody = async (): Promise<void> => {
           "위 상황 문단대로 문안을 만들어.",
           300,
           config.model,
+          { purpose: "goodnight", characterId: c.id, chatId: c.chat_id },
         );
         // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 굿나잇은 필요 없다)
         // 다른 경로가 뭔가 보냈으면(마지막 메시지가 바뀜) 접는다.
@@ -187,6 +188,7 @@ const followupTickBody = async (): Promise<void> => {
         "위 상황 문단대로 문안을 만들어.",
         500,
         config.model, // 실시간성이라 대화 모델(sonnet)
+        { purpose: "catchup", characterId: c.id, chatId: c.chat_id },
       );
       // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 말을 걸었으면(답장이 담당) 근황톡을 접고,
       // 다른 경로가 이미 보냈으면(마지막 메시지가 바뀜) 겹쳐 보내지 않는다.

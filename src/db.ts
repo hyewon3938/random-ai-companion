@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "./config.js";
@@ -263,11 +264,11 @@ const TABLES: Record<string, string> = {
   output_tokens INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (date, model)`,
 
-  // 슬랙 트레이스 게시함(viz.ts). 보여줄 내용을 행으로 쌓아 두면 봇의 1분 틱이 슬랙으로
+  // 슬랙 트레이스 게시함(trace.ts). 보여줄 내용을 행으로 쌓아 두면 봇의 1분 틱이 슬랙으로
   // 내보낸다 — 재시작·슬랙 장애에도 보낼 것이 남고, 봇 밖 배치가 남긴 행도 같은 길로 나간다.
   // 스레드는 thread_key(부모)·parent_key(자식)로 잇고, 자식은 부모가 게시된 뒤에만 나간다.
   // dedupe_key가 있는 행은 같은 키로 두 번 쌓이지 않는다(INSERT OR IGNORE).
-  viz_events: `
+  trace_events: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER REFERENCES characters(id),
   kind TEXT NOT NULL,
@@ -280,6 +281,44 @@ const TABLES: Record<string, string> = {
   attempts INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
   created_at TEXT NOT NULL`,
+
+  // 모델 호출 원본. 무엇을 넣었고 무엇이 나왔는지를 그대로 남겨, 답이 이상할 때 그 호출의
+  // 프롬프트를 열어 볼 수 있게 한다. 판단 근거(검색한 태그와 기억, 답장 텀, 다듬기 전후)는
+  // 호출 시점 값으로 context_json에 붙인다 — 기억 검색은 꺼낸 기록을 남기는 쓰기 동작이라
+  // 나중에 같은 검색을 다시 돌려 재현할 수 없다.
+  //
+  // purpose에는 CHECK를 두지 않는다. 호출 자리가 하나 늘 때마다 스키마 이관이 따라붙고,
+  // CHECK에 걸린 INSERT는 기록을 통째로 잃는다. 값은 labels.ts의 CallPurpose 타입이
+  // 컴파일 시점에 막는다.
+  llm_calls: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER REFERENCES characters(id),
+  chat_id TEXT,
+  purpose TEXT NOT NULL,
+  model TEXT NOT NULL,
+  max_tokens INTEGER,
+  attempt INTEGER NOT NULL DEFAULT 1,
+  system_hashes TEXT,
+  turns_hash TEXT,
+  output_hash TEXT,
+  input_tokens INTEGER,
+  cache_write_tokens INTEGER,
+  cache_read_tokens INTEGER,
+  output_tokens INTEGER,
+  latency_ms INTEGER,
+  error TEXT,
+  context_json TEXT,
+  code_version TEXT,
+  created_at TEXT NOT NULL`,
+
+  // 프롬프트·출력 본문. 키가 내용 해시라 같은 글자는 한 벌만 쌓인다 — 불변층·일간층은
+  // 하루 종일 같은 내용이라, 호출마다 본문을 다시 담으면 DB가 호출 수에 비례해 커진다.
+  prompt_blobs: `
+  hash TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL`,
 };
 
 // attention_override·capture_marks는 정의에서 뺐다 — 붙잡힌 상태는 day_actuals가, 세션 중 사실
@@ -296,8 +335,10 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_pending_replies_due ON pending_replies (status, send_at)`,
   `CREATE INDEX IF NOT EXISTS idx_pending_replies_chat ON pending_replies (chat_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_scheduled_messages_due ON scheduled_messages (status, date)`,
-  `CREATE INDEX IF NOT EXISTS idx_viz_events_pending ON viz_events (status, id)`,
-  `CREATE INDEX IF NOT EXISTS idx_viz_events_thread ON viz_events (thread_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_trace_events_pending ON trace_events (status, id)`,
+  `CREATE INDEX IF NOT EXISTS idx_trace_events_thread ON trace_events (thread_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_llm_calls_created ON llm_calls (created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_llm_calls_purpose ON llm_calls (character_id, purpose, id)`,
 ];
 
 const createSchema = (): void => {
@@ -306,7 +347,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -623,7 +664,41 @@ const migrateToV4 = (): void => {
   console.log(`[db] 스키마를 v4로 옮겼다`);
 };
 
-if (schemaVersion() < SCHEMA_VERSION) migrateToV4();
+// v5: 모델 호출 원본 표 둘을 만들고, 슬랙 트레이스 게시함의 이름을 trace_events로 바꾼다.
+// 새 표는 부팅할 때 createSchema가 이미 만들었다 — 여기서는 옛 이름에 남은 행만 옮긴다.
+const migrateToV5 = (): void => {
+  const vizIsOld =
+    db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
+      .get("viz_events") !== undefined;
+  if (!vizIsOld) {
+    db.pragma(`user_version = 5`);
+    return;
+  }
+
+  db.transaction(() => {
+    db.exec(`
+      INSERT INTO trace_events
+        (id, character_id, kind, dedupe_key, thread_key, parent_key, text,
+         status, slack_ts, attempts, last_error, created_at)
+      SELECT id, character_id, kind, dedupe_key, thread_key, parent_key, text,
+             status, slack_ts, attempts, last_error, created_at
+        FROM viz_events`);
+    db.exec(`DROP TABLE viz_events`);
+
+    const broken = db.pragma("foreign_key_check") as unknown[];
+    if (broken.length)
+      throw new Error(
+        `[db] 마이그레이션 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
+      );
+    db.pragma(`user_version = 5`);
+  })();
+
+  console.log(`[db] 스키마를 v5로 옮겼다`);
+};
+
+if (schemaVersion() < 4) migrateToV4();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV5();
 
 db.pragma("foreign_keys = ON");
 
@@ -1210,6 +1285,130 @@ export const recordLlmUsage = (
     cacheReadTokens,
     outputTokens,
   );
+};
+
+// ── 모델 호출 원본 ─────────────────────────────────────────────────────────
+// 호출 하나가 행 하나다. 프롬프트·출력 본문은 내용 해시를 키로 prompt_blobs에 한 벌만 둔다 —
+// 앞 두 층은 하루 종일 같은 글자라, 호출마다 본문을 다시 담으면 DB가 호출 수만큼 커진다.
+
+const stampNow = (): string =>
+  `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
+
+/** 본문을 넣고 해시를 돌려준다. 같은 내용이면 새로 쌓지 않고 마지막으로 쓴 시각만 올린다. */
+export const putBlob = (text: string): string => {
+  const hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  const now = stampNow();
+  db.prepare(
+    `INSERT INTO prompt_blobs (hash, text, bytes, first_seen_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(hash) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
+  ).run(hash, text, Buffer.byteLength(text, "utf8"), now, now);
+  return hash;
+};
+
+export interface LlmCallInput {
+  purpose: string;
+  model: string;
+  characterId?: number;
+  chatId?: string;
+  maxTokens?: number;
+  /** JSON 재요청처럼 같은 자리에서 두 번 부른 경우의 차례. */
+  attempt?: number;
+  system: { text: string; cache?: boolean }[];
+  /** 함께 보낸 대화 기록을 그대로 담은 글자. */
+  turns: string;
+  output?: string;
+  usage?: {
+    input: number;
+    cacheWrite: number;
+    cacheRead: number;
+    output: number;
+  };
+  latencyMs: number;
+  error?: string;
+  codeVersion?: string;
+}
+
+/** 호출 한 건을 남기고 행 번호를 돌려준다. 뒤에 판단 근거를 붙일 때 이 번호를 쓴다. */
+export const recordLlmCall = (call: LlmCallInput): number => {
+  const hashes = call.system.map((b) => ({
+    h: putBlob(b.text),
+    cache: b.cache === true,
+  }));
+  const info = db
+    .prepare(
+      `INSERT INTO llm_calls
+         (character_id, chat_id, purpose, model, max_tokens, attempt,
+          system_hashes, turns_hash, output_hash,
+          input_tokens, cache_write_tokens, cache_read_tokens, output_tokens,
+          latency_ms, error, code_version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      call.characterId ?? null,
+      call.chatId ?? null,
+      call.purpose,
+      call.model,
+      call.maxTokens ?? null,
+      call.attempt ?? 1,
+      JSON.stringify(hashes),
+      putBlob(call.turns),
+      call.output === undefined ? null : putBlob(call.output),
+      call.usage?.input ?? null,
+      call.usage?.cacheWrite ?? null,
+      call.usage?.cacheRead ?? null,
+      call.usage?.output ?? null,
+      call.latencyMs,
+      call.error ? call.error.slice(0, 500) : null,
+      call.codeVersion ?? null,
+      stampNow(),
+    );
+  return Number(info.lastInsertRowid);
+};
+
+/** 호출 행에 그때의 판단 근거를 붙인다 — 검색한 태그와 기억, 답장 텀, 다듬기 전후. */
+export const setCallContext = (callId: number, context: unknown): void => {
+  db.prepare(`UPDATE llm_calls SET context_json = ? WHERE id = ?`).run(
+    JSON.stringify(context),
+    callId,
+  );
+};
+
+// 본문 보관 기간. 지나면 본문을 가리키는 해시와 판단 근거를 지우고 메타(언제·무슨 호출·
+// 토큰·지연)만 남긴다 — 본문에는 실제 대화가 통째로 들어 있어 오래 들고 있을 것이 아니고,
+// 며칠 뒤에 다시 열어 보는 일도 없다. 메타는 가벼워서 계속 둔다.
+export const LLM_CALL_RETENTION_DAYS = 90;
+
+export const pruneLlmCalls = (
+  days: number = LLM_CALL_RETENTION_DAYS,
+): { calls: number; blobs: number } => {
+  const cutoff = kstDateString(
+    new Date(getKstNow().getTime() - days * 86400000),
+  );
+  const calls = db
+    .prepare(
+      `UPDATE llm_calls
+          SET system_hashes = NULL, turns_hash = NULL, output_hash = NULL, context_json = NULL
+        WHERE created_at < ?
+          AND (system_hashes IS NOT NULL OR turns_hash IS NOT NULL
+               OR output_hash IS NOT NULL OR context_json IS NOT NULL)`,
+    )
+    .run(cutoff).changes;
+  // 아무 호출도 가리키지 않게 된 본문을 지운다. 같은 본문을 여러 호출이 가리키므로
+  // 행을 지울 때가 아니라 여기서 한 번에 센다.
+  const blobs = db
+    .prepare(
+      `DELETE FROM prompt_blobs
+        WHERE hash NOT IN (
+              SELECT turns_hash FROM llm_calls WHERE turns_hash IS NOT NULL
+              UNION SELECT output_hash FROM llm_calls WHERE output_hash IS NOT NULL
+              UNION SELECT json_extract(j.value, '$.h')
+                      FROM (SELECT system_hashes FROM llm_calls
+                             WHERE system_hashes IS NOT NULL) c,
+                           json_each(c.system_hashes) j)`,
+    )
+    .run().changes;
+  return { calls, blobs };
 };
 
 export const hasUserMessageSince = (chatId: string, since: string): boolean =>

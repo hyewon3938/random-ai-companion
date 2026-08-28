@@ -169,6 +169,10 @@ export const moveMemory = (id: number, to: MemoryItemType): number =>
 
 export const memoryTags = (id: number): string[] => getTags("memory", id);
 
+/** 기억 한 건을 한 줄로 가리키는 키 — 호출 기록에 무엇을 넣고 무엇을 뺐는지 적을 때 쓴다. */
+export const memoryKeyOf = (r: MemoryRow): string =>
+  `${r.item_type}/${r.owner} ${r.area}/${r.subject}`;
+
 export interface SearchOptions {
   /** 어떤 저장 항목에서 찾을지. 안 주면 검색으로 골라 넣는 것 전부. */
   itemTypes?: MemoryItemType[];
@@ -176,6 +180,11 @@ export interface SearchOptions {
   limits?: Partial<Record<MemoryItemType, number>>;
   /** 꺼낸 기록을 남길지. 화면에 보여주기만 하는 도구는 false로 부른다. */
   track?: boolean;
+  /**
+   * 넘겨 주면 태그는 맞았지만 개수 상한에 걸려 빠진 후보의 키를 여기에 적는다.
+   * 답장이 어떤 기억을 두고 어떤 기억을 골랐는지 되짚을 때 쓴다(호출 기록용).
+   */
+  dropped?: string[];
 }
 
 /**
@@ -201,12 +210,12 @@ export const searchMemories = (
   for (const t of TYPE_ORDER) {
     if (types && !types.includes(t)) continue;
     const cap = opts.limits?.[t] ?? SEARCH_LIMITS[t];
-    picked.push(
-      ...rows
-        .filter((r) => r.item_type === t)
-        .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))
-        .slice(0, cap),
-    );
+    const ranked = rows
+      .filter((r) => r.item_type === t)
+      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+    picked.push(...ranked.slice(0, cap));
+    if (opts.dropped)
+      opts.dropped.push(...ranked.slice(cap).map((r) => memoryKeyOf(r)));
   }
   if (opts.track !== false)
     markMemoriesRetrieved(
