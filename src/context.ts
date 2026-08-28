@@ -33,7 +33,6 @@ import {
   kstVerbalTime,
   workdayContext,
   kstClock,
-  getKstNow,
   logicalDayStartTs,
   lastTalkedLabel,
 } from "./kst.js";
@@ -295,15 +294,6 @@ const relationshipSection = (rel: RelationshipRow | undefined): string => {
 
 // 지금 이 순간의 사실(시각·현재 활동·말투 판정) — 매 응답마다 바뀌므로 캐시 경계 뒤(꼬리)에 주입.
 // 프롬프트 맨 끝이라 최신성 효과도 가장 크다(답장 직전에 읽는 사실).
-const sendDelayLine = (sendsInMs: number): string => {
-  if (sendsInMs < 90_000) return "- 이 답장은 쓰는 대로 바로 나간다.";
-  const at = new Date(getKstNow().getTime() + sendsInMs);
-  const hhmm = `${String(at.getUTCHours()).padStart(2, "0")}:${String(at.getUTCMinutes()).padStart(2, "0")}`;
-  const min = Math.round(sendsInMs / 60_000);
-  const span = min >= 90 ? `${Math.round(min / 60)}시간` : `${min}분`;
-  return `- 이 답장은 지금 쓰지만 상대에게 도착하는 건 ${span} 뒤(${hhmm})다. 지금 하는 일이 끝나고 폰을 보는 시점이니, 그 시점에 돌아와서 쓰는 결로 쓴다(예: 갔다 왔다는 언급). 방금 일어난 일처럼 쓰지 않는다.`;
-};
-
 // 말투 — 저장값(relationships.speech_level)이 우선이고, 없으면 최근 발화 판정이 폴백이다.
 // 반말이 된 뒤 유저가 존댓말을 섞어도 저장값이 casual이면 되돌아가지 않는다
 // (polite→casual 한 방향 래칫은 값을 쓰는 쪽이 지킨다 — 덩어리 4).
@@ -321,7 +311,6 @@ const speechLine = (stored: SpeechLevel | null, chatId: string): string => {
 const nowSection = (
   chatId: string,
   characterId: number,
-  sendsInMs: number,
   storedLevel: SpeechLevel | null,
 ): string => {
   const { past, cur } = dayProgress(characterId);
@@ -341,7 +330,6 @@ const nowSection = (
       ? `- 이 일을 이미 한참 하고 있었으면(위 '분째' 참고) 방금 시작한 것처럼 말하지 않는다 — 39분째면 "이제 씻어야겠다"가 아니라 "씻고 나왔다/거의 끝나간다"에 가깝다.`
       : "",
     `- 최근 대화에서 이미 알린 자리 비움·상태 전환("방금 뛰고 왔다", "씻고 올게요")을 다시 처음처럼 새로 반복하지 않는다. 이미 말했으면 그 다음 상태로 자연스럽게 이어간다.`,
-    sendDelayLine(sendsInMs),
     `- 말투: ${speechLine(storedLevel, chatId)}`,
   ]
     .filter(Boolean)
@@ -361,11 +349,9 @@ export interface BuildTrace {
 }
 
 export interface BuildOptions {
-  /** 답장이 실제로 나가기까지 남은 시간. 길면 도착 시점 결로 쓰게 꼬리에 적는다. */
-  sendsInMs?: number;
   /** 태그 검색의 재료 — 답장이면 유저의 이번 발화. 추가 모델 호출 없이 코드가 태그를 고른다. */
   searchText?: string;
-  /** 선톡 문안용 상황 문단. 프롬프트 맨 끝에 붙는다(덩어리 3·5가 쓴다). */
+  /** 상황 문단 — 선톡 문안, 불가 구간 끝 몰아 답장, 배웅 답이 쓴다. 프롬프트 맨 끝에 붙는다. */
   situation?: string;
   /** 넘겨 주면 검색 결과를 여기에 적어 돌려준다(호출 기록용). */
   trace?: BuildTrace;
@@ -477,12 +463,7 @@ export const buildSystemBlocks = (
     oldDiarySection,
     todaySection,
     lastTalkSection,
-    nowSection(
-      chatId,
-      characterId,
-      opts.sendsInMs ?? 0,
-      rel?.speech_level ?? null,
-    ),
+    nowSection(chatId, characterId, rel?.speech_level ?? null),
     FINAL_CHECK,
     opts.situation?.trim() ?? "",
   ]

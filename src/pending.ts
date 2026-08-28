@@ -3,6 +3,7 @@ import {
   getWaitingPendingReplies,
   hasWaitingPendingReply,
   supersedePendingReplies,
+  supersedeWakeRows,
   markPendingReply,
   bumpPendingAttempt,
   type PendingReplyRow,
@@ -12,10 +13,13 @@ import { getKstNow, kstDateString } from "./kst.js";
 
 // 대기 중인 답장.
 //
-// 답장은 텀을 정한 뒤 바로 만들고, 정해진 시각이 되면 보낸다. 만들어 두고 기다리면 그 사이에
-// 무슨 일이 있는지를 각본에서 읽어 담을 수 있고, 몇 시간 뒤에 나가는 답장이 방금 본 것처럼
-// 읽히지 않는다. 회의가 세 시간이면 세 시간 뒤에 나가므로 대기가 길어질 수 있어, 만든 답장을
-// 행으로 남겨 프로세스가 다시 떠도 이어간다.
+// 즉답·틈틈이 답장은 텀을 정한 뒤 바로 만들고, 정해진 시각이 되면 보낸다. 만들어 두고
+// 기다리면 몇 분 뒤에 나가는 답장이 방금 본 것처럼 읽히지 않는다.
+//
+// 답장 불가 구간은 미리 만들지 않는다 — 몇 시간 뒤의 답장을 지금 만들면 그 사이 온 메시지를
+// 못 담고, "방금 봤다"는 결도 거짓이 된다. 대신 kind='wake' 행 하나만 남겨 구간이 끝나는
+// 시각에 울리게 하고, 그때 쌓인 메시지를 읽어 한 번에 답장을 만든다(만드는 쪽은 bot.ts).
+// 어느 쪽이든 행으로 남으므로 프로세스가 다시 떠도 이어간다.
 
 const RETRY_MS = 60_000;
 const MAX_ATTEMPTS = 3;
@@ -29,6 +33,14 @@ export type PendingSender = (
 let sender: PendingSender | null = null;
 export const setPendingSender = (fn: PendingSender): void => {
   sender = fn;
+};
+
+/** 깨우기 표시가 울리면 할 일도 bot.ts가 정한다 — 같은 이유로 등록받아 쓴다. */
+export type WakeHandler = (row: PendingReplyRow) => Promise<void>;
+
+let wakeHandler: WakeHandler | null = null;
+export const setWakeHandler = (fn: WakeHandler): void => {
+  wakeHandler = fn;
 };
 
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -56,6 +68,32 @@ const parseBubbles = (row: PendingReplyRow): string[] => {
 
 const fire = async (row: PendingReplyRow): Promise<void> => {
   timers.delete(row.id);
+  // 깨우기 표시 — 보낼 말풍선이 없고, 등록된 핸들러가 그 자리에서 답장을 만든다.
+  if (row.kind === "wake") {
+    if (!wakeHandler) return;
+    try {
+      await wakeHandler(row);
+      markPendingReply(row.id, "sent", stamp());
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      bumpPendingAttempt(row.id, msg);
+      if (row.attempts + 1 >= MAX_ATTEMPTS) {
+        markPendingReply(row.id, "failed", null, msg);
+        console.error(`[pending] 깨우기 포기 #${row.id}: ${msg}`);
+        return;
+      }
+      console.warn(
+        `[pending] 깨우기 실패 #${row.id}, ${RETRY_MS / 1000}초 뒤 재시도: ${msg}`,
+      );
+      timers.set(
+        row.id,
+        setTimeout(() => {
+          void fire({ ...row, attempts: row.attempts + 1 });
+        }, RETRY_MS),
+      );
+    }
+    return;
+  }
   if (!sender) return;
   const bubbles = parseBubbles(row);
   if (!bubbles.length) {
@@ -133,6 +171,7 @@ export const schedulePendingReply = (p: {
     note_to_save: p.noteToSave,
     send_at: sendAt,
     kind: p.kind,
+    meta_json: null,
     attempts: 0,
     created_at: createdAt,
   });
@@ -142,12 +181,65 @@ export const schedulePendingReply = (p: {
   return id;
 };
 
+/** 불가 구간이 끝나는 시각에 울릴 깨우기 표시를 건다. 답장은 그때 만든다. */
+export const scheduleWakeRow = (p: {
+  chatId: string;
+  characterId: number;
+  userMsgAt: string;
+  waitMs: number;
+  meta: { activity: string; blockStart: string; blockEnd: string };
+}): number => {
+  const sendAt = stampAfter(p.waitMs);
+  const createdAt = stamp();
+  const metaJson = JSON.stringify(p.meta);
+  const id = insertPendingReply({
+    chatId: p.chatId,
+    characterId: p.characterId,
+    userMsgAt: p.userMsgAt,
+    bubbles: [],
+    noteToSave: null,
+    sendAt,
+    kind: "wake",
+    metaJson,
+    createdAt,
+  });
+  arm({
+    id,
+    chat_id: p.chatId,
+    character_id: p.characterId,
+    user_msg_at: p.userMsgAt,
+    bubbles_json: "[]",
+    note_to_save: null,
+    send_at: sendAt,
+    kind: "wake",
+    meta_json: metaJson,
+    attempts: 0,
+    created_at: createdAt,
+  });
+  console.log(
+    `[pending] 깨우기 #${id} ${p.chatId} ${p.meta.activity} → ${sendAt} (${Math.round(p.waitMs / 1000)}초 뒤)`,
+  );
+  return id;
+};
+
 /**
  * 기다리던 답장을 버린다.
  * 유저가 말을 더 보내면 답장의 내용도 텀도 다시 정해야 하므로, 만들어 둔 것은 쓰지 않는다.
+ * 깨우기 표시는 남는다 — 메시지가 더 쌓여도 구간 끝에 한 번 깨서 몰아 읽는 건 같다.
  */
 export const dropPendingReplies = (chatId: string): number => {
   const ids = supersedePendingReplies(chatId);
+  for (const id of ids) {
+    const t = timers.get(id);
+    if (t) clearTimeout(t);
+    timers.delete(id);
+  }
+  return ids.length;
+};
+
+/** 깨우기 표시를 거둔다 — 불가 구간이 아닌 길로 답장이 나가게 됐을 때. */
+export const dropWakeRows = (chatId: string): number => {
+  const ids = supersedeWakeRows(chatId);
   for (const id of ids) {
     const t = timers.get(id);
     if (t) clearTimeout(t);

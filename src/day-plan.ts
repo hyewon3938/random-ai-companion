@@ -68,6 +68,11 @@ export interface DayPlan {
   blocks: PlanBlock[];
 }
 
+// 자리 비움 예고·구간 끝 몰아 답장의 대상이 되는 불가 블록 — 실제로 자리를 비우거나 손이
+// 묶이는 일. 잠은 제외(굿나잇·잠 정책이 따로 담당한다).
+export const isAwayUnavail = (b: PlanBlock): boolean =>
+  b.responsiveness === "unavailable" && !/잠|수면|숙면/.test(b.activity);
+
 // trace.ts가 슬랙에 각본 생성 프롬프트를 올릴 때도 이 시스템 문장을 함께 보여준다.
 export const PLAN_SYSTEM = `너는 한 인물의 하루 흐름을 짜는 작가다. 과장 없이, 실제 그 직업과 성격의 사람이 보낼 법한 평범한 하루를 시간 블록으로 만든다. 루틴이 기본이고 변화는 잔잔하게 준다.`;
 

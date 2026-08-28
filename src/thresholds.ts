@@ -51,13 +51,15 @@ export const CATCHUP_SILENCE_MS = 4 * 60 * 60 * 1000;
 export const GOODNIGHT_SILENCE_MS = 60 * 60 * 1000;
 export const GOODNIGHT_WINDOW = { start: "00:00", end: "05:00" } as const;
 
-/** 자리비움 선톡 — 알리고 나갈 일정의 최소 길이, 나갈 때와 끝난 뒤의 시간 창(분). */
+/** 자리비움 선톡 — 알리고 나갈 일정의 최소 길이, 나갈 때와 끝난 뒤의 시간 창(분).
+ * 미리 아는 일정(advance_known)은 시작 전에 예고하고, 닥친 일은 시작 시점에 알린다.
+ * 복귀 알림은 창을 따로 두지 않는다 — 구간 끝의 깨우기 표시(pending의 wake 행)가 그 자리다. */
 export const AWAY_MIN_BLOCK_MIN = 20;
-export const AWAY_BEFORE_MIN = 15;
+export const AWAY_BEFORE_MIN = 10;
 export const AWAY_AFTER_MIN = 3;
+export const AWAY_SUDDEN_AFTER_MIN = 12;
 export const AWAY_BACK_TO_BACK_BEFORE_MIN = 2;
 export const AWAY_BACK_TO_BACK_AFTER_MIN = 12;
-export const AWAY_RETURN_WINDOW_MIN = 12;
 
 /** 선톡 전체의 하루 상한. 자리비움은 이 상한에서 뺀다. */
 export const PROACTIVE_DAILY_MAX = 6;
