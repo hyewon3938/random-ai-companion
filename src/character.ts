@@ -220,7 +220,7 @@ export const CHARACTER_AGE_BANDS = [
   "40대 후반",
 ] as const;
 
-const FREE_TEXT_MAX = 1000;
+export const FREE_TEXT_MAX = 1000;
 
 /** 유저가 캐릭터를 만들 때 적어 내는 입력. 서술형은 비워도 되고, 빈 항목은 생성이
  * 앞뒤가 맞게 채운다. */
