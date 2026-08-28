@@ -333,7 +333,7 @@ plan_json 안 블록의 두 태그도 영어 식별자로 저장한다. 답장 �
 
 ```mermaid
 erDiagram
-    characters ||--o{ pending_replies : "대기 중인 답장"
+    characters ||--o{ pending_replies : "대기 중인 답장과 깨우기 표시"
     characters ||--o{ scheduled_messages : "미리 만든 선톡"
     characters ||--o{ send_failures : "전송 실패 기록"
     characters ||--o{ llm_calls : "모델 호출 기록"
@@ -352,6 +352,7 @@ erDiagram
         INTEGER id PK
         INTEGER character_id FK
         TEXT chat_id
+        TEXT kind "답장인가 깨우기 표시인가"
     }
     scheduled_messages {
         INTEGER id PK
@@ -402,7 +403,7 @@ erDiagram
 
 role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰는 이름이다. 저장한 대화를 프롬프트에 넣을 때 이 형식 그대로 보내기 때문에 캐릭터가 한 말도 `assistant`로 적는다.
 
-**pending_replies** — 만들어 두고 정한 시각에 보낼 답장. 봇이 다시 떠도 여기 남은 행을 보고 이어서 보낸다
+**pending_replies** — 만들어 두고 정한 시각에 보낼 답장, 그리고 답장 불가 구간이 끝날 때 깨어나기 위한 표시. 봇이 다시 떠도 여기 남은 행을 보고 이어서 보낸다
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
@@ -410,9 +411,11 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | chat_id | TEXT | O | |
 | character_id | INTEGER | O | FK characters.id |
 | user_msg_at | TEXT | O | 답할 유저 메시지의 시각 |
-| bubbles_json | TEXT | O | 보낼 말풍선들 |
+| bubbles_json | TEXT | O | 보낼 말풍선들. 깨우기 표시는 문안이 없어 빈 목록 |
 | note_to_save | TEXT | | 발송 후 today_notes에 적을 한 줄 |
-| send_at | TEXT | O | 보낼 시각 |
+| send_at | TEXT | O | 보낼 시각. 깨우기 표시는 구간이 끝나는 시각 |
+| kind | TEXT | O | 행의 종류 — `reply` · `recover` · `wake` |
+| meta_json | TEXT | | 깨우기 표시일 때 그 구간의 활동과 시작 · 종료 시각 |
 | status | TEXT | O | `waiting` · `sent` · `superseded` · `failed` |
 | attempts | INTEGER | O | |
 | last_error | TEXT | | |
@@ -420,6 +423,8 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | sent_at | TEXT | | |
 
 키·인덱스: PK `id`, 인덱스 `(status, send_at)`, 인덱스 `(chat_id, status)`
+
+`wake` 행은 답장이 아니라 깨우기 표시다. 답장 불가 구간에 유저가 말을 걸면 몇 시간 뒤에 나갈 답장을 지금 만들지 않고 이 행만 걸어 두었다가, 구간이 끝나는 시각에 깨어나 그 사이 쌓인 메시지를 한 번에 읽고 답한다. 유저가 말을 더 보내면 만들어 둔 답장은 버리지만 이 행은 남겨 둔다. 구간이 끝날 때 몰아 읽는 것은 메시지가 몇 개든 같기 때문이다.
 
 **scheduled_messages** — 미리 만드는 선톡 둘(아침 · 안부)의 문안과 발송 창
 
@@ -597,6 +602,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | scheduled_messages.kind 선톡 종류 | `morning` 아침 선톡 · `checkin` 안부 선톡 |
 | scheduled_messages.status | `pending` 대기 · `sent` 발송 · `skipped` 폐기 |
 | pending_replies.status | `waiting` 대기 · `sent` 발송 · `superseded` 새 메시지로 폐기 · `failed` 실패 |
+| pending_replies.kind | `reply` 답장 · `recover` 복구 발송 · `wake` 구간 끝 깨우기 |
 | characters.status | `active` 대화 중 · `ended` 이별 |
 | messages.role | `user` 유저 · `assistant` 캐릭터 |
 | trace_events.status | `pending` 대기 · `sent` 게시 · `failed` 실패 · `skipped` 건너뜀 |
