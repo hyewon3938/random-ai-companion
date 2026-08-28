@@ -75,7 +75,7 @@ cron.schedule(
   { timezone: "Asia/Seoul" },
 );
 
-// 슬랙 가시성 게시: 1분 틱. 파이프라인이 게시함(viz_events)에 쌓아 둔 기록을
+// 슬랙 동작 기록 게시: 1분 틱. 파이프라인이 게시함(viz_events)에 쌓아 둔 기록을
 // 슬랙 채널로 내보낸다. 토큰·채널 설정이 없으면 아무것도 하지 않는다(viz.ts 참고).
 cron.schedule(
   "* * * * *",

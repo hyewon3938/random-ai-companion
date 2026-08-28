@@ -21,7 +21,7 @@ export const config = {
     gender: process.env.USER_GENDER?.trim() || undefined,
     ageBand: process.env.USER_AGE_BAND?.trim() || undefined,
   },
-  // 슬랙 가시성 채널(viz.ts) — 둘 다 있어야 게시가 켜진다. 없으면 기능 전체가 no-op.
+  // 슬랙 동작 기록 채널(viz.ts) — 둘 다 있어야 게시가 켜진다. 없으면 기능 전체가 no-op.
   slackBotToken: process.env.SLACK_BOT_TOKEN?.trim() || undefined,
   slackVizChannel: process.env.SLACK_VIZ_CHANNEL?.trim() || undefined,
 };
