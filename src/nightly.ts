@@ -42,6 +42,7 @@ import {
 } from "./life-plan.js";
 import { getKstNow, kstDateString, todayLabel } from "./kst.js";
 import { silenceState } from "./proactive-policy.js";
+import { afterNightlyTrace, beforeNightlyTrace } from "./nightly-trace.js";
 import { RECONNECT_WINDOW, RECENT_DIARY_DAYS } from "./thresholds.js";
 import {
   SPEECH_LEVEL_NAME,
@@ -457,10 +458,19 @@ const applyNightlyTxn = db.transaction(
   },
 );
 
+// 봇 밖 스케줄러(tools/nightly-write)와 봇 안 폴백 크론이 둘 다 이 함수를 지난다 —
+// 트레이스 게시를 여기 한 자리에 걸어 두 경로가 같은 기록을 남긴다.
+// 이전 값은 트랜잭션 전에 읽고, 게시함에 쌓는 것은 트랜잭션 바깥에서 한다:
+// 게시가 실패해도 그날 새벽 정리는 이미 저장되어 있다.
 export const applyNightlyOutput = (
   g: NightlyGathered,
   out: NightlyOutput,
-): string => applyNightlyTxn(g, out);
+): string => {
+  const snap = beforeNightlyTrace(g, out);
+  const result = applyNightlyTxn(g, out);
+  afterNightlyTrace(g, out, snap, result);
+  return result;
+};
 
 // 최근 결번 날짜들: 원시 대화는 있는데 일기가 안 써진 날(오래된 순, '어제' 포함).
 // 새벽 정리가 며칠 안 돌면(외부 경로·폴백 모두 실패) 생기며, 소급하지 않으면 그 날짜의
