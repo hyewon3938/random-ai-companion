@@ -17,6 +17,7 @@ import { runFollowupTick } from "./followup.js";
 import { runPresenceTick } from "./presence.js";
 import { resumePendingReplies } from "./pending.js";
 import { runTraceTick } from "./trace.js";
+import { enqueueReplyTraces } from "./reply-trace.js";
 
 // 이 프로세스는 실시간 대화(반응형)와 선톡 발송을 담당한다.
 //
@@ -80,11 +81,16 @@ cron.schedule(
   { timezone: "Asia/Seoul" },
 );
 
-// 슬랙 트레이스 게시: 1분 틱. 파이프라인이 게시함(trace_events)에 쌓아 둔 기록을
-// 슬랙 채널로 내보낸다. 토큰·채널 설정이 없으면 아무것도 하지 않는다(trace.ts 참고).
+// 슬랙 트레이스 게시: 1분 틱. 아직 안 올린 모델 호출을 게시함(trace_events)에 쌓고(reply-trace),
+// 게시함에 있는 것을 슬랙 채널로 내보낸다(trace). 토큰·채널 설정이 없으면 둘 다 아무것도 하지 않는다.
 cron.schedule(
   "* * * * *",
   () => {
+    try {
+      enqueueReplyTraces();
+    } catch (e) {
+      logErr("[trace] 답장 게시 준비 실패:", e);
+    }
     runTraceTick().catch((e) => logErr("[trace] tick error:", e));
   },
   { timezone: "Asia/Seoul" },
