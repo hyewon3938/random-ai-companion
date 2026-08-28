@@ -217,12 +217,69 @@ export const searchMemories = (
 };
 
 /**
+ * 한 글자 태그 뒤에 붙어 있어도 그 어절이 태그 자체를 가리키는 것으로 보는 조사.
+ * 이 목록 밖 글자가 이어지면 다른 낱말("일요일"의 "요일")로 보고 매치하지 않는다.
+ */
+const TAG_PARTICLES = new Set([
+  "이",
+  "가",
+  "은",
+  "는",
+  "을",
+  "를",
+  "도",
+  "만",
+  "에",
+  "의",
+  "와",
+  "과",
+  "로",
+  "으로",
+  "랑",
+  "이랑",
+  "이나",
+  "이야",
+  "이지",
+  "에서",
+  "에는",
+  "에도",
+  "에만",
+  "까지",
+  "부터",
+  "조차",
+  "마저",
+  "보다",
+  "처럼",
+  "밖에",
+]);
+
+/** 발화를 어절로 나눈다. 앞뒤에 붙은 문장부호는 떼어 낸다. */
+const eojeolsOf = (text: string): string[] =>
+  text
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^0-9A-Za-z가-힣]+|[^0-9A-Za-z가-힣]+$/g, ""))
+    .filter(Boolean);
+
+/** 한 글자 태그의 어절 단위 매치 — 어절이 태그와 같거나, 태그 뒤가 조사뿐일 때. */
+const matchesAsEojeol = (tag: string, words: string[]): boolean =>
+  words.some(
+    (w) =>
+      w === tag ||
+      (w.startsWith(tag) && TAG_PARTICLES.has(w.slice(tag.length))),
+  );
+
+/**
  * 유저 발화에 들어 있는 태그를 골라낸다. 붙어 있는 태그 이름을 문자열 포함으로 맞춰 보는
  * 것이라 추가 모델 호출이 없다 — 답장 경로에서 검색어를 만드는 유일한 방법.
+ * 한 글자 태그("일"·"돈"·"집")는 문자열 포함으로 보면 "일요일"·"생일"·"수집" 같은
+ * 다른 낱말에도 걸려 관련 없는 기억이 검색되므로, 어절 단위 매치만 허용한다.
  */
 export const tagsInText = (characterId: number, text: string): string[] => {
   if (!text.trim()) return [];
-  return listTagNames(characterId).filter((t) => text.includes(t));
+  const words = eojeolsOf(text);
+  return listTagNames(characterId).filter((t) =>
+    t.length >= 2 ? text.includes(t) : matchesAsEojeol(t, words),
+  );
 };
 
 /** 일기·일정도 같은 태그로 찾는다. 행을 읽는 건 그 데이터를 가진 쪽 몫이라 id만 준다. */
