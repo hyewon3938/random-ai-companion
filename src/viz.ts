@@ -226,22 +226,15 @@ const timingRange = (b: PlanBlock): string => {
       : "1~8분";
 };
 
-// 각본은 코드 블록 안에 올려 표처럼 읽는다. 한글은 고정폭 글꼴에서 두 칸을 차지하므로
-// 태그 열을 맞추려면 글자 수가 아니라 이 폭으로 센다. 슬랙이 &amp;를 &로 되돌려 그리므로
-// 자리는 이스케이프 전 글자로 계산한다.
-const width = (s: string): number =>
-  [...s].reduce((n, ch) => n + ((ch.codePointAt(0) ?? 0) > 0x10ff ? 2 : 1), 0);
-
-const ACTIVITY_COLS = 22;
-
-// 각본 한 줄: 시각 · 활동 · (활동 성격)[답장 여건] 답장 텀
+// 각본은 코드 블록 안에 올려 읽는다. 활동 문장 길이가 제각각이라 열을 맞추지 않고,
+// 태그를 활동 앞뒤로 나눠 붙여 시각 다음에 성격이 먼저 보이게 한다.
+// 각본 한 줄: 시각 (활동 성격) 활동 [답장 여건] 답장 텀
 const blockLine = (b: PlanBlock): string => {
   const resp = toResponsiveness(b.responsiveness) ?? "instant";
-  const tags = `(${ACTIVITY_CATEGORY_NAME[blockCategory(b)]})[${RESPONSIVENESS_NAME[resp]}]`;
-  // 당일에 닥치는 일은 별표 하나로 표시하고 각본 아래에 뜻을 한 줄 붙인다(열을 밀지 않게).
-  const activity = `${b.activity}${b.advance_known ? "" : " *"}`;
-  const pad = " ".repeat(Math.max(1, ACTIVITY_COLS - width(activity)));
-  return `${b.start}~${b.end}  ${esc(activity)}${pad}${tags} ${timingRange(b)}`;
+  const category = ACTIVITY_CATEGORY_NAME[blockCategory(b)];
+  // 당일에 닥치는 일은 활동 앞에 별표 두 개로 표시하고 각본 아래에 뜻을 한 줄 붙인다.
+  const activity = `${b.advance_known ? "" : "**"}${b.activity}`;
+  return `${b.start}~${b.end} (${category}) ${esc(activity)} [${RESPONSIVENESS_NAME[resp]}] ${timingRange(b)}`;
 };
 
 const seedText = (seed: DaySeed | undefined): string =>
@@ -317,7 +310,7 @@ const enqueuePlanPost = (c: CharacterRow, date: string, raw: string): void => {
     "```",
     ...plan.blocks.map(blockLine),
     "```",
-    ...(surprise ? ["`*` 당일에 닥치는 일"] : []),
+    ...(surprise ? ["`**` 당일에 닥치는 일"] : []),
   ].join("\n");
 
   // 생성 프롬프트는 지금 같은 DB 데이터로 다시 조립한다. 각본을 만든 뒤 게시할 때까지
