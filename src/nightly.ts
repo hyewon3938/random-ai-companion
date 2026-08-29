@@ -12,6 +12,7 @@ import {
   getArcs,
   saveArc,
   saveDayPlan,
+  setTags,
   getUpcomingSchedules,
   insertScheduledSend,
   getTodayNotes,
@@ -50,6 +51,7 @@ import {
 } from "./proactive-policy.js";
 import { afterNightlyTrace, beforeNightlyTrace } from "./nightly-trace.js";
 import {
+  DIARY_TAG_MAX,
   LUNCH_WINDOW,
   RECONNECT_WINDOW,
   RECENT_DIARY_DAYS,
@@ -75,6 +77,9 @@ export interface DiaryOutput {
   user_mood: string;
   closeness: string;
   tomorrow: string[];
+  // 이 하루를 나중에 다시 꺼낼 주제 태그. 기억 태그와 같은 어휘를 써야 대화 주제와 이어진다.
+  // 옵셔널인 이유는 이미 저장된 일기와 아직 이 항목을 안 만드는 생성 경로가 있어서다.
+  tags?: string[];
 }
 
 // 기억 정리 호출의 출력 한 건 — memory_items에 키(영역/무엇)로 저장된다.
@@ -184,6 +189,20 @@ export interface NightlyGathered {
 
 const nowStamp = (): string =>
   `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
+
+// 일기에 붙일 태그를 다듬는다. 모델이 준 값이라 배열이 아닐 수도, 빈 문자열이나 같은 말이
+// 두 번 올 수도 있다. 상한을 두는 이유는 thresholds.ts DIARY_TAG_MAX 주석에 적었다.
+const diaryTags = (entry: DiaryOutput): string[] => {
+  const raw = Array.isArray(entry.tags) ? entry.tags : [];
+  const out: string[] = [];
+  for (const t of raw) {
+    const v = typeof t === "string" ? t.trim() : "";
+    if (!v || out.includes(v)) continue;
+    out.push(v);
+    if (out.length >= DIARY_TAG_MAX) break;
+  }
+  return out;
+};
 
 const planBrief = (raw: string | undefined): string => {
   if (!raw) return "";
@@ -364,9 +383,19 @@ const applyNightlyTxn = db.transaction(
       .get(g.characterId, g.diaryDate);
     if (dup) return `skip: ${g.diaryDate} 일기 이미 있음`;
 
-    db.prepare(
-      `INSERT INTO diary_entries (character_id, date, entry_json) VALUES (?, ?, ?)`,
-    ).run(g.characterId, g.diaryDate, JSON.stringify(out.entry));
+    const diaryId = Number(
+      db
+        .prepare(
+          `INSERT INTO diary_entries (character_id, date, entry_json) VALUES (?, ?, ?)`,
+        )
+        .run(g.characterId, g.diaryDate, JSON.stringify(out.entry))
+        .lastInsertRowid,
+    );
+    // 일기도 기억과 같은 태그로 찾는다 — 이 줄이 없으면 옛 일기를 태그로 꺼내는
+    // 경로(context.ts)가 늘 빈손으로 돌아온다.
+    const diaryTagList = diaryTags(out.entry);
+    if (diaryTagList.length)
+      setTags(g.characterId, "diary", diaryId, diaryTagList);
 
     const ex = out.extract;
     let memCount = 0;
@@ -518,7 +547,7 @@ const applyNightlyTxn = db.transaction(
       }
     }
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${memCount ? `, 기억 ${memCount}건` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
@@ -594,11 +623,19 @@ ${g.dayActuals.join("\n") || "(없음)"}
 [오늘 메모 — 대화하며 적어 둔 것]
 ${g.todayNotes.join("\n") || "(없음)"}
 
+[이미 쓰는 태그]
+${g.tagNames.join(", ") || "(없음)"}
+
 [상대와 나눈 대화 전체]
 ${g.convo}
 
 오늘을 정리해 JSON으로:
-{"diary":"오늘의 일기. 1인칭, 5~10문장. 실제 보낸 하루와 상대와 나눈 것, 마음에 남은 것","plan_vs_actual":"원래 흐름과 실제로 보낸 하루가 달랐던 점 한두 줄","user_mood":"상대의 감정 흐름에 대한 관찰 한두 줄","closeness":"상대와의 거리감·온도 한 줄 (내부 기록, 상대에게 절대 언급하지 않는 것)","tomorrow":["내일 자연스럽게 이어가거나 물어볼 것 0~2개"]}`;
+{"diary":"오늘의 일기. 1인칭, 5~10문장. 실제 보낸 하루와 상대와 나눈 것, 마음에 남은 것","plan_vs_actual":"원래 흐름과 실제로 보낸 하루가 달랐던 점 한두 줄","user_mood":"상대의 감정 흐름에 대한 관찰 한두 줄","closeness":"상대와의 거리감·온도 한 줄 (내부 기록, 상대에게 절대 언급하지 않는 것)","tomorrow":["내일 자연스럽게 이어가거나 물어볼 것 0~2개"],"tags":["이 하루를 나중에 다시 꺼낼 주제 태그 3~${DIARY_TAG_MAX}개"]}
+
+tags 규칙:
+- 나중에 이 하루를 다시 꺼내는 실마리다. 한 일·간 곳·만난 사람 이름·나눈 이야기의 주제를 낱말로 적는다.
+- [이미 쓰는 태그]에 같은 뜻이 있으면 그 표기를 그대로 쓴다. 같은 주제를 다른 낱말로 적으면 나중에 함께 찾아지지 않는다.
+- 명사 한 덩어리로 짧게. 날짜·문장·감상은 태그로 쓰지 않는다.`;
 
 const quietDayPrompt = (g: NightlyGathered): string => `너는 이 인물이다.
 
@@ -613,8 +650,13 @@ ${arcLinesOf(g) || "(없음)"}
 [오늘의 흐름]
 ${g.planBriefYesterday || "(평범한 하루)"}
 ${g.dayActuals.length ? `\n[각본과 달라진 것]\n${g.dayActuals.join("\n")}\n` : ""}
+[이미 쓰는 태그]
+${g.tagNames.join(", ") || "(없음)"}
+
 JSON으로:
-{"diary":"혼자 보낸 하루의 일기. 1인칭, 3~6문장. 대화가 없었던 것에 대한 감정이 있다면 안정형답게 담담하게","plan_vs_actual":"—","user_mood":"—","closeness":"—","tomorrow":[]}`;
+{"diary":"혼자 보낸 하루의 일기. 1인칭, 3~6문장. 대화가 없었던 것에 대한 감정이 있다면 안정형답게 담담하게","plan_vs_actual":"—","user_mood":"—","closeness":"—","tomorrow":[],"tags":["이 하루를 나중에 다시 꺼낼 주제 태그 2~${DIARY_TAG_MAX}개"]}
+
+tags 규칙: 한 일·간 곳·만난 사람 이름을 낱말로 적는다. [이미 쓰는 태그]에 같은 뜻이 있으면 그 표기를 그대로 쓰고, 명사 한 덩어리로 짧게 쓴다.`;
 
 const EXTRACT_SYSTEM = `너는 캐릭터의 하루에서 다음 대화에 필요한 기억을 정리하는 정리자다. 대화에 나온 확실한 사실만 담고, 남길 것이 없으면 빈 배열을 준다.`;
 

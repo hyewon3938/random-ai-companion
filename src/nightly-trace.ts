@@ -400,9 +400,11 @@ const memoryChild = (
 const diaryChild = (g: NightlyGathered, parentKey: string): void => {
   const row = db
     .prepare(
-      `SELECT entry_json FROM diary_entries WHERE character_id = ? AND date = ?`,
+      `SELECT id, entry_json FROM diary_entries WHERE character_id = ? AND date = ?`,
     )
-    .get(g.characterId, g.diaryDate) as { entry_json: string } | undefined;
+    .get(g.characterId, g.diaryDate) as
+    | { id: number; entry_json: string }
+    | undefined;
   if (!row) return;
   let e: DiaryOutput;
   try {
@@ -410,6 +412,8 @@ const diaryChild = (g: NightlyGathered, parentKey: string): void => {
   } catch {
     return;
   }
+  const tags = getTags("diary", row.id);
+  const diaryTagLine = tags.length ? esc(tags.join(", ")) : "없음";
   const body = [
     `*${dateLabel(g.diaryDate)} 일기*`,
     quote(e.diary ?? ""),
@@ -419,6 +423,8 @@ const diaryChild = (g: NightlyGathered, parentKey: string): void => {
     e.tomorrow?.length
       ? `*내일 챙길 것*\n${quote(e.tomorrow.map((t) => `- ${t}`).join("\n"))}`
       : null,
+    // 붙지 않은 날도 적는다 — 나중에 이 일기를 태그로 꺼낼 수 있는지가 이 줄에 달렸다.
+    `*태그* ${diaryTagLine}`,
   ]
     .filter(Boolean)
     .join("\n\n");
