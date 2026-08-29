@@ -13,3 +13,4 @@
 | [0005](0005-memory-schema-v4-migration.md) | 기억 스키마를 v4로 옮기고 생성 시점 기억을 쓰기 규칙으로 지키기 | Accepted |
 | [0006](0006-llm-call-log-storage.md) | 모델 호출 원본을 표 둘에 나눠 담고 본문만 90일 뒤 지우기 | Accepted |
 | [0007](0007-keep-sqlite-single-file.md) | SQLite 파일 하나와 단일 VM 구성을 유지하기 | Accepted |
+| [0008](0008-offsite-db-snapshot-backup.md) | DB를 6시간마다 스냅샷으로 떠서 VM 밖에 보관하기 | Accepted |
