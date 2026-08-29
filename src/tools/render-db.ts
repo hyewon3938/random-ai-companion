@@ -100,9 +100,13 @@ interface TableNote {
   cols?: Record<string, ColNote>;
 }
 
-/** user_profile 다섯 컬럼이 함께 쓰는 설명. 온보딩이 프로필을 저장하지 않는다. */
-const UNFILLED =
-  "프롬프트가 읽는 값인데 채우는 코드가 없다. 지금 값은 옛 구조에서 넘어온 것이다.";
+/** 가입할 때 받기로 한 세 컬럼. 가입 절차가 없어서 넣는 코드도 없다. */
+const SIGNUP =
+  "가입할 때 받기로 한 값. 가입 절차가 아직 없어서 넣는 코드도 없고, 지금 값은 손으로 넣은 것이다.";
+
+/** 대화로 채우기로 한 두 컬럼. 채우는 코드가 빠져 있다. */
+const FROM_TALK =
+  "대화에서 알게 되면 새벽 정리가 채우기로 한 값인데, 채우는 코드가 없어 비어 있다.";
 
 const NOTES: Record<string, TableNote> = {
   cast_members: {
@@ -135,11 +139,11 @@ const NOTES: Record<string, TableNote> = {
         mark: "old",
         note: "birth_year로 바꿀 컬럼. 상대를 부르는 법 블록이 아직 이 값을 읽는다.",
       },
-      preferred_name: { mark: "idle", note: UNFILLED },
-      gender: { mark: "idle", note: UNFILLED },
-      birth_year: { mark: "idle", note: UNFILLED },
-      job: { mark: "idle", note: UNFILLED },
-      region: { mark: "idle", note: UNFILLED },
+      preferred_name: { mark: "idle", note: SIGNUP },
+      gender: { mark: "idle", note: SIGNUP },
+      birth_year: { mark: "idle", note: SIGNUP },
+      job: { mark: "idle", note: FROM_TALK },
+      region: { mark: "idle", note: FROM_TALK },
     },
   },
 };
@@ -494,7 +498,7 @@ ${rail}
         <div><dt>표시</dt><dd>옛 자리 ${oldCount}곳 · 안 쓰는 자리 ${idleCount}곳</dd></div>
       </dl>
       <p>표 하나가 한 구획이고, 컬럼은 저장된 그대로입니다. 컬럼 머리글을 누르면 그 열로 정렬하고, 접힌 칸을 누르면 전체 값이 펼쳐집니다. 기억 표는 태그가 따로 저장되어 있어서 마지막 열에 조인해 붙였고, 태그를 누르면 그 태그로 검색합니다.
-      대신할 자리가 생겨 지울 표와 컬럼은 옛 자리로, 자리만 있고 읽거나 쓰는 코드가 없는 것은 안 쓰는 자리로 표시했습니다.</p>
+      대신할 자리가 생겨 지울 표와 컬럼은 옛 자리로, 값을 넣는 코드가 없어 비어 있는 자리는 안 쓰는 자리로 표시했습니다.</p>
     </div>
 
 ${tables.map(section).join("\n\n")}
