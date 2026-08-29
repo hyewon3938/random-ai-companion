@@ -9,7 +9,7 @@
 //            모델이 뭐라고 썼는지
 //   스레드 — 그 호출의 실시간 꼬리 전문(호출마다 달라지는 부분)
 //   스레드 — 발송·폐기 결과(pending.ts가 그때 쌓는다)
-// 하루 종일 같은 앞 두 층은 그날 첫 호출에서 한 번만 올리고, 일간층이 바뀌면 바뀐 줄만 올린다.
+// 하루 종일 같은 앞 두 덩이는 그날 첫 호출에서 한 번만 올리고, 하루 중에 바뀌면 바뀐 줄만 올린다.
 //
 // 새벽 정리 쪽 호출(diary·extract·arc·day_plan·life_plan)은 여기서 건너뛴다 —
 // 구간 3이 이전 값과 함께 올린다. 두 곳이 같은 호출을 올리면 채널이 두 벌로 찬다.
@@ -524,7 +524,7 @@ const renderDraft = (row: CallRow): string => {
 
 // ── 하루 고정 두 덩이 ───────────────────────────────────────────────────
 
-const LAYER_NAME = ["불변층", "일간층"] as const;
+const LAYER_NAME = ["잘 바뀌지 않는 데이터", "하루 동안 같은 데이터"] as const;
 const LAYER_KEY = ["fixed", "daily"] as const;
 
 const prevLayeredCall = (row: CallRow): CallRow | undefined =>
@@ -617,6 +617,35 @@ export const lineDiff = (
     : out.join("\n");
 };
 
+/** 프롬프트를 대괄호 머리글로 갈라 대목 이름 → 본문으로 만든다. 머리글 앞의 글은 이름 없이 담는다. */
+const sectionsOf = (text: string): Map<string, string> => {
+  const out = new Map<string, string>();
+  let name = "";
+  for (const line of text.split("\n")) {
+    const head = /^\[([^\]]+)\]/.exec(line);
+    if (head) name = head[1].split(" — ")[0].trim();
+    out.set(name, out.has(name) ? `${out.get(name)}\n${line}` : line);
+  }
+  return out;
+};
+
+/** 내용이 달라진 대목의 이름. 머리글 없는 앞부분만 달라졌으면 이름을 댈 수 없어 빈 배열. */
+export const changedSections = (before: string, after: string): string[] => {
+  const a = sectionsOf(before);
+  const b = sectionsOf(after);
+  return [...new Set([...a.keys(), ...b.keys()])].filter(
+    (name) => name !== "" && a.get(name) !== b.get(name),
+  );
+};
+
+/** 바뀐 대목 이름을 세 개까지, 못 찾으면 덩이 이름으로. */
+const changeLabel = (names: string[], layer: 0 | 1): string => {
+  if (!names.length) return LAYER_NAME[layer];
+  return names.length > 3
+    ? `${names.slice(0, 3).join(" · ")} 외 ${names.length - 3}곳`
+    : names.join(" · ");
+};
+
 const postLayerChange = (
   row: CallRow,
   layer: 0 | 1,
@@ -638,7 +667,10 @@ const postLayerChange = (
       kind: "prompt_change",
       dedupeKey: key,
       threadKey: key,
-      text: `:pencil2: *${LAYER_NAME[layer]}이 바뀌었다* — ${row.created_at.slice(11, 16)} 호출 #${row.id}부터`,
+      text: `:pencil2: *바뀐 부분 — ${changeLabel(
+        before && after ? changedSections(before, after) : [],
+        layer,
+      )}* · ${row.created_at.slice(11, 16)} 호출 #${row.id}부터`,
     });
     for (const part of chunked(esc(body)))
       recordTraceEvent({
