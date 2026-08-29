@@ -183,6 +183,7 @@ origin은 이 값이 어디서 생겼는지, 그래서 앞으로 누가 고칠 �
 | --- | --- | --- | --- |
 | character_id | INTEGER | O | PK, FK characters.id |
 | name | TEXT | O | PK, 영역 이름, 한글 |
+| note | TEXT | | 영역이 덮는 범위 설명. 키를 고르는 모델에게 이름과 함께 보여준다 |
 
 영역은 일 · 건강 · 가족 · 친구처럼 삶을 나누는 갈래다. 주제 태그와는 쓰임이 달라서, 영역은 저장할 자리를 정하는 값이라 목록에 있는 이름 중에서 고르고 태그는 나중에 찾아오려고 붙이는 검색어라 관련된 만큼 붙인다.
 
@@ -416,6 +417,7 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | send_at | TEXT | O | 보낼 시각. 깨우기 표시는 구간이 끝나는 시각 |
 | kind | TEXT | O | 행의 종류 — `reply` · `recover` · `wake` |
 | meta_json | TEXT | | 깨우기 표시일 때 그 구간의 활동과 시작 · 종료 시각 |
+| call_id | INTEGER | | 이 답장을 만든 모델 호출의 llm_calls 행. 발송과 폐기 결과를 그 호출의 슬랙 트레이스 스레드에 이을 때 쓴다 |
 | status | TEXT | O | `waiting` · `sent` · `superseded` · `failed` |
 | attempts | INTEGER | O | |
 | last_error | TEXT | | |
@@ -493,7 +495,7 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | id | INTEGER | O | PK |
 | character_id | INTEGER | | FK characters.id |
 | chat_id | TEXT | | |
-| purpose | TEXT | O | 어느 자리의 호출인가 — `reply` 답장 · `hold` 붙잡기 판정 · `day_plan` 하루 각본 · `life_plan` 월 리듬 · `arc` 흐름 · `diary` 일기 · `extract` 기억 정리 · `genesis` 캐릭터 생성 · 선톡 여섯(`morning` · `reconnect` · `catchup` · `goodnight` · `away` · `comeback`) · `tool` 개발 도구 |
+| purpose | TEXT | O | 어느 자리의 호출인가 — `reply` 답장 · `hold` 붙잡기 판정 · `day_plan` 하루 각본 · `life_plan` 월 리듬 · `arc` 흐름 · `diary` 일기 · `extract` 기억 정리 · `genesis` 캐릭터 생성 · `bible` 옛 랜덤 생성 · 선톡 여섯(`morning` · `reconnect` · `catchup` · `goodnight` · `away` · `comeback`) · `tool` 개발 도구 |
 | model | TEXT | O | |
 | max_tokens | INTEGER | | 출력 상한 |
 | attempt | INTEGER | O | 같은 자리에서 몇 번째로 부른 호출인가. 응답 형식이 어긋나 다시 부르면 attempt가 2인 행이 따로 생긴다 |
@@ -509,6 +511,7 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | context_json | TEXT | | 판단 근거 — 검색한 태그와 꺼낸 기억, 개수 상한에 걸려 빠진 후보, 답장 텀이 나온 길과 결과, 다듬기 전후, 말풍선 수와 길이 |
 | code_version | TEXT | | 호출한 코드의 판을 가리키는 src 파일 지문 12자. 컨테이너에 git 기록이 없어 커밋 해시 대신 쓴다 |
 | created_at | TEXT | O | |
+| traced | INTEGER | O | 슬랙 트레이스 채널에 올렸는지 표시, 기본 0 |
 
 키·인덱스: PK `id`, 인덱스 `(created_at)`, 인덱스 `(character_id, purpose, id)`
 
@@ -630,16 +633,9 @@ plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한�
 
 | 구분 | 대상 |
 | --- | --- |
-| 저장 항목 정리 | memory_items.item_type을 넷에서 셋으로 — 캐릭터 정체성과 알게 된 유저 사실을 `fact` 하나로 합쳐 owner로 가르고, 관계 항목은 relationships의 컬럼으로 옮긴다 |
-| 테이블 흡수 | cast_members를 memory_items의 `person` 행으로 — 이름은 키의 단어 자리로, 어떤 사이 · 만나는 방식 · 사는 곳 · 마지막 등장은 전용 컬럼으로, 요즘 어떻게 지내는지는 값으로 |
-| 컬럼 추가 | relationships에 관계 항목 컬럼 아홉(stage · speech_level · speech_note · address_terms · texture · rapport · cautions · history · feelings)과 updated_at |
-| 컬럼 추가 | memory_items에 꺼낸 기록 둘(last_retrieved_at · retrieval_count) — 태그 검색으로 프롬프트에 넣을 때 코드가 갱신 |
-| 컬럼 추가 | memory_items에 항목별 추가 정보 다섯(relation · contact_mode · region · last_mentioned_at · end_condition) — extra_json 대신 전용 컬럼 |
-| 컬럼 교체 | memory_items.interest_level → interest — 값 체계를 3단계 영어 식별자로 새로 정하고 캐릭터 쪽 세 항목이 공통으로 쓴다 |
-| 키 변경 | memory_items의 UNIQUE에 origin 추가 — 같은 키에 creation 행과 conversation 행이 나란히 놓인다 |
-| 컬럼 삭제 | relationships.legacy_state_json(관계 컬럼의 초기값을 채운 뒤) |
-| 값 변경 | memory_items.origin의 seed → `creation`, accrued → `conversation`(컨디션 시드와 이름이 겹치지 않게) |
-| 용도 재정의 | user_preferences(매칭 전용 → 유저 단위 선호 자리), characters.genesis_json(생성 결과에 유저의 생성 입력을 더해 보관) |
+| 테이블 삭제 | cast_members — 주변 인물 데이터는 memory_items의 `person` 행이 넘겨받았고, 옛 랜덤 생성 경로만 아직 이 테이블에 쓴다 |
+| 컬럼 삭제 | relationships.legacy_state_json — 관계 항목 컬럼이 값을 넘겨받아 읽는 코드가 없다 |
+| 제약 조임 | relationships의 관계 항목 컬럼을 NOT NULL로 — 이 문서의 필수 표기가 그 목표 상태고, legacy_state_json을 지울 때 같이 조인다 |
 | 그대로 | 나머지 테이블 전부 |
 
 확정된 설계에서 이 문서가 더 정한 것은 하나다. 태그 테이블을 memory_items 전용(item_tags)으로 두면 지난 일기와 예정된 일의 태그가 갈 곳이 없어서, kind 열을 둔 tags 하나로 세 대상을 같이 담는다.
