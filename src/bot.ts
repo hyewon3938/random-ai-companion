@@ -570,7 +570,7 @@ const computeWait = (chatId: string): number => {
 // 나눠 보낸 여러 줄이 한 덩어리로 붙잡기 판정에 들어간다.
 const pendingUserTurn = (
   chatId: string,
-): { at: string; text: string } | null => {
+): { at: string; text: string; n: number } | null => {
   const rows = getRecentMessages(chatId, 12);
   const mine: MessageRow[] = [];
   for (let i = rows.length - 1; i >= 0; i--) {
@@ -580,7 +580,11 @@ const pendingUserTurn = (
   }
   const last = mine[mine.length - 1];
   if (!last) return null;
-  return { at: last.sent_at, text: mine.map((m) => m.text).join("\n") };
+  return {
+    at: last.sent_at,
+    text: mine.map((m) => m.text).join("\n"),
+    n: mine.length,
+  };
 };
 
 const toMinOfDay = (hhmm: string): number => {
@@ -724,11 +728,13 @@ const respond = async (
     // 말투 래칫: 최근 답장이 반말로 정착했으면(휴리스틱 판정) 관계의 말투 값을 casual로
     // 굳힌다. casual이 된 뒤에는 되돌리지 않는다 — 존댓말 회귀를 막는 한 방향 래칫.
     // 저장해 두면 최근 대화를 안 보는 경로(선톡 문안)도 같은 값을 읽는다.
-    if (
-      getRelationship(character.id)?.speech_level !== "casual" &&
-      currentSpeechLevel(chatId) === "반말"
-    )
+    const prevSpeech = getRelationship(character.id)?.speech_level ?? null;
+    let relUpdate: { field: string; from: string | null; to: string } | null =
+      null;
+    if (prevSpeech !== "casual" && currentSpeechLevel(chatId) === "반말") {
       setSpeechLevel(character.id, "casual", nowIso());
+      relUpdate = { field: "말투", from: prevSpeech, to: "casual" };
+    }
 
     // 2. 지금 만든다
     // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
@@ -737,6 +743,7 @@ const respond = async (
     // 배웅 답 상황 문단을 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다).
     const built: BuildTrace = {
       tags: [],
+      tagPool: 0,
       memories: [],
       oldDiaries: [],
       dropped: [],
@@ -761,17 +768,24 @@ const respond = async (
     // 빈 답장 방어: LLM이 태그만 뱉거나 빈 문자열을 주는 경우가 있다 → 한 번 재생성, 그래도 비면 스킵.
     // (빈 텍스트를 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.)
     // 태그만 뱉은 답이 바로 이 경우라, 재생성분의 신호도 함께 살린다.
+    let retryCallId: number | null = null;
     if (!text) {
+      const retryMeta: CallMeta = { ...meta, attempt: 2 };
       const retry = parseReplyTags(
-        await chat(system, turns, 1024, config.model, { ...meta, attempt: 2 }),
+        await chat(system, turns, 1024, config.model, retryMeta),
       );
       text = retry.text;
       stay = stay || retry.stay;
       note = retry.note ?? note;
+      retryCallId = retryMeta.callId ?? null;
     }
     // 이 답장이 어떤 근거로 나왔는지를 호출 기록에 붙인다 — 검색한 태그·기억, 텀 계산의
     // 입력과 결과, 다듬기 전후, 말풍선 수. 기록이 실패해도 답장은 그대로 나간다.
+    // 여러 번 나눠 부르므로 덮어쓰지 않고 쌓는다 — 뒤에 붙는 발송 예정 시각이 앞의
+    // 다듬기 기록을 지우면 안 된다.
+    const facts: Record<string, unknown> = {};
     const attach = (extra: Record<string, unknown>): void => {
+      Object.assign(facts, extra);
       if (!meta.callId) return;
       try {
         setCallContext(meta.callId, {
@@ -782,16 +796,37 @@ const respond = async (
           },
           search: built,
           turns: turns.length,
-          ...extra,
+          userMsgs: turn.n,
+          ...(relUpdate ? { relUpdate } : {}),
+          ...(retryCallId ? { retryCallId } : {}),
+          ...facts,
         });
       } catch (e) {
         logErr("[llm] 판단 근거 기록 실패:", e);
       }
     };
+    // 재생성 호출은 답장 스레드에 딸린 것으로 표시한다 — 그냥 두면 판단 근거 없는
+    // 낱개 행으로 올라가 어느 답장의 두 번째 시도인지 알 수 없다.
+    if (retryCallId && meta.callId)
+      try {
+        setCallContext(retryCallId, { partOf: meta.callId });
+      } catch (e) {
+        logErr("[llm] 재생성 호출 표시 실패:", e);
+      }
 
     // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음]).
     // 붙잡기 판정이 이미 접었으면 그 기록이 남아 있어 recordHold가 알아서 넘어간다.
-    if (stay) recordHold(character.id);
+    const staged = stay ? recordHold(character.id) : null;
+    if (timing.held)
+      attach({
+        dayActual: {
+          blockStart: timing.trace.block?.start ?? null,
+          activity: timing.held.activity,
+          outcome: timing.held.outcome,
+          by: "judge",
+        },
+      });
+    else if (staged) attach({ dayActual: { ...staged, by: "stay" } });
     if (!text) {
       attach({ dropped: "빈 답장" });
       console.warn(`[bot] empty reply — skip (chat=${chatId})`);
@@ -822,7 +857,7 @@ const respond = async (
         )
         .filter(Boolean),
     });
-    schedulePendingReply({
+    const scheduled = schedulePendingReply({
       chatId,
       characterId: character.id,
       userMsgAt: turn.at,
@@ -834,6 +869,7 @@ const respond = async (
       // 발송·폐기 결과를 이 답장을 만든 호출의 트레이스에 잇는다.
       callId: meta.callId ?? null,
     });
+    attach({ sendAt: scheduled.sendAt });
     // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
     setRecoveryMark(chatId, turn.at);
     console.log(
@@ -896,6 +932,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
     if (!turn) return;
     const built: BuildTrace = {
       tags: [],
+      tagPool: 0,
       memories: [],
       oldDiaries: [],
       dropped: [],
@@ -914,32 +951,43 @@ setWakeHandler(async (row: PendingReplyRow) => {
     let { text, stay, note } = parseReplyTags(
       await chat(system, turns, 1024, config.model, wakeMeta),
     );
+    let retryCallId: number | null = null;
     if (!text) {
+      const retryMeta: CallMeta = { ...wakeMeta, attempt: 2 };
       const retry = parseReplyTags(
-        await chat(system, turns, 1024, config.model, {
-          ...wakeMeta,
-          attempt: 2,
-        }),
+        await chat(system, turns, 1024, config.model, retryMeta),
       );
       text = retry.text;
       stay = stay || retry.stay;
       note = retry.note ?? note;
+      retryCallId = retryMeta.callId ?? null;
     }
     // 몰아 답장의 근거. 텀 대신 어느 구간이 끝나 답하는지를 남긴다 — 이 길은 표를 타지 않는다.
+    const facts: Record<string, unknown> = {};
     const attach = (extra: Record<string, unknown>): void => {
+      Object.assign(facts, extra);
       if (!wakeMeta.callId) return;
       try {
         setCallContext(wakeMeta.callId, {
           gathered: { activity, blockStart: meta.blockStart ?? null },
           search: built,
           turns: turns.length,
-          ...extra,
+          userMsgs: turn.n,
+          ...(retryCallId ? { retryCallId } : {}),
+          ...facts,
         });
       } catch (e) {
         logErr("[llm] 판단 근거 기록 실패:", e);
       }
     };
-    if (stay) recordHold(row.character_id);
+    if (retryCallId && wakeMeta.callId)
+      try {
+        setCallContext(retryCallId, { partOf: wakeMeta.callId });
+      } catch (e) {
+        logErr("[llm] 재생성 호출 표시 실패:", e);
+      }
+    const staged = stay ? recordHold(row.character_id) : null;
+    if (staged) attach({ dayActual: { ...staged, by: "stay" } });
     if (!text) {
       attach({ dropped: "빈 답장" });
       console.warn(`[wake] empty reply — skip (chat=${chatId})`);
@@ -968,6 +1016,8 @@ setWakeHandler(async (row: PendingReplyRow) => {
     });
     const { sent, error } = await sendBubbleList(chatId, bubbles);
     if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
+    // 이 길은 pending을 타지 않아 발송 결과가 따로 붙지 않는다 — 여기서 남긴다.
+    attach({ sent: `${sent.length}/${bubbles.length}` });
     if (error)
       console.warn(`[wake] 부분 발송 ${sent.length}/${bubbles.length}`);
     logMessage(

@@ -27,9 +27,11 @@ import {
   ACTIVITY_CATEGORY_NAME,
   CALL_PURPOSE_NAME,
   RESPONSIVENESS_NAME,
+  SPEECH_LEVEL_NAME,
   toActivityCategory,
   toResponsiveness,
   type CallPurpose,
+  type SpeechLevel,
 } from "./labels.js";
 import { getKstNow, logicalDateOf } from "./kst.js";
 
@@ -56,9 +58,7 @@ const POST_PURPOSES = [
 
 // 3층 프롬프트를 타는 호출 — 하루 고정 두 덩이를 여기서만 견준다.
 // 붙잡기 판정은 짧은 시스템 문장 한 덩이라 섞이면 매번 바뀐 것으로 보인다.
-const LAYERED = new Set<string>(
-  POST_PURPOSES.filter((p) => p !== "hold"),
-);
+const LAYERED = new Set<string>(POST_PURPOSES.filter((p) => p !== "hold"));
 
 const sqlList = (xs: readonly string[]): string =>
   xs.map((x) => `'${x}'`).join(", ");
@@ -103,28 +103,62 @@ interface CallContext {
     asked?: boolean;
     heldJudged?: boolean;
     held?: { outcome: string; activity: string } | null;
+    /** 붙잡기 판정을 물었으면 그 호출 번호. */
+    holdCallId?: number | null;
   };
   gathered?: { activity?: string; blockStart?: string | null };
   search?: {
     tags?: string[];
+    /** 검색어를 고르며 대조한 태그 수 — 걸린 것이 없을 때 검색이 돌긴 했는지 가른다. */
+    tagPool?: number;
     memories?: string[];
     oldDiaries?: string[];
     dropped?: string[];
   };
   turns?: number;
+  /** 한 번에 답한 유저 메시지 수(나눠 보낸 것을 묶은 결과). */
+  userMsgs?: number;
   stay?: boolean;
   note?: string | null;
   bubbles?: number;
   bubbleLens?: number[];
   polished?: ({ before: string; after: string } | null)[];
   dropped?: string;
+  /** 첫 답이 비어 다시 부른 호출 번호. */
+  retryCallId?: number | null;
+  /** 이 호출이 다른 호출에 딸린 것이면 그 부모 번호 — 재생성 호출이 여기 걸린다. */
+  partOf?: number;
+  /** 이 답장이 접거나 미룬 일정. by는 판정으로 접었는지 답장 표시로 접었는지. */
+  dayActual?: {
+    blockStart?: string | null;
+    activity?: string;
+    outcome?: string;
+    by?: string;
+  };
+  /** 이 답장을 만들며 바뀐 관계 항목. */
+  relUpdate?: { field?: string; from?: string | null; to?: string };
+  /** 발송 예정 시각(만들어 두고 기다리는 답장). */
+  sendAt?: string;
+  /** 몰아 답장처럼 그 자리에서 바로 보낸 경우의 발송 결과. */
+  sent?: string;
+  /** 붙잡기 판정 호출이 자기 행에 남기는 것 — 무엇을 두고 판정했는가. */
+  hold?: {
+    block?: {
+      start: string;
+      end: string;
+      activity: string;
+      responsiveness: string;
+      category: string;
+    } | null;
+    held?: boolean;
+  };
 }
 
 const PATH_NAME: Record<string, string> = {
   no_plan: "각본 없음",
   sleeping: "자다 깸",
   already_held: "이미 접어 둔 상태",
-  table: "표",
+  table: "텀 표",
   until_end: "구간 끝",
   held: "붙잡혀 접음",
   recover: "복구 발송",
@@ -187,22 +221,33 @@ const fmtWait = (ms: number): string => {
 const shortModel = (m: string): string => m.replace(/^claude-/, "");
 
 // 대화 기록은 통째로 올리지 않는다 — 그날 나눈 말이 다 들어 있고, 이미 텔레그램에 있다.
-// 이번에 답한 말 한 마디만 꺼낸다.
-const lastUserTurn = (hash: string | null): string | null => {
-  if (!hash) return null;
-  const turns = getBlob(hash);
-  if (!turns) return null;
-  const at = turns.lastIndexOf("\n[user] ");
-  const seg =
-    at >= 0
-      ? turns.slice(at + "\n[user] ".length)
-      : turns.startsWith("[user] ")
-        ? turns.slice("[user] ".length)
-        : null;
-  if (seg === null) return null;
-  // 뒤에 다른 차례가 이어지면 거기서 끊는다(마지막 차례가 유저가 아닐 때).
-  const next = seg.search(/\n\[(user|assistant)\] /);
-  return (next >= 0 ? seg.slice(0, next) : seg).trim() || null;
+// 이번에 답한 말만 꺼낸다. 유저가 나눠 보내면 여러 통이 한 답장으로 묶이므로 묶인 만큼 전부.
+const MAX_SHOWN_TURNS = 6;
+
+const lastUserTurns = (hash: string | null): string[] => {
+  if (!hash) return [];
+  const blob = getBlob(hash);
+  if (!blob) return [];
+  const parts = blob.split(/\n(?=\[(?:user|assistant)\] )/);
+  const mine: string[] = [];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const line = parts[i];
+    if (!line.startsWith("[user] ")) break;
+    const text = line.slice("[user] ".length).trim();
+    if (text) mine.unshift(text);
+  }
+  return mine.length > MAX_SHOWN_TURNS ? mine.slice(-MAX_SHOWN_TURNS) : mine;
+};
+
+/** 다른 호출을 한 줄로 가리킬 때 — 몇 번 호출을 언제 어느 모델로 불렀는지. */
+const callBrief = (id: number | null | undefined): string | null => {
+  if (!id) return null;
+  const row = db
+    .prepare(`SELECT id, model, created_at FROM llm_calls WHERE id = ?`)
+    .get(id) as { id: number; model: string; created_at: string } | undefined;
+  return row
+    ? `#${row.id} ${row.created_at.slice(11, 19)} ${shortModel(row.model)}`
+    : `#${id}`;
 };
 
 const tokenLine = (row: CallRow): string | null => {
@@ -212,7 +257,8 @@ const tokenLine = (row: CallRow): string | null => {
     bits.push(`캐시 쓰기 ${row.cache_write_tokens.toLocaleString()}`);
   if (row.cache_read_tokens)
     bits.push(`캐시 읽기 ${row.cache_read_tokens.toLocaleString()}`);
-  if (row.output_tokens) bits.push(`출력 ${row.output_tokens.toLocaleString()}`);
+  if (row.output_tokens)
+    bits.push(`출력 ${row.output_tokens.toLocaleString()}`);
   return bits.length ? `*토큰* ${bits.join(" · ")}` : null;
 };
 
@@ -227,38 +273,83 @@ const headLine = (row: CallRow, icon: string, label: string): string => {
   return `${icon} *${label}* · ${bits.join(" · ")}`;
 };
 
+type Block = NonNullable<NonNullable<CallContext["timing"]>["block"]>;
+
+/** 지금 하는 일 한 줄 — 두 태그가 텀과 붙잡기 판정을 모두 정한다. */
+const blockText = (b: Block): string => {
+  const r = toResponsiveness(b.responsiveness);
+  const c = toActivityCategory(b.category);
+  const resp = r ? RESPONSIVENESS_NAME[r] : b.responsiveness;
+  const cat = c ? ACTIVITY_CATEGORY_NAME[c] : b.category;
+  return `${b.start}~${b.end} ${b.activity} [${resp}/${cat}]`;
+};
+
+/** 판정을 부르지 않은 이유 — 조건대로 걸렀는지 여기서 확인한다. */
+const holdSkipReason = (t: NonNullable<CallContext["timing"]>): string => {
+  if (t.path === "recover") return "복구 발송이라 텀 계산 자체를 타지 않았다";
+  if (t.path === "no_plan") return "각본이 없어 지금 하는 일을 모른다";
+  if (t.path === "sleeping") return "자는 중이라 표를 건너뛰고 바로 답한다";
+  if (t.path === "already_held")
+    return "이미 접어 둔 일정이라 다시 묻지 않는다";
+  // 판정은 답장 불가 구간에서만, 그중에서도 접을 수 있는 일정에서만 돈다.
+  const r = t.block ? toResponsiveness(t.block.responsiveness) : null;
+  if (r !== "unavailable") return "답장 불가 구간이 아니다";
+  const c = t.block ? toActivityCategory(t.block.category) : null;
+  if (c === "official") return "공적 일정이라 접을 수 없다";
+  return "판정을 부르지 않았다";
+};
+
 const timingLines = (ctx: CallContext): string[] => {
   const t = ctx.timing;
   if (!t) {
     if (!ctx.gathered) return [];
     const activity = ctx.gathered.activity ?? "하던 일";
-    return [`*텀* 몰아 답장 — ${esc(activity)} 구간이 끝나 바로 보냈다`];
+    const start = ctx.gathered.blockStart;
+    return [
+      `*텀* 몰아 답장 — ${esc(activity)} 구간이 끝나 바로 보냈다`,
+      `*지금 하는 일* ${esc(start ? `${start} ${activity}` : activity)} — 방금 끝났다`,
+    ];
   }
   const bits = [`${fmtWait(t.waitMs ?? 0)} 뒤`];
+  if (ctx.sendAt) bits.push(`${ctx.sendAt.slice(11, 19)} 발송 예정`);
   if (t.path) bits.push(PATH_NAME[t.path] ?? t.path);
-  if (t.block) {
-    const r = toResponsiveness(t.block.responsiveness);
-    const c = toActivityCategory(t.block.category);
-    const resp = r ? RESPONSIVENESS_NAME[r] : t.block.responsiveness;
-    const cat = c ? ACTIVITY_CATEGORY_NAME[c] : t.block.category;
-    bits.push(
-      `${t.block.start}~${t.block.end} ${t.block.activity} [${resp}/${cat}]`,
+  const out = [`*텀* ${esc(bits.join(" · "))}`];
+  out.push(
+    `*지금 하는 일* ${t.block ? esc(blockText(t.block)) : "각본에 이 시각 블록이 없다"}`,
+  );
+  if (t.asked) {
+    const ref = callBrief(t.holdCallId);
+    const verdict = t.heldJudged ? "붙잡음" : "아님";
+    const tail = t.held ? ` → 일정 ${t.held.outcome}` : "";
+    out.push(
+      `*붙잡기 판정* 물었다 · ${verdict}${esc(tail)}${ref ? ` (호출 ${ref})` : ""}`,
     );
+  } else {
+    out.push(`*붙잡기 판정* 묻지 않음 — ${holdSkipReason(t)}`);
   }
-  if (t.asked) bits.push(`붙잡기 판정 ${t.heldJudged ? "붙잡음" : "아님"}`);
-  if (t.held) bits.push(`일정 ${t.held.outcome}`);
-  return [`*텀* ${esc(bits.join(" · "))}`];
+  return out;
 };
 
 const searchLines = (ctx: CallContext): string[] => {
   const s = ctx.search;
   if (!s) return [];
-  const bits = [s.tags?.length ? `태그 ${s.tags.join("·")}` : "태그 없음"];
-  if (s.memories?.length)
-    bits.push(`기억 ${s.memories.length}건 — ${s.memories.join(" / ")}`);
+  // 태그는 코드가 고른다 — 저장된 태그 이름을 이번 발화와 맞춰 보는 방식이라 모델이
+  // 주제를 뽑는 자리가 아니다. 걸린 것이 없을 때도 대조는 돌았다는 걸 개수로 보인다.
+  const pool = s.tagPool ? ` (붙어 있는 태그 ${s.tagPool}개와 대조)` : "";
+  const bits = [
+    s.tags?.length
+      ? `태그 ${s.tags.join("·")}${pool}`
+      : `걸린 태그 없음${pool}`,
+  ];
+  const found = s.memories?.length ?? 0;
+  bits.push(
+    found ? `기억 ${found}건 — ${s.memories?.join(" / ")}` : "기억 0건",
+  );
   if (s.oldDiaries?.length) bits.push(`옛 일기 ${s.oldDiaries.join("·")}`);
   if (s.dropped?.length)
-    bits.push(`개수 상한에 걸려 빠짐 ${s.dropped.length}건 — ${s.dropped.join(" / ")}`);
+    bits.push(
+      `개수 상한에 걸려 빠짐 ${s.dropped.length}건 — ${s.dropped.join(" / ")}`,
+    );
   return [`*검색* ${esc(bits.join(" · "))}`];
 };
 
@@ -269,22 +360,67 @@ const outcomeLines = (ctx: CallContext): string[] => {
       (p): p is { before: string; after: string } => Boolean(p),
     );
     for (const p of fixed)
-      out.push(`*다듬기* ${esc(clip(p.before, 120))} → ${esc(clip(p.after, 120))}`);
+      out.push(
+        `*다듬기* ${esc(clip(p.before, 120))} → ${esc(clip(p.after, 120))}`,
+      );
   }
   if (ctx.bubbles)
     out.push(
       `*보낸 말* 말풍선 ${ctx.bubbles}개${ctx.bubbleLens?.length ? ` (${ctx.bubbleLens.join("·")}자)` : ""}`,
     );
-  if (ctx.stay) out.push("*[남음]* 일정을 접고 곁에 남기로 했다");
-  if (ctx.note) out.push(`*[메모]* ${esc(clip(ctx.note, 200))}`);
+  // 붙였는지 안 붙였는지를 늘 적는다 — 없을 때 줄이 사라지면 모델이 안 붙인 건지
+  // 기록이 안 된 건지 구별되지 않는다.
+  out.push(
+    `*답장 표시* [남음] ${ctx.stay ? "붙임" : "없음"} · [메모] ${ctx.note ? "붙임" : "없음"}`,
+  );
+  if (ctx.note) out.push(`*오늘 메모* ${esc(clip(ctx.note, 200))}`);
+  if (ctx.dayActual) {
+    const d = ctx.dayActual;
+    const by = d.by === "judge" ? "붙잡기 판정" : "[남음] 표시";
+    out.push(
+      `*각본과 달라진 하루* ${esc(`${d.blockStart ?? ""} ${d.activity ?? ""}`.trim())} → ${esc(d.outcome ?? "")} (${by})`,
+    );
+  }
+  if (ctx.relUpdate) {
+    const r = ctx.relUpdate;
+    const name = (v: string | null | undefined): string =>
+      !v
+        ? "없음"
+        : v in SPEECH_LEVEL_NAME
+          ? SPEECH_LEVEL_NAME[v as SpeechLevel]
+          : v;
+    out.push(
+      `*관계 갱신* ${esc(r.field ?? "")} ${esc(name(r.from))} → ${esc(name(r.to))}`,
+    );
+  }
+  if (ctx.sent) out.push(`*발송* 말풍선 ${esc(ctx.sent)} 나감 — 바로 보냈다`);
   if (ctx.dropped) out.push(`:wastebasket: *폐기* ${esc(ctx.dropped)}`);
   return out;
 };
 
+/** 이 답장 하나에 모델을 몇 번 불렀는지. 한 번이면 머리 줄이 이미 말해 준다. */
+const callsLine = (row: CallRow, ctx: CallContext): string | null => {
+  const parts: string[] = [];
+  const hold = callBrief(ctx.timing?.holdCallId);
+  if (hold) parts.push(`붙잡기 판정 ${hold}`);
+  parts.push(
+    `답장 #${row.id} ${row.created_at.slice(11, 19)} ${shortModel(row.model)}`,
+  );
+  const retry = callBrief(ctx.retryCallId);
+  if (retry) parts.push(`재생성 ${retry}`);
+  return parts.length > 1
+    ? `*모델 호출* ${parts.length}번 — ${esc(parts.join(" · "))}`
+    : null;
+};
+
 const renderReply = (row: CallRow, ctx: CallContext | null): string => {
   const lines = [headLine(row, ":speech_balloon:", "답장")];
-  const asked = lastUserTurn(row.turns_hash);
-  if (asked) lines.push(quote(clip(asked, 300)));
+  const asked = lastUserTurns(row.turns_hash);
+  if (asked.length) {
+    const n = ctx?.userMsgs ?? asked.length;
+    if (n > 1) lines.push(`_유저 메시지 ${n}통을 묶어 한 번에 답한다_`);
+    lines.push(asked.map((t) => quote(clip(t, 300))).join("\n>\n"));
+  }
   if (ctx) {
     lines.push(...timingLines(ctx), ...searchLines(ctx));
   } else {
@@ -293,22 +429,49 @@ const renderReply = (row: CallRow, ctx: CallContext | null): string => {
   const output = row.output_hash ? getBlob(row.output_hash) : null;
   if (output) lines.push("*모델이 쓴 답*", quote(clip(output, 700)));
   if (row.error) lines.push(`:x: *호출 실패* ${esc(row.error)}`);
-  if (ctx) lines.push(...outcomeLines(ctx));
+  if (ctx) {
+    lines.push(...outcomeLines(ctx));
+    const calls = callsLine(row, ctx);
+    if (calls) lines.push(calls);
+  }
   const tokens = tokenLine(row);
   if (tokens) lines.push(tokens);
   return lines.join("\n");
 };
 
-const renderHold = (row: CallRow): string => {
+/** 첫 답이 비어 다시 부른 호출 — 답장 스레드에 딸아 붙인다. */
+const renderRetry = (row: CallRow, parent: number): string => {
+  const lines = [
+    `:repeat: *재생성* · 호출 #${row.id} · ${row.created_at.slice(11, 19)} · ${shortModel(row.model)} — 답장 #${parent}의 첫 답이 비어 다시 불렀다`,
+  ];
+  const out = row.output_hash ? getBlob(row.output_hash) : null;
+  if (out) lines.push(quote(clip(out, 500)));
+  if (row.error) lines.push(`:x: *호출 실패* ${esc(row.error)}`);
+  const tokens = tokenLine(row);
+  if (tokens) lines.push(tokens);
+  return lines.join("\n");
+};
+
+const renderHold = (row: CallRow, ctx: CallContext | null): string => {
   const lines = [headLine(row, ":mag:", "붙잡기 판정")];
   const prompt = row.turns_hash ? getBlob(row.turns_hash) : null;
-  if (prompt)
-    lines.push(
-      quote(clip(prompt.replaceAll("[user] ", ""), 400)),
-    );
+  if (prompt) lines.push(quote(clip(prompt.replaceAll("[user] ", ""), 400)));
+  const block = ctx?.hold?.block;
+  if (block) lines.push(`*지금 하는 일* ${esc(blockText(block))}`);
   const out = row.output_hash ? getBlob(row.output_hash) : null;
-  lines.push(`*판정* ${out ? esc(out.trim()) : "(없음)"}`);
-  if (row.error) lines.push(`:x: *호출 실패* ${esc(row.error)} — 일정을 그대로 둔다`);
+  const held = ctx?.hold?.held;
+  const cat = block ? toActivityCategory(block.category) : null;
+  const meant =
+    held === undefined
+      ? ""
+      : held
+        ? cat === "personal"
+          ? " — 이 일정을 취소하고 바로 답한다"
+          : " — 만나기로 한 상대에게 양해를 구하고 미룬다"
+        : " — 일정을 그대로 두고 구간이 끝날 때 몰아 답한다";
+  lines.push(`*판정* ${out ? esc(out.trim()) : "(없음)"}${meant}`);
+  if (row.error)
+    lines.push(`:x: *호출 실패* ${esc(row.error)} — 일정을 그대로 둔다`);
   return lines.join("\n");
 };
 
@@ -360,7 +523,9 @@ const postFullLayers = (
   if (hasTraceEvent(key)) return;
   const bodies = [getBlob(hashes[0].h), getBlob(hashes[1].h)];
   const sizes = bodies.map((b, i) =>
-    b ? `${LAYER_NAME[i]} ${b.length.toLocaleString()}자` : `${LAYER_NAME[i]} 본문 없음`,
+    b
+      ? `${LAYER_NAME[i]} ${b.length.toLocaleString()}자`
+      : `${LAYER_NAME[i]} 본문 없음`,
   );
   db.transaction(() => {
     recordTraceEvent({
@@ -417,7 +582,8 @@ export const lineDiff = (
     if (a[i] === b[j]) {
       i++;
       j++;
-    } else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1]) out.push(`- ${a[i++]}`);
+    } else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1])
+      out.push(`- ${a[i++]}`);
     else out.push(`+ ${b[j++]}`);
   }
   while (i < a.length) out.push(`- ${a[i++]}`);
@@ -482,6 +648,19 @@ const ensureDayPrompt = (row: CallRow, hashes: BlockHash[]): void => {
 // ── 게시함에 쌓기 ───────────────────────────────────────────────────────
 
 const postCall = (row: CallRow): void => {
+  const ctx = parseContext(row.context_json);
+  // 첫 답이 비어 다시 부른 호출은 제 몫의 글이 없다 — 원래 답장 스레드에 붙인다.
+  // 앞 두 층은 원래 답장과 같은 글자라 여기서는 견주지 않는다.
+  if (ctx?.partOf) {
+    recordTraceEvent({
+      characterId: row.character_id ?? undefined,
+      kind: "call_retry",
+      dedupeKey: callKey(row.id),
+      parentKey: callKey(ctx.partOf),
+      text: renderRetry(row, ctx.partOf),
+    });
+    return;
+  }
   const hashes = parseHashes(row.system_hashes);
   if (LAYERED.has(row.purpose) && hashes.length >= 3) {
     try {
@@ -490,12 +669,11 @@ const postCall = (row: CallRow): void => {
       console.error("[trace] 고정 두 덩이 게시 준비 실패:", err);
     }
   }
-  const ctx = parseContext(row.context_json);
   const body =
     row.purpose === "reply"
       ? renderReply(row, ctx)
       : row.purpose === "hold"
-        ? renderHold(row)
+        ? renderHold(row, ctx)
         : renderDraft(row);
   const key = callKey(row.id);
   db.transaction(() => {
@@ -508,12 +686,15 @@ const postCall = (row: CallRow): void => {
     });
     // 실시간 꼬리 — 호출마다 달라지는 부분이라 전문을 스레드에 붙인다.
     // 앞 두 층은 하루 한 번만 올리므로 여기서 되풀이하지 않는다.
-    const tail = hashes.length >= 3 ? getBlob(hashes[hashes.length - 1].h) : null;
+    const tail =
+      hashes.length >= 3 ? getBlob(hashes[hashes.length - 1].h) : null;
     if (!tail) return;
     const parts = chunked(esc(tail));
     parts.forEach((p, i) => {
       const label =
-        parts.length > 1 ? `실시간 꼬리 (${i + 1}/${parts.length})` : "실시간 꼬리";
+        parts.length > 1
+          ? `실시간 꼬리 (${i + 1}/${parts.length})`
+          : "실시간 꼬리";
       recordTraceEvent({
         characterId: row.character_id ?? undefined,
         kind: "call_tail",
@@ -598,7 +779,8 @@ export const traceProactiveSend = (p: {
 }): void => {
   if (!traceEnabled()) return;
   const name = SEND_KIND_NAME[p.kind] ?? `${p.kind} 선톡`;
-  const partial = p.delivered < p.total ? ` (${p.delivered}/${p.total}만 나감)` : "";
+  const partial =
+    p.delivered < p.total ? ` (${p.delivered}/${p.total}만 나감)` : "";
   recordTraceEvent({
     characterId: p.characterId,
     kind: "proactive_send",

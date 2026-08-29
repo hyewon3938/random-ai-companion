@@ -1,7 +1,7 @@
 import { currentBlock } from "./context.js";
 import { blockCategory, type PlanBlock } from "./day-plan.js";
-import { recordDayActual, getDayActuals } from "./db.js";
-import { chat } from "./llm.js";
+import { recordDayActual, getDayActuals, setCallContext } from "./db.js";
+import { chat, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
 import {
   toResponsiveness,
@@ -91,22 +91,33 @@ const HOLD_SYSTEM = `너는 메신저 대화를 읽고 한 가지만 판정한�
 
 const askHold = async (
   characterId: number,
-  activity: string,
+  block: TimingTrace["block"],
   userText: string,
-): Promise<boolean> => {
+): Promise<{ held: boolean; callId: number | null }> => {
+  const activity = block?.activity ?? "하던 일";
   const prompt = `내가 지금 하는 일: ${activity}\n상대가 방금 보낸 말: ${userText}`;
+  const meta: CallMeta = { purpose: "hold", characterId };
   try {
     const out = await chat(
       HOLD_SYSTEM,
       [{ role: "user", content: prompt }],
       16,
       config.model,
-      { purpose: "hold", characterId },
+      meta,
     );
-    return out.includes("붙잡");
+    const held = out.includes("붙잡");
+    // 이 판정이 어떤 일정을 두고 나온 것인지 판정 호출 기록에도 남긴다 — 트레이스가
+    // 판정만 따로 올릴 때 무엇을 보고 판정했는지 알 수 있게. 기록 실패는 판정을 막지 않는다.
+    if (meta.callId)
+      try {
+        setCallContext(meta.callId, { hold: { block, held } });
+      } catch {
+        /* 판정은 그대로 쓴다 */
+      }
+    return { held, callId: meta.callId ?? null };
   } catch {
     // 판정이 실패하면 일정을 그대로 둔다 — 없던 취소를 만들지 않는 쪽이 안전하다.
-    return false;
+    return { held: false, callId: meta.callId ?? null };
   }
 };
 
@@ -131,6 +142,8 @@ export interface TimingTrace {
   /** 붙잡기 판정을 물었는가, 물었다면 붙잡혔는가. */
   asked: boolean;
   heldJudged?: boolean;
+  /** 판정을 물었으면 그 모델 호출 번호 — 답장 기록에서 판정 호출로 건너갈 수 있게. */
+  holdCallId?: number | null;
 }
 
 export interface TimingDecision {
@@ -213,12 +226,19 @@ export const decideReplyTiming = async (
       gather,
       trace: { path: "until_end", block: seen, asked: false },
     };
-  if (!(await askHold(characterId, b.activity, userText)))
+  const judged = await askHold(characterId, seen, userText);
+  if (!judged.held)
     return {
       waitMs: untilBlockEndMs(b),
       held: null,
       gather,
-      trace: { path: "until_end", block: seen, asked: true, heldJudged: false },
+      trace: {
+        path: "until_end",
+        block: seen,
+        asked: true,
+        heldJudged: false,
+        holdCallId: judged.callId,
+      },
     };
 
   // 붙잡혔다 — 개인 일정은 취소하고, 사회 일정은 만나기로 한 상대에게 양해를 구해 미룬다.
@@ -237,7 +257,13 @@ export const decideReplyTiming = async (
     waitMs: rand(NUDGE_MIN_MS, NUDGE_MAX_MS),
     held: { outcome, activity: b.activity },
     gather: null,
-    trace: { path: "held", block: seen, asked: true, heldJudged: true },
+    trace: {
+      path: "held",
+      block: seen,
+      asked: true,
+      heldJudged: true,
+      holdCallId: judged.callId,
+    },
   };
 };
 
@@ -245,12 +271,14 @@ export const decideReplyTiming = async (
  * 모델이 답장에 [남음] 표시를 붙였을 때 — 붙잡기 판정을 거치지 않고 스스로 일정을 접기로 한 경우다.
  * 판정이 이미 접어 둔 블록이면 그대로 두고, 공적 일정은 접지 못하므로 넘어간다.
  */
-export const recordHold = (characterId: number): void => {
+export const recordHold = (
+  characterId: number,
+): { blockStart: string; activity: string; outcome: string } | null => {
   const b = currentBlock(characterId);
-  if (!b) return;
+  if (!b) return null;
   const cat = blockCategory(b);
-  if (cat === "official") return;
-  if (isHeldNow(characterId)) return;
+  if (cat === "official") return null;
+  if (isHeldNow(characterId)) return null;
   const outcome =
     cat === "personal" ? HOLD_OUTCOME.cancelled : HOLD_OUTCOME.deferred;
   recordDayActual(
@@ -263,4 +291,5 @@ export const recordHold = (characterId: number): void => {
     stamp(),
   );
   console.log(`[hold] ${b.activity} → ${outcome} (답장 표시)`);
+  return { blockStart: b.start, activity: b.activity, outcome };
 };
