@@ -20,7 +20,7 @@ import {
   memoryLine,
 } from "./memory.js";
 import { ensureRhythmRunway } from "./life-plan.js";
-import { kstDateString, todayLabel } from "./kst.js";
+import { kstLogicalDate, dayLabelOf } from "./kst.js";
 import {
   AWAY_DAILY_MAX,
   AWAY_MIN_BLOCK_MIN,
@@ -58,6 +58,9 @@ export interface PlanBlock {
   // 필드가 없는 구 각본·외부 생성분과도 호환된다(없으면 무시).
   source?: BlockSource;
   source_id?: number; // source="schedule"인 블록에만. schedules.id
+  // 각본에 이 시각을 덮는 블록이 없어 코드가 메운 자리(context.ts의 dayProgress). 저장된
+  // 각본에는 들어가지 않고 읽는 자리에서만 붙어서, 트레이스가 각본에 있던 일과 갈라 볼 수 있다.
+  fallback?: boolean;
 }
 
 // 공적 의무(못 미룸, 대개 폰도 불가) 키워드.
@@ -168,7 +171,10 @@ ${diary || "(없음)"}
   - **사교 자리(친구 약속·회식·모임)는 "unavailable"이 아니라 "intermittent"다** — 사람들과 있어도 폰은 틈틈이 본다. 다만 회식은 텀이 더 길고(자리를 오래 못 뜸), 친구 약속은 대체로 틈틈이 보지만 가끔 텀이 길어진다.
   - **집에서 하는 여가는 "unavailable"이 아니라 "intermittent"다** — 집에서 영화·드라마(OTT)·독서·집안일·가계부는 폰을 곁에 두고 하므로 틈틈이 답할 수 있다. 영화라도 '영화관에 감'만 "unavailable"이고 '집에서 봄'은 "intermittent".
   - **실제로 자는 시간(잠)만 밤의 "unavailable"이다. '취침 준비·잠자리에 들기'(누워서 폰 보며 뒹굴대는 시간)는 "instant".** 저녁~취침 전은 대화 시간이라 대체로 "instant".
-- 블록은 00:00~23:59 안에서 시간순으로 빈틈 없이. 전날 밤부터 이어지는 잠은 00:00부터 기상 시각까지 블록으로.
+- 하루는 새벽 5시에 시작해 다음 날 새벽 5시에 끝난다. 블록은 05:00~28:59 안에서 시간순으로 빈틈 없이 채운다.
+  - 자정을 넘긴 시각은 24를 더해 적는다: 00:30은 "24:30", 새벽 2시는 "26:00", 하루의 끝은 "29:00".
+  - 전날 밤부터 이어지는 잠이 아직 안 끝났으면 05:00부터 기상 시각까지 잠 블록으로 시작한다.
+  - 밤에 잠드는 시각부터 다음 날 새벽 5시까지도 잠 블록으로 채운다(예: 24:20~29:00).
 
 - 각 블록의 category = 활동의 성격(답장 여건과 별개의 축 — 유저가 찾을 때 얼마나 조정 가능한가). 값은 셋 중 하나:
   - "personal"(개인) = 혼자 자의로 하는 일(운동·집 여가·영화·독서·장보기·산책·혼밥·낮잠). 쉽게 취소하거나 미룰 수 있다. 답장은 물리적으로 가능하면 한다(집 활동=intermittent, 영화관·운전·운동·씻기만 unavailable).
@@ -182,7 +188,7 @@ ${diary || "(없음)"}
   - 어느 쪽도 아닌 블록(잠·식사·이동·그날 갑자기 생긴 일)에는 두 값을 적지 않는다.
 
 [JSON 형식 — 이 구조 그대로]
-{"date":"${date}","blocks":[{"start":"00:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"unavailable","advance_known":false,"category":"official"},{"start":"19:00","end":"20:00","activity":"운동","responsiveness":"unavailable","advance_known":true,"category":"personal","source":"routine"}, ...]}
+{"date":"${date}","blocks":[{"start":"05:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"unavailable","advance_known":false,"category":"official"},{"start":"19:00","end":"20:00","activity":"운동","responsiveness":"unavailable","advance_known":true,"category":"personal","source":"routine"},{"start":"24:10","end":"29:00","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"}]}
 위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다. source_id의 12도 예시이니, 실제 번호는 위 [이 날의 확정 일정]에 적힌 것을 쓴다.`;
 
 // 행 번호로 쓸 수 있는 값인가. 생성이 숫자를 따옴표에 넣어 답하는 일이 있어 문자열도 받는다.
@@ -211,9 +217,33 @@ const normalizeSource = (
 // 앞 둘은 무난한 쪽으로 채우고 출처는 지운다(없어도 되는 값이라 아무거나 채우면 거짓이 된다).
 // 내보내는 이유: 모델을 부르지 않고도 이 방어선을 검증할 수 있어야 한다. 부르는 곳은 아직
 // ensureTodayPlan 한 곳뿐이다.
+// 자정을 넘긴 블록을 24시 이후 표기로 되돌린다. 생성에 "24:30"으로 적으라고 일러 두었지만
+// 새벽 시각을 "00:30"으로 적어 오는 일이 있고, 그러면 블록이 하루의 맨 앞으로 튀어 순서가
+// 뒤집힌다. 앞 시각보다 이른 값이 나오는 지점부터 뒤쪽 전부에 24시간을 더해 순서를 되살린다.
+const shiftPastMidnight = (blocks: PlanBlock[]): PlanBlock[] => {
+  let prev = -1;
+  let crossed = false;
+  return blocks.map((b) => {
+    const fix = (hhmm: string): string => {
+      const [h, m] = hhmm.split(":").map(Number);
+      if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
+      let min = (h ?? 0) * 60 + (m ?? 0);
+      if (crossed && min < 24 * 60) min += 24 * 60;
+      else if (!crossed && min < prev) {
+        crossed = true;
+        min += 24 * 60;
+      }
+      prev = min;
+      return `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+    };
+    const start = fix(b.start);
+    return { ...b, start, end: fix(b.end) };
+  });
+};
+
 export const normalizePlan = (plan: DayPlan): DayPlan => ({
   ...plan,
-  blocks: (plan.blocks ?? []).map((b) => {
+  blocks: shiftPastMidnight(plan.blocks ?? []).map((b) => {
     // 출처 두 칸은 스프레드로 딸려 오면 모르는 값이 그대로 살아남는다 —
     // 빼 두고 판정 결과만 얹는다.
     const { source: _source, source_id: _sourceId, ...rest } = b;
@@ -262,7 +292,7 @@ export const buildPlanPrompt = (characterId: number, date: string): string => {
     identityValue(identity, "생활", "잠"),
     identityValue(identity, "생활", "매주 루틴"),
     date,
-    todayLabel(),
+    dayLabelOf(date),
     todays,
     ongoing,
     arcs,
@@ -278,7 +308,8 @@ export const ensureTodayPlan = async (
   characterId: number,
   nightly = false,
 ): Promise<void> => {
-  const date = kstDateString();
+  // 각본의 하루는 새벽 5시에 갈린다 — 자정~04:59에 대화가 와도 어제 각본을 계속 쓴다.
+  const date = kstLogicalDate();
   const existing = getDayPlan(characterId, date);
   // 이미 있으면 비용 없이 종료(런웨이 확인도 생략). 단 밤 정리 경로는 lazy분이면 다시 만든다.
   if (

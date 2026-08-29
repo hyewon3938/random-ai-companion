@@ -32,7 +32,9 @@ import {
   kstDateString,
   kstVerbalTime,
   workdayContext,
-  kstClock,
+  kstLogicalDate,
+  kstLogicalClock,
+  clockLabel,
   logicalDayStartTs,
   lastTalkedLabel,
 } from "./kst.js";
@@ -139,17 +141,56 @@ const COLD_START_SEED = `[관계 시작 단계 — 지금 대화용]
 - 네 이름은 먼저 밝히지 않는다. 통성명이 자연스러운 흐름이 생길 때(상대가 묻거나 서로 이름을 나눌 때) 그때 말한다.`;
 
 // 오늘 각본의 시각 의존 조각 — 지나온 오늘과 지금 블록. 매 응답마다 바뀌므로 꼬리가 쓴다.
+// 하루의 자정과 끝 — 각본 표기(05:00~28:59) 기준이다.
+const MIDNIGHT = "24:00";
+const DAY_END = "29:00";
+
+/**
+ * 각본에 지금 시각을 덮는 블록이 없을 때 그 빈자리를 잠으로 메운다.
+ *
+ * 하루를 23:59까지만 잡던 옛 각본이나 만들다 만 각본이 있어서, 자정을 넘긴 시각에는 덮는
+ * 블록이 없는 일이 생긴다. 그때 지금 하는 일을 모르는 채로 답하는 것보다 자다 깬 사람으로
+ * 답하는 편이 실제에 가깝다. 낮의 빈자리는 그대로 둔다 — 한낮에 자고 있다고 말하는 쪽이
+ * 더 큰 거짓말이다.
+ */
+export const sleepGap = (
+  blocks: PlanBlock[],
+  now: string,
+): PlanBlock | null => {
+  if (now < MIDNIGHT) return null;
+  return {
+    start: blocks
+      .filter((b) => b.end <= now)
+      .reduce((latest, b) => (b.end > latest ? b.end : latest), MIDNIGHT),
+    end: blocks
+      .filter((b) => b.start > now)
+      .reduce(
+        (earliest, b) => (b.start < earliest ? b.start : earliest),
+        DAY_END,
+      ),
+    activity: "잠",
+    responsiveness: "unavailable",
+    advance_known: true,
+    category: "personal",
+    fallback: true,
+  };
+};
+
 const dayProgress = (
   characterId: number,
 ): { past: PlanBlock[]; cur: PlanBlock | null } => {
-  const raw = getDayPlan(characterId, kstDateString());
+  // 각본의 하루는 새벽 5시에 갈린다. 자정~04:59에는 어제 각본을 계속 읽고, 지금 시각도
+  // 그 각본의 표기(24:30 같은 24시 이후 표기)로 맞춰 비교한다.
+  const raw = getDayPlan(characterId, kstLogicalDate());
   if (!raw) return { past: [], cur: null };
   try {
     const plan = JSON.parse(raw) as DayPlan;
-    const now = kstClock();
+    const now = kstLogicalClock();
     return {
       past: plan.blocks.filter((b) => b.end <= now),
-      cur: plan.blocks.find((b) => b.start <= now && now < b.end) ?? null,
+      cur:
+        plan.blocks.find((b) => b.start <= now && now < b.end) ??
+        sleepGap(plan.blocks, now),
     };
   } catch {
     return { past: [], cur: null };
@@ -169,7 +210,7 @@ const toMin = (hhmm: string): number => {
 // 시각 의존 표시는 꼬리(nowSection)가 맡는다: 일간층에 두면 매 응답마다 캐시가 깨진다.
 // 닥쳐야 아는 일(advance_known=false)은 여기 싣지 않는다 — 캐릭터에게 미리 보이지 않는다.
 const daySection = (characterId: number): string => {
-  const raw = getDayPlan(characterId, kstDateString());
+  const raw = getDayPlan(characterId, kstLogicalDate());
   if (!raw) return "";
   try {
     const plan = JSON.parse(raw) as DayPlan;
@@ -177,7 +218,7 @@ const daySection = (characterId: number): string => {
     return [
       `[너의 오늘 하루 — 미리 알고 있는 흐름]`,
       known.length
-        ? known.map((b) => `${b.start} ${b.activity}`).join(" → ")
+        ? known.map((b) => `${clockLabel(b.start)} ${b.activity}`).join(" → ")
         : "",
       `- 이건 계획표가 아니라 그냥 네 하루다. 너는 시간표를 의식하지 않는다 — 그 시간이 되면 네가 하고 싶어서 하는 일들이다.`,
       `- 위에 없는 앞일은 너도 모른다. 닥치면 겪는다.`,
@@ -327,16 +368,16 @@ const nowSection = (
   storedLevel: SpeechLevel | null,
 ): string => {
   const { past, cur } = dayProgress(characterId);
-  const now = kstClock();
+  const now = kstLogicalClock();
   // 시각은 숫자 표기와 말 표현을 함께 준다 — "12:30"만 주면 모델이 분을 흘리고 시 토큰만 읽어
   // "곧 12시" 같은 오인이 난다(12시 반인데). 반올림·상대 표현은 코드가 계산한 값을 그대로 쓰게 한다.
   const nowLine = cur
-    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). 너는 지금 "${cur.activity}" 중이다(이 일 시작 ${cur.start}·${Math.max(0, toMin(now) - toMin(cur.start))}분째, 답장 여건 ${RESPONSIVENESS_NAME[cur.responsiveness]}, 활동 성격 ${ACTIVITY_CATEGORY_NAME[blockCategory(cur)]}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
+    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). 너는 지금 "${cur.activity}" 중이다(이 일 시작 ${clockLabel(cur.start)}·${Math.max(0, toMin(now) - toMin(cur.start))}분째, 답장 여건 ${RESPONSIVENESS_NAME[cur.responsiveness]}, 활동 성격 ${ACTIVITY_CATEGORY_NAME[blockCategory(cur)]}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
     : `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지). 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
   return [
     `[지금 — 답장 전에 이 사실들과 어긋나지 않는지 확인한다]`,
     past.length
-      ? `- 지나온 오늘: ${past.map((b) => `${b.start} ${b.activity}`).join(" → ")}`
+      ? `- 지나온 오늘: ${past.map((b) => `${clockLabel(b.start)} ${b.activity}`).join(" → ")}`
       : "",
     nowLine,
     cur ? (RESPONSIVENESS_NOTE[cur.responsiveness] ?? "") : "",
@@ -389,7 +430,7 @@ export const buildSystemBlocks = (
 ): SystemBlock[] => {
   const identity = alwaysIncluded(characterId);
   const rel = getRelationship(characterId);
-  const metAt = getMetAt(characterId) ?? kstDateString();
+  const metAt = getMetAt(characterId) ?? kstLogicalDate();
 
   const stable = [
     `너는 아래 인물이다.`,
@@ -416,7 +457,8 @@ export const buildSystemBlocks = (
     ? COLD_START_SEED
     : "";
   const firstMeeting =
-    metAt.slice(0, 10) === kstDateString()
+    // 만난 날 밤 01시는 아직 그날이다 — 달력일이 아니라 새벽 5시 경계로 본다.
+    metAt.slice(0, 10) === kstLogicalDate()
       ? "[관계] 오늘은 이 사람과 처음 만난 날이다."
       : "";
 

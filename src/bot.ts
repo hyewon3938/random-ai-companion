@@ -56,8 +56,9 @@ import {
 } from "./db.js";
 import {
   getKstNow,
-  kstClock,
-  kstDateString,
+  kstLogicalClock,
+  kstLogicalDate,
+  clockLabel,
   logicalDayStartTs,
   timeMarkerFor,
 } from "./kst.js";
@@ -437,7 +438,7 @@ const finishOnboarding = async (
       });
     // 월 리듬·오늘 각본 첫 실행. 첫 인사를 기다리게 하지 않으려고 뒤에서 돌린다 —
     // 실패해도 첫 답장 때 ensureTodayPlan(lazy)이 다시 시도한다.
-    void ensureMonthPlan(id, kstDateString().slice(0, 7))
+    void ensureMonthPlan(id, kstLogicalDate().slice(0, 7))
       .then(() => ensureTodayPlan(id))
       .catch((e) => logErr("[start] first plan error:", e));
   } catch (e) {
@@ -601,7 +602,7 @@ const upcomingAnnouncedAway = (
   chatId: string,
   characterId: number,
 ): PlanBlock | null => {
-  const raw = getDayPlan(characterId, kstDateString());
+  const raw = getDayPlan(characterId, kstLogicalDate());
   if (!raw) return null;
   let blocks: PlanBlock[];
   try {
@@ -609,7 +610,7 @@ const upcomingAnnouncedAway = (
   } catch {
     return null;
   }
-  const nowMin = toMinOfDay(kstClock());
+  const nowMin = toMinOfDay(kstLogicalClock());
   for (const b of blocks) {
     if (!isAwayUnavail(b)) continue;
     const rel = toMinOfDay(b.start) - nowMin;
@@ -633,7 +634,7 @@ const upcomingAnnouncedAway = (
 const farewellSituation = (b: PlanBlock): string =>
   [
     `[배웅 답 — 곧 자리를 비운다]`,
-    `너는 곧 ${b.start}부터 "${b.activity}" 때문에 자리를 비운다. 상대에게는 이미 예고해 뒀다.`,
+    `너는 곧 ${clockLabel(b.start)}부터 "${b.activity}" 때문에 자리를 비운다. 상대에게는 이미 예고해 뒀다.`,
     `나가기 직전의 짧은 주고받음이다 — 지금 온 말에 짧게만 받고, 새 화제를 벌이지 않는다. 필요하면 다녀와서 이어 가자는 결로.`,
   ].join("\n");
 

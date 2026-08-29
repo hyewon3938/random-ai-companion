@@ -12,11 +12,30 @@ import {
   toResponsiveness,
   HOLD_OUTCOME,
   isHoldOutcome,
+  WOKE_OUTCOME,
   type Responsiveness,
   type ActivityCategory,
   type BlockSource,
 } from "./labels.js";
-import { getKstNow, kstClock, kstDateString } from "./kst.js";
+import {
+  INSTANT_MIN_MS,
+  INSTANT_MAX_MS,
+  INTERMITTENT_PERSONAL_MIN_MS,
+  INTERMITTENT_PERSONAL_MAX_MS,
+  INTERMITTENT_SOCIAL_MIN_MS,
+  INTERMITTENT_SOCIAL_MAX_MS,
+  INTERMITTENT_OFFICIAL_MIN_MS,
+  INTERMITTENT_OFFICIAL_MAX_MS,
+  BLOCK_END_JITTER_MS,
+  SLEEP_WAKE_MIN_MS,
+  SLEEP_WAKE_MAX_MS,
+} from "./thresholds.js";
+import {
+  getKstNow,
+  kstDateString,
+  kstLogicalDate,
+  kstLogicalClock,
+} from "./kst.js";
 
 // 답장 텀 — 유저 메시지가 다 도착한 뒤 답장이 나가기까지의 시간.
 //
@@ -29,17 +48,11 @@ import { getKstNow, kstClock, kstDateString } from "./kst.js";
 //   틈틈이    | 20초~2분 30초   | 30초~4분, 짧은 쪽  | 1~8분, 짧은 쪽
 //   불가      | 일정이 끝날 때. 붙잡는 말이면 20초~2분 30초 | (개인과 같음) | 일정이 끝날 때
 //
-// 유저 말이 다 도착할 때까지 기다리는 20~40초는 답장 텀에 넣지 않는다(bot.ts의 도착 대기).
-
-const INSTANT_MAX_MS = 120_000;
-const NUDGE_MIN_MS = 20_000; // 틈틈이 개인, 그리고 붙잡힌 불가
-const NUDGE_MAX_MS = 150_000;
-const SOCIAL_MIN_MS = 30_000;
-const SOCIAL_MAX_MS = 240_000;
-const OFFICIAL_MIN_MS = 60_000;
-const OFFICIAL_MAX_MS = 480_000;
-// 일정이 끝날 때 답한다 — 끝나자마자 초 단위로 맞춰 답하면 기다린 티가 나므로 1분까지 흩뜨린다.
-const END_JITTER_MS = 60_000;
+// 표를 타지 않는 예외가 둘이다. 자는 시간에 온 연락은 진동에 깨서 폰을 볼 때까지 3~25분이
+// 걸리고, 한 번 깬 뒤로는 즉답 값을 쓴다. 이미 붙잡혀 일정을 접어 둔 상태에서도 즉답이다.
+//
+// 숫자는 thresholds.ts가 갖는다. 유저 말이 다 도착할 때까지 기다리는 20~40초는 답장 텀에
+// 넣지 않는다(bot.ts의 도착 대기).
 
 const rand = (min: number, max: number): number =>
   min + Math.floor(Math.random() * (max - min + 1));
@@ -66,6 +79,15 @@ export const isSleeping = (b: {
   !/준비/.test(b.activity);
 
 /**
+ * 이 잠 블록에서 이미 깨서 답한 적이 있는가.
+ * 자는 시간에 온 첫 연락에만 오늘 실제 기록을 남기므로, 그 기록이 곧 깨어 있다는 표시가 된다.
+ */
+const wokeInBlock = (characterId: number, blockStart: string): boolean =>
+  getDayActuals(characterId, kstLogicalDate()).some(
+    (a) => a.block_start === blockStart && a.outcome === WOKE_OUTCOME,
+  );
+
+/**
  * 유저가 붙잡아서 지금 하던 일을 취소했거나 미룬 상태인가.
  * 그 일이 끝날 시각까지만 유효하다 — 오늘 실제 기록에 그 일의 시작 시각으로 남기므로,
  * 다음 일로 넘어가면 현재 일의 시작 시각이 달라져 저절로 풀린다.
@@ -73,20 +95,23 @@ export const isSleeping = (b: {
 export const isHeldNow = (characterId: number): boolean => {
   const b = currentBlock(characterId);
   if (!b) return false;
-  return getDayActuals(characterId, kstDateString()).some(
+  // 각본과 실제 기록은 새벽 5시로 갈린 하루 단위다 — 자정을 넘겨도 같은 날로 읽는다.
+  return getDayActuals(characterId, kstLogicalDate()).some(
     (a) => a.block_start === b.start && isHoldOutcome(a.outcome),
   );
 };
 
 const untilBlockEndMs = (b: PlanBlock): number =>
-  Math.max(0, toMin(b.end) - toMin(kstClock())) * 60_000 +
-  rand(0, END_JITTER_MS);
+  Math.max(0, toMin(b.end) - toMin(kstLogicalClock())) * 60_000 +
+  rand(0, BLOCK_END_JITTER_MS);
 
 const tableDelay = (resp: Responsiveness, cat: ActivityCategory): number => {
-  if (resp === "instant") return skewLow(0, INSTANT_MAX_MS);
-  if (cat === "personal") return rand(NUDGE_MIN_MS, NUDGE_MAX_MS);
-  if (cat === "social") return skewLow(SOCIAL_MIN_MS, SOCIAL_MAX_MS);
-  return skewLow(OFFICIAL_MIN_MS, OFFICIAL_MAX_MS);
+  if (resp === "instant") return skewLow(INSTANT_MIN_MS, INSTANT_MAX_MS);
+  if (cat === "personal")
+    return rand(INTERMITTENT_PERSONAL_MIN_MS, INTERMITTENT_PERSONAL_MAX_MS);
+  if (cat === "social")
+    return skewLow(INTERMITTENT_SOCIAL_MIN_MS, INTERMITTENT_SOCIAL_MAX_MS);
+  return skewLow(INTERMITTENT_OFFICIAL_MIN_MS, INTERMITTENT_OFFICIAL_MAX_MS);
 };
 
 // 붙잡는 말인지만 가른다. 지금 하는 일 한 줄과 유저의 마지막 말만 주고 한 낱말을 받는다 —
@@ -175,7 +200,11 @@ export interface TimingTrace {
     /** 이 블록을 펼친 원본 — 붙잡기 판정이 여기를 따라 원본 일정을 읽는다. */
     source?: BlockSource;
     source_id?: number;
+    /** 각본에 이 시각 블록이 없어 코드가 잠으로 메운 자리인가. */
+    fallback?: boolean;
   } | null;
+  /** 자는 시간이면 이번 연락에 깬 것인가, 아까 깨서 이미 폰을 보고 있었는가. */
+  justWoke?: boolean;
   /** 붙잡기 판정을 물었는가, 물었다면 붙잡혔는가. */
   asked: boolean;
   heldJudged?: boolean;
@@ -226,16 +255,39 @@ export const decideReplyTiming = async (
     category: cat,
     source: b.source,
     source_id: b.source_id,
+    fallback: b.fallback,
   };
 
-  // 예외 둘 — 표를 따르지 않고 바로 답한다.
-  if (isSleeping(b))
+  // 예외 둘 — 표를 따르지 않는다.
+  if (isSleeping(b)) {
+    // 자는 시간에 온 연락. 각본에는 자는 것으로 되어 있던 시간이라 오늘 실제 기록에 남겨,
+    // 그날 새벽 정리가 일기와 다음 날 각본에 함께 놓고 본다. 같은 잠 블록에서는 한 번만
+    // 남기고, 그 기록이 곧 깨어 있다는 표시가 되어 다음 연락부터는 즉답 값으로 답한다.
+    const awake = wokeInBlock(characterId, b.start);
+    if (!awake)
+      recordDayActual(
+        characterId,
+        kstLogicalDate(),
+        b.start,
+        b.activity,
+        WOKE_OUTCOME,
+        "자는데 연락이 와서",
+        stamp(),
+      );
     return {
-      waitMs: 0,
+      waitMs: awake
+        ? skewLow(INSTANT_MIN_MS, INSTANT_MAX_MS)
+        : rand(SLEEP_WAKE_MIN_MS, SLEEP_WAKE_MAX_MS),
       held: null,
       gather: null,
-      trace: { path: "sleeping", block: seen, asked: false },
+      trace: {
+        path: "sleeping",
+        block: seen,
+        asked: false,
+        justWoke: !awake,
+      },
     };
+  }
   if (isHeldNow(characterId))
     return {
       waitMs: 0,
@@ -285,7 +337,7 @@ export const decideReplyTiming = async (
     cat === "personal" ? HOLD_OUTCOME.cancelled : HOLD_OUTCOME.deferred;
   recordDayActual(
     characterId,
-    kstDateString(),
+    kstLogicalDate(),
     b.start,
     b.activity,
     outcome,
@@ -293,7 +345,7 @@ export const decideReplyTiming = async (
     stamp(),
   );
   return {
-    waitMs: rand(NUDGE_MIN_MS, NUDGE_MAX_MS),
+    waitMs: rand(INTERMITTENT_PERSONAL_MIN_MS, INTERMITTENT_PERSONAL_MAX_MS),
     held: { outcome, activity: b.activity },
     gather: null,
     trace: {
@@ -322,7 +374,7 @@ export const recordHold = (
     cat === "personal" ? HOLD_OUTCOME.cancelled : HOLD_OUTCOME.deferred;
   recordDayActual(
     characterId,
-    kstDateString(),
+    kstLogicalDate(),
     b.start,
     b.activity,
     outcome,

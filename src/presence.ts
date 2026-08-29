@@ -29,7 +29,7 @@ import {
   AWAY_DAILY_MAX,
   RECENT_USER_MS,
 } from "./thresholds.js";
-import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
+import { kstLogicalClock, kstLogicalDate, logicalDayStartTs } from "./kst.js";
 
 // 자리 비움 예고(선-불가 선톡): 곧 한동안 답장이 어려운 일(운동·샤워·외출·회의 등)이 있으면
 // 조용히 사라지지 않고 "이제 ~하러 가요, 답 늦어요"를 먼저 남긴다. 미리 아는 일정은 시작 전에
@@ -120,7 +120,7 @@ const presenceTickBody = async (): Promise<void> => {
     .all() as CharacterRow[];
 
   for (const c of rows) {
-    const raw = getDayPlan(c.id, kstDateString());
+    const raw = getDayPlan(c.id, kstLogicalDate());
     if (!raw) continue;
     let blocks: PlanBlock[];
     try {
@@ -128,7 +128,7 @@ const presenceTickBody = async (): Promise<void> => {
     } catch {
       continue;
     }
-    const nowMin = toMin(kstClock());
+    const nowMin = toMin(kstLogicalClock());
 
     // 유저가 방금까지 대화 중이었을 때만 — 하루 종일 조용한 상대에게 뜬금없이 알리지 않는다.
     // 캐릭터 자기 발화까지 세면 아침 선톡이 '최근 대화'가 되어 예고가 예고를 부르는 체인이 생겼다

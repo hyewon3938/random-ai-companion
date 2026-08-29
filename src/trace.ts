@@ -29,7 +29,7 @@ import {
   RESPONSIVENESS_NAME,
   toResponsiveness,
 } from "./labels.js";
-import { getKstNow, kstDateString } from "./kst.js";
+import { getKstNow, kstLogicalDate, clockLabel } from "./kst.js";
 import { silenceState } from "./proactive-policy.js";
 
 export const traceEnabled = (): boolean =>
@@ -248,7 +248,7 @@ const blockLine = (b: PlanBlock): string => {
   const category = ACTIVITY_CATEGORY_NAME[blockCategory(b)];
   // 당일에 닥치는 일은 활동 앞에 별표 두 개로 표시하고 각본 아래에 뜻을 한 줄 붙인다.
   const activity = `${b.advance_known ? "" : "**"}${b.activity}`;
-  return `${b.start}~${b.end} (${category}) ${esc(activity)} [${RESPONSIVENESS_NAME[resp]}] ${timingRange(b)}`;
+  return `${clockLabel(b.start)}~${clockLabel(b.end)} (${category}) ${esc(activity)} [${RESPONSIVENESS_NAME[resp]}] ${timingRange(b)}`;
 };
 
 const seedText = (seed: DaySeed | undefined): string =>
@@ -391,7 +391,7 @@ const enqueueNoPlanNote = (
 const enqueueMorningPlans = (): void => {
   const hour = getKstNow().getUTCHours();
   if (hour < PLAN_POST_HOUR) return;
-  const date = kstDateString();
+  const date = kstLogicalDate();
   for (const c of activeCharacters()) {
     const raw = getDayPlan(c.id, date);
     if (raw) enqueuePlanPost(c, date, raw);
