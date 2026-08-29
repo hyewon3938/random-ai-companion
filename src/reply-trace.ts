@@ -6,7 +6,7 @@
 //
 // 한 건이 채널에 남기는 것:
 //   본문   — 무슨 말에 답했는지, 텀이 어떻게 나왔는지, 무엇을 검색해 넣었는지,
-//            모델이 뭐라고 썼고 다듬기가 뭘 고쳤는지
+//            모델이 뭐라고 썼는지
 //   스레드 — 그 호출의 실시간 꼬리 전문(호출마다 달라지는 부분)
 //   스레드 — 발송·폐기 결과(pending.ts가 그때 쌓는다)
 // 하루 종일 같은 앞 두 층은 그날 첫 호출에서 한 번만 올리고, 일간층이 바뀌면 바뀐 줄만 올린다.
@@ -132,7 +132,6 @@ interface CallContext {
   note?: string | null;
   bubbles?: number;
   bubbleLens?: number[];
-  polished?: ({ before: string; after: string } | null)[];
   dropped?: string;
   /** 첫 답이 비어 다시 부른 호출 번호. */
   retryCallId?: number | null;
@@ -388,15 +387,6 @@ const searchLines = (ctx: CallContext): string[] => {
 
 const outcomeLines = (ctx: CallContext): string[] => {
   const out: string[] = [];
-  if (ctx.polished?.length) {
-    const fixed = ctx.polished.filter(
-      (p): p is { before: string; after: string } => Boolean(p),
-    );
-    for (const p of fixed)
-      out.push(
-        `*다듬기* ${esc(clip(p.before, 120))} → ${esc(clip(p.after, 120))}`,
-      );
-  }
   if (ctx.bubbles)
     out.push(
       `*보낸 말* 말풍선 ${ctx.bubbles}개${ctx.bubbleLens?.length ? ` (${ctx.bubbleLens.join("·")}자)` : ""}`,
