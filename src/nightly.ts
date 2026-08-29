@@ -27,7 +27,7 @@ import {
 } from "./db.js";
 import { buildSystemBlocks } from "./context.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
-import { ensureTodayPlan } from "./day-plan.js";
+import { ensureTodayPlan, normalizePlan } from "./day-plan.js";
 import {
   saveMemory,
   keyProblem,
@@ -42,7 +42,7 @@ import {
   monthsNeedingRhythm,
   type MonthPlan,
 } from "./life-plan.js";
-import { getKstNow, kstDateString, todayLabel } from "./kst.js";
+import { getKstNow, kstDateString, dayLabelOf, clockLabel } from "./kst.js";
 import {
   dailySendPlan,
   silenceState,
@@ -190,7 +190,9 @@ const planBrief = (raw: string | undefined): string => {
   if (!raw) return "";
   try {
     const p = JSON.parse(raw) as DayPlan;
-    return p.blocks.map((b) => `${b.start} ${b.activity}`).join(" / ");
+    return p.blocks
+      .map((b) => `${clockLabel(b.start)} ${b.activity}`)
+      .join(" / ");
   } catch {
     return "";
   }
@@ -296,7 +298,7 @@ export const gatherNightlyInput = (
     chatId: character.chat_id,
     diaryDate,
     today,
-    todayLabel: todayLabel(),
+    todayLabel: dayLabelOf(today),
     diaryExists: !!db
       .prepare(
         `SELECT 1 FROM diary_entries WHERE character_id = ? AND date = ? LIMIT 1`,
@@ -323,7 +325,7 @@ export const gatherNightlyInput = (
       .map((n) => `[${n.created_at.slice(11, 16)}] ${n.note}`),
     dayActuals: getDayActuals(character.id, diaryDate).map(
       (a) =>
-        `- ${a.block_start ? `${a.block_start} ` : ""}${a.intended} → ${a.outcome}${a.reason ? ` (${a.reason})` : ""}`,
+        `- ${a.block_start ? `${clockLabel(a.block_start)} ` : ""}${a.intended} → ${a.outcome}${a.reason ? ` (${a.reason})` : ""}`,
     ),
     existingKeys: existingKeys(character.id),
     areas: existingAreas(character.id),
@@ -477,7 +479,12 @@ const applyNightlyTxn = db.transaction(
       (!getDayPlan(g.characterId, g.today) ||
         getDayPlanMadeBy(g.characterId, g.today) === "ondemand")
     )
-      saveDayPlan(g.characterId, g.today, JSON.stringify(out.plan), "nightly");
+      saveDayPlan(
+        g.characterId,
+        g.today,
+        JSON.stringify(normalizePlan(out.plan)),
+        "nightly",
+      );
 
     if (out.arcs) {
       for (const h of ["year", "season", "month", "week"] as const)
@@ -812,13 +819,13 @@ const morningStyles = (raw: string | undefined): MorningStyle[] => {
     );
     if (first) {
       styles.push({
-        moment: `오늘 첫 일과인 '${first.activity}'을 막 시작할 무렵 (${first.start}쯤)`,
+        moment: `오늘 첫 일과인 '${first.activity}'을 막 시작할 무렵 (${clockLabel(first.start)}쯤)`,
         start: first.start,
         end: addMin(first.start, 25),
       });
       if (first.responsiveness !== "unavailable")
         styles.push({
-          moment: `'${first.activity}' 하다가 한숨 돌린 참 (${addMin(first.start, 20)}쯤)`,
+          moment: `'${first.activity}' 하다가 한숨 돌린 참 (${clockLabel(addMin(first.start, 20))}쯤)`,
           start: addMin(first.start, 10),
           end: addMin(first.start, 50),
         });

@@ -13,7 +13,8 @@
 // 45분, 낮 근황 100~139분·2회)은 여기 두지 않는다.
 
 // ── 답장 텀 ─────────────────────────────────────────────────────────────
-// 지금 값은 reply-timing.ts가 자기 파일 안에 두고 있다. 그 모듈을 다시 쓸 때 이쪽으로 옮긴다.
+// reply-timing.ts가 표 한 장으로 텀을 정할 때 쓰는 값이다. 같은 값을 그 모듈도 자기 파일 안에
+// 다시 두고 있었는데, 하루의 경계를 새벽 5시로 통일하면서 이쪽 하나만 남겼다.
 
 /** 유저가 나눠 보낸 말이 다 도착할 때까지 기다리는 하한과 상한. 답장 텀에는 포함하지 않는다. */
 export const ARRIVAL_WAIT_MIN_MS = 20_000;
@@ -30,6 +31,13 @@ export const INTERMITTENT_SOCIAL_MIN_MS = 30_000;
 export const INTERMITTENT_SOCIAL_MAX_MS = 240_000;
 export const INTERMITTENT_OFFICIAL_MIN_MS = 60_000;
 export const INTERMITTENT_OFFICIAL_MAX_MS = 480_000;
+
+/** 답장 불가 구간은 그 일이 끝날 때 답한다 — 끝나는 시각에 초 단위로 맞추지 않도록 흩뜨리는 폭. */
+export const BLOCK_END_JITTER_MS = 60_000;
+
+/** 자는 시간에 온 연락 — 진동에 깨서 폰을 볼 때까지. 한 번 깬 뒤로는 즉답 값으로 답한다. */
+export const SLEEP_WAKE_MIN_MS = 3 * 60_000;
+export const SLEEP_WAKE_MAX_MS = 25 * 60_000;
 
 // ── 선톡 ────────────────────────────────────────────────────────────────
 

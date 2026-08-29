@@ -33,7 +33,7 @@ import {
   type CallPurpose,
   type SpeechLevel,
 } from "./labels.js";
-import { getKstNow, logicalDateOf } from "./kst.js";
+import { getKstNow, logicalDateOf, clockLabel } from "./kst.js";
 
 // 한 틱에 준비하는 호출 수. 슬랙 발송은 게시함이 따로 조절하므로 여기서는 읽기 상한만 둔다.
 const BATCH = 20;
@@ -99,7 +99,9 @@ interface CallContext {
       activity: string;
       responsiveness: string;
       category: string;
+      fallback?: boolean;
     } | null;
+    justWoke?: boolean;
     asked?: boolean;
     heldJudged?: boolean;
     held?: { outcome: string; activity: string } | null;
@@ -300,14 +302,16 @@ const blockText = (b: Block): string => {
   const c = toActivityCategory(b.category);
   const resp = r ? RESPONSIVENESS_NAME[r] : b.responsiveness;
   const cat = c ? ACTIVITY_CATEGORY_NAME[c] : b.category;
-  return `${b.start}~${b.end} ${b.activity} [${resp}/${cat}]`;
+  const tail = b.fallback ? " — 각본에 이 시각 블록이 없어 잠으로 봤다" : "";
+  return `${clockLabel(b.start)}~${clockLabel(b.end)} ${b.activity} [${resp}/${cat}]${tail}`;
 };
 
 /** 판정을 부르지 않은 이유 — 조건대로 걸렀는지 여기서 확인한다. */
 const holdSkipReason = (t: NonNullable<CallContext["timing"]>): string => {
   if (t.path === "recover") return "복구 발송이라 텀 계산 자체를 타지 않았다";
   if (t.path === "no_plan") return "각본이 없어 지금 하는 일을 모른다";
-  if (t.path === "sleeping") return "자는 중이라 표를 건너뛰고 바로 답한다";
+  if (t.path === "sleeping")
+    return "자는 중이라 표를 건너뛰고 깨는 대로 답한다";
   if (t.path === "already_held")
     return "이미 접어 둔 일정이라 다시 묻지 않는다";
   // 판정은 답장 불가 구간에서만, 그중에서도 접을 수 있는 일정에서만 돈다.
@@ -348,7 +352,13 @@ const timingLines = (ctx: CallContext): string[] => {
   }
   const bits = [`${fmtWait(t.waitMs ?? 0)} 뒤`];
   if (ctx.sendAt) bits.push(`${ctx.sendAt.slice(11, 19)} 발송 예정`);
-  if (t.path) bits.push(PATH_NAME[t.path] ?? t.path);
+  if (t.path)
+    bits.push(
+      // 자는 시간에 두 번째로 온 연락이면 이미 깨어 있었다 — 텀이 짧은 이유가 여기 있다.
+      t.path === "sleeping" && t.justWoke === false
+        ? "자다 깨서 이어 답하는 중"
+        : (PATH_NAME[t.path] ?? t.path),
+    );
   out.push(`*텀* ${esc(bits.join(" · "))}`);
   out.push(
     `*지금 하는 일* ${t.block ? esc(blockText(t.block)) : "각본에 이 시각 블록이 없다"}`,

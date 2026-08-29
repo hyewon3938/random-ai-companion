@@ -1,3 +1,5 @@
+import { DAY_BOUNDARY_HOUR } from "./thresholds.js";
+
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 const DAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
@@ -11,11 +13,15 @@ export const kstDateString = (d: Date = getKstNow()): string =>
 // '하루'의 경계는 자정이 아니라 새벽 5시다(밤 정리 컷오프와 동일 — 자정~04:59는 전날에 속한다).
 // 하루 단위 판단(팔로업 대상·선제 발송 카운트)은 달력일(kstDateString)이 아니라 이 논리일을 쓴다.
 // 달력일로 "오늘 05:00:00"을 만들면 자정~새벽엔 미래 시각이 되어 비교 가드가 전부 죽는다.
+const LOGICAL_DAY_SHIFT_MS = DAY_BOUNDARY_HOUR * 3600_000;
+const DAY_START_HHMM = `${String(DAY_BOUNDARY_HOUR).padStart(2, "0")}:00:00`;
+
 export const kstLogicalDate = (): string =>
-  kstDateString(new Date(getKstNow().getTime() - 5 * 3600_000));
+  kstDateString(new Date(getKstNow().getTime() - LOGICAL_DAY_SHIFT_MS));
 
 // 논리일의 시작 타임스탬프 — messages.ts(KST 벽시계 "YYYY-MM-DD HH:MM:SS")와 사전순 비교용
-export const logicalDayStartTs = (): string => `${kstLogicalDate()} 05:00:00`;
+export const logicalDayStartTs = (): string =>
+  `${kstLogicalDate()} ${DAY_START_HHMM}`;
 
 export const kstDescription = (): string => {
   const now = getKstNow();
@@ -51,11 +57,33 @@ export const workdayContext = (): string => {
   return `오늘은 ${dayLabel(now)}, 내일은 ${dayLabel(tomorrow)}`;
 };
 
-export const todayLabel = (): string => dayLabel(getKstNow());
+// 특정 날짜(YYYY-MM-DD)의 요일 표기. 각본은 만드는 시각이 아니라 각본이 담는 날짜를 기준으로
+// 요일을 적어야 해서, 자정을 넘겨 만들 때도 이 함수를 쓴다.
+export const dayLabelOf = (date: string): string =>
+  dayLabel(new Date(`${date}T00:00:00Z`));
 
 export const kstClock = (): string => {
   const now = getKstNow();
   return `${String(now.getUTCHours()).padStart(2, "0")}:${String(now.getUTCMinutes()).padStart(2, "0")}`;
+};
+
+// 하루 각본이 담는 하루는 05:00부터 다음 날 05:00까지다. 자정을 넘긴 시각은 24를 더해 적어서
+// (02:30 → "26:30") 블록이 시간순으로 이어지게 만든다. 시가 늘 두 자리라 블록 경계와 문자열로
+// 비교해도 순서가 맞고, 시 곱하기 60 더하기 분 계산도 그대로 이어진다.
+export const kstLogicalClock = (): string => {
+  const now = getKstNow();
+  const h = now.getUTCHours();
+  const hh = h < DAY_BOUNDARY_HOUR ? h + 24 : h;
+  return `${String(hh).padStart(2, "0")}:${String(now.getUTCMinutes()).padStart(2, "0")}`;
+};
+
+// 각본 표기를 사람이 읽는 시계 표기로 되돌린다(26:30 → 02:30). 프롬프트·슬랙처럼 사람이나
+// 모델이 읽는 자리에만 쓰고, 저장 키로는 원래 표기를 그대로 둔다.
+export const clockLabel = (hhmm: string): string => {
+  const [h, m] = hhmm.split(":");
+  const hn = Number(h);
+  if (!Number.isFinite(hn) || hn < 24 || m === undefined) return hhmm;
+  return `${String(hn - 24).padStart(2, "0")}:${m}`;
 };
 
 // 시각을 말로 풀어준다 — 모델이 "12:30" 같은 표기에서 시(12) 토큰에 끌려 분을 무시하는 오인이
@@ -92,7 +120,7 @@ const kstDateOf = (ts: string): Date => new Date(`${ts.replace(" ", "T")}Z`);
 
 // 임의 시각의 논리일(새벽 5시 경계). kstLogicalDate()의 '지금' 전용 버전을 일반화한 것.
 export const logicalDateOf = (ts: string): string =>
-  kstDateString(new Date(kstDateOf(ts).getTime() - 5 * 3600_000));
+  kstDateString(new Date(kstDateOf(ts).getTime() - LOGICAL_DAY_SHIFT_MS));
 
 // 오늘(논리일)로부터 며칠 전인지. 자정이 아니라 새벽 5시가 경계라, 새벽 2시 대화는 아직 '오늘'이다.
 export const logicalDaysAgo = (

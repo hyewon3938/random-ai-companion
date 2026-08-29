@@ -166,6 +166,13 @@ export const isHoldOutcome = (v: string): boolean =>
   (Object.values(HOLD_OUTCOME) as string[]).includes(v.trim());
 
 /**
+ * 자는 시간에 온 연락을 받고 깨어 답한 기록. 각본에는 자는 것으로 되어 있던 시간이라
+ * 오늘 실제 기록에 남겨, 그날 새벽 정리가 일기와 다음 날 각본에 함께 놓고 본다.
+ * 붙잡혀 접은 일정과는 다른 값이라 isHoldOutcome에는 걸리지 않는다.
+ */
+export const WOKE_OUTCOME = "깸";
+
+/**
  * 슬랙 트레이스 채널에 사람이 남기는 표시 — 그 답장의 무엇이 잘못됐는가.
  * 채널을 읽다가 리액션 하나로 분류를 고르고, 이유는 스레드 답글로 적는다(feedback.ts).
  */
