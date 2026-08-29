@@ -74,6 +74,89 @@ const tables: Table[] = tableNames.map((name) => {
 const totalRows = tables.reduce((n, t) => n + t.rows.length, 0);
 const userVersion = db.pragma("user_version", { simple: true }) as number;
 
+// ── 옛 자리·안 쓰는 자리 ──────────────────────────────────────────────────
+//
+// 저장 구조를 다시 짜면서 대신할 자리가 생겼는데 아직 지우지 않은 표·컬럼과,
+// 자리만 만들어 두고 읽거나 쓰는 코드가 없는 표·컬럼을 손으로 적어 둔다.
+// 코드에서 자동으로 뽑지 않는 이유는 판정 기준이 "런타임에서 부르는 곳이 있는가"라서다 —
+// 정의는 남아 있고 부르는 곳만 없는 경우가 대부분이라 정적 분석으로는 구분되지 않는다.
+// 옛 경로를 정리할 때 이 표에서도 같이 지운다.
+
+type Mark = "old" | "idle";
+
+const MARK_NAME: Record<Mark, string> = {
+  old: "옛 자리",
+  idle: "안 쓰는 자리",
+};
+
+interface ColNote {
+  mark: Mark;
+  note: string;
+}
+
+interface TableNote {
+  mark?: Mark;
+  note?: string;
+  cols?: Record<string, ColNote>;
+}
+
+/** user_profile 다섯 컬럼이 함께 쓰는 설명. 온보딩이 프로필을 저장하지 않는다. */
+const UNFILLED =
+  "프롬프트가 읽는 값인데 채우는 코드가 없다. 지금 값은 옛 구조에서 넘어온 것이다.";
+
+const NOTES: Record<string, TableNote> = {
+  cast_members: {
+    mark: "old",
+    note: "같은 인물을 memory_items의 person 행이 담는다. 여기에 넣는 함수는 옛 고정 캐릭터 생성 경로에만 남아 있고, 그 경로를 부르는 곳이 없다.",
+  },
+  attention_override: {
+    mark: "old",
+    note: "붙잡혀서 취소하거나 미룬 일정은 day_actuals에 적는다. 읽고 쓰는 코드는 지웠고 표만 남아 있다.",
+  },
+  capture_marks: {
+    mark: "old",
+    note: "대화 중에 남길 내용은 today_notes에 적는다. 읽고 쓰는 코드는 지웠고 표만 남아 있다.",
+  },
+  user_preferences: {
+    mark: "idle",
+    note: "캐릭터와 무관한 유저 단위 선호를 담을 자리로 다시 정했고, 읽거나 쓰는 코드는 아직 없다.",
+  },
+  relationships: {
+    cols: {
+      legacy_state_json: {
+        mark: "old",
+        note: "관계 여덟 항목 컬럼(stage부터 feelings까지)이 대신한다. 읽는 코드가 없다.",
+      },
+    },
+  },
+  user_profile: {
+    cols: {
+      age_band: {
+        mark: "old",
+        note: "birth_year로 바꿀 컬럼. 상대를 부르는 법 블록이 아직 이 값을 읽는다.",
+      },
+      preferred_name: { mark: "idle", note: UNFILLED },
+      gender: { mark: "idle", note: UNFILLED },
+      birth_year: { mark: "idle", note: UNFILLED },
+      job: { mark: "idle", note: UNFILLED },
+      region: { mark: "idle", note: UNFILLED },
+    },
+  },
+};
+
+/** 표에 붙은 표시 전부. 왼쪽 목록 점과 머리말 숫자에 쓴다. */
+const marksOf = (name: string): Mark[] => {
+  const n = NOTES[name];
+  if (!n) return [];
+  const out: Mark[] = n.mark ? [n.mark] : [];
+  if (n.cols) out.push(...Object.values(n.cols).map((c) => c.mark));
+  return out;
+};
+
+const allMarks = tables.flatMap((t) => marksOf(t.name));
+const oldCount = allMarks.filter((m) => m === "old").length;
+const idleCount = allMarks.filter((m) => m === "idle").length;
+
 // ── 조판 ──────────────────────────────────────────────────────────────────
 
 const esc = (s: string): string =>
@@ -121,16 +204,46 @@ const tagCell = (id: unknown): string => {
     .join("")}</td>`;
 };
 
+/** 표 머리·컬럼 머리글에 붙는 작은 표시. 설명은 title로 함께 단다. */
+const badge = (m: Mark, note: string): string =>
+  `<span class="bg b-${m}" title="${esc(note)}">${MARK_NAME[m]}</span>`;
+
+/** 표 머리 아래 설명 줄. 같은 설명을 쓰는 컬럼은 한 줄로 묶는다. */
+const noteLines = (name: string): string => {
+  const n = NOTES[name];
+  if (!n) return "";
+  const out: string[] = [];
+  if (n.mark && n.note)
+    out.push(
+      `<p class="tn n-${n.mark}"><b>${MARK_NAME[n.mark]}</b>${esc(n.note)}</p>`,
+    );
+  const grouped = new Map<string, { mark: Mark; note: string; cols: string[] }>();
+  for (const [col, c] of Object.entries(n.cols ?? {})) {
+    const key = `${c.mark}\u0000${c.note}`;
+    const hit = grouped.get(key);
+    if (hit) hit.cols.push(col);
+    else grouped.set(key, { mark: c.mark, note: c.note, cols: [col] });
+  }
+  for (const g of grouped.values())
+    out.push(
+      `<p class="tn n-${g.mark}"><b>${MARK_NAME[g.mark]}</b><code>${g.cols
+        .map(esc)
+        .join("</code> <code>")}</code> ${esc(g.note)}</p>`,
+    );
+  return out.length ? `\n  ${out.join("\n  ")}` : "";
+};
+
 const section = (t: Table): string => {
   const joined = t.name === "memory_items";
+  const note = NOTES[t.name];
   const head =
     t.cols
-      .map(
-        (c) =>
-          `<th class="s"${c.pk ? ' data-pk="1"' : ""}><span>${esc(c.name)}</span><i>${esc(
-            c.type || "—",
-          )}${c.pk ? " · 키" : ""}</i></th>`,
-      )
+      .map((c) => {
+        const cn = note?.cols?.[c.name];
+        return `<th class="s"${c.pk ? ' data-pk="1"' : ""}><span>${esc(c.name)}</span><i>${esc(
+          c.type || "—",
+        )}${c.pk ? " · 키" : ""}</i>${cn ? badge(cn.mark, cn.note) : ""}</th>`;
+      })
       .join("") + (joined ? `<th><span>tags</span><i>조인</i></th>` : "");
 
   const body = t.rows.length
@@ -146,12 +259,14 @@ const section = (t: Table): string => {
 
   return `<section class="tb" id="t-${t.name}" data-name="${t.name}">
   <div class="th">
-    <h2>${esc(t.name)}</h2>
+    <h2>${esc(t.name)}</h2>${
+      note?.mark && note.note ? badge(note.mark, note.note) : ""
+    }
     <span class="cnt"><b>${num(t.rows.length)}</b>행</span>
     <span class="meta">컬럼 ${t.cols.length}개 · ${esc(t.order)}${
       joined ? " · tags 표를 조인해 마지막 열에 붙임" : ""
     }</span>
-  </div>
+  </div>${noteLines(t.name)}
   <div class="scroll"><table>
     <thead><tr>${head}</tr></thead>
     <tbody>
@@ -162,12 +277,15 @@ ${body}
 };
 
 const rail = tables
-  .map(
-    (t) =>
-      `<a href="#t-${t.name}"${t.rows.length ? "" : ' class="empty"'}><span>${esc(
-        t.name,
-      )}</span><b data-for="${t.name}">${num(t.rows.length)}</b></a>`,
-  )
+  .map((t) => {
+    const ms = marksOf(t.name);
+    const dot = ms.length
+      ? `<i class="dot d-${ms.includes("old") ? "old" : "idle"}"></i>`
+      : "";
+    return `<a href="#t-${t.name}"${t.rows.length ? "" : ' class="empty"'}><span>${esc(
+      t.name,
+    )}</span>${dot}<b data-for="${t.name}">${num(t.rows.length)}</b></a>`;
+  })
   .join("\n");
 
 const now = new Intl.DateTimeFormat("ko-KR", {
@@ -191,6 +309,7 @@ const html = `<!doctype html>
     --ac:#6728FF; --ac-ink:#4A17C7; --ac-soft:rgba(103,40,255,.055); --ac-line:rgba(103,40,255,.20);
     --nu:#6C6C76; --nu-soft:rgba(20,20,22,.032); --nu-line:rgba(20,20,22,.10);
     --cy:#0895B2; --cy-ink:#046A80; --cy-soft:rgba(8,149,178,.09); --cy-line:rgba(8,149,178,.32);
+    --wn:#B26A00; --wn-ink:#8A5200; --wn-soft:rgba(178,106,0,.075); --wn-line:rgba(178,106,0,.28);
     --bar:rgba(244,244,246,.86);
     --sh-s:0 1px 2px rgba(15,15,20,.05);
   }
@@ -201,6 +320,7 @@ const html = `<!doctype html>
     --ac:#8B5CFF; --ac-ink:#C6ACFF; --ac-soft:rgba(139,92,255,.13); --ac-line:rgba(139,92,255,.40);
     --nu:#A2A2AC; --nu-soft:rgba(255,255,255,.045); --nu-line:rgba(255,255,255,.13);
     --cy:#54D2EA; --cy-ink:#ADEBF7; --cy-soft:rgba(84,210,234,.16); --cy-line:rgba(84,210,234,.44);
+    --wn:#F5B454; --wn-ink:#FFD79A; --wn-soft:rgba(245,180,84,.13); --wn-line:rgba(245,180,84,.40);
     --bar:rgba(21,21,22,.86);
     --sh-s:0 1px 2px rgba(0,0,0,.4);
   }
@@ -246,6 +366,9 @@ const html = `<!doctype html>
   aside a span { font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace; font-size:11.5px; }
   aside a b { color:var(--t4); font-weight:600; font-size:11px; font-variant-numeric:tabular-nums; }
   aside a:hover { background:var(--nu-soft); color:var(--t1); }
+  aside a .dot { width:5px; height:5px; border-radius:50%; flex:none; margin-left:auto; }
+  aside a .d-old { background:var(--wn); }
+  aside a .d-idle { background:var(--nu-line); }
   aside a.empty span { color:var(--t4); }
   aside a.hide { display:none; }
 
@@ -269,6 +392,22 @@ const html = `<!doctype html>
   .cnt { font-size:12px; color:var(--t3); }
   .cnt b { color:var(--ac-ink); font-weight:700; font-variant-numeric:tabular-nums; }
   .meta { font-size:11.5px; color:var(--t4); margin-left:auto; }
+
+  /* 옛 자리·안 쓰는 자리 표시 */
+  .bg { display:inline-block; font-family:inherit; font-style:normal; font-size:10px;
+        font-weight:700; line-height:1.6; padding:0 6px; border-radius:5px;
+        white-space:nowrap; cursor:help; }
+  .b-old { color:var(--wn-ink); background:var(--wn-soft); border:1px solid var(--wn-line); }
+  .b-idle { color:var(--t3); background:var(--nu-soft); border:1px solid var(--nu-line); }
+  thead th .bg { margin-top:3px; }
+  .tn { margin:0; padding:8px 16px; border-bottom:1px solid var(--line);
+        font-size:11.5px; color:var(--t3); line-height:1.65; }
+  .tn b { font-weight:700; margin-right:7px; }
+  .tn code { font-size:11px; }
+  .tn.n-old { background:var(--wn-soft); }
+  .tn.n-old b, .tn.n-old code { color:var(--wn-ink); }
+  .tn.n-idle { background:var(--nu-soft); }
+  .tn.n-idle b, .tn.n-idle code { color:var(--t2); }
 
   .scroll { overflow-x:auto; max-height:640px; overflow-y:auto; }
   table { border-collapse:separate; border-spacing:0; width:100%; font-size:12.5px; }
@@ -352,8 +491,10 @@ ${rail}
         <div><dt>표</dt><dd>${num(tables.length)}개</dd></div>
         <div><dt>행 합계</dt><dd>${num(totalRows)}건</dd></div>
         <div><dt>만든 시각</dt><dd>${esc(now)}</dd></div>
+        <div><dt>표시</dt><dd>옛 자리 ${oldCount}곳 · 안 쓰는 자리 ${idleCount}곳</dd></div>
       </dl>
-      <p>표 하나가 한 구획이고, 컬럼은 저장된 그대로입니다. 컬럼 머리글을 누르면 그 열로 정렬하고, 접힌 칸을 누르면 전체 값이 펼쳐집니다. 기억 표는 태그가 따로 저장되어 있어서 마지막 열에 조인해 붙였고, 태그를 누르면 그 태그로 검색합니다.</p>
+      <p>표 하나가 한 구획이고, 컬럼은 저장된 그대로입니다. 컬럼 머리글을 누르면 그 열로 정렬하고, 접힌 칸을 누르면 전체 값이 펼쳐집니다. 기억 표는 태그가 따로 저장되어 있어서 마지막 열에 조인해 붙였고, 태그를 누르면 그 태그로 검색합니다.
+      대신할 자리가 생겨 지울 표와 컬럼은 옛 자리로, 자리만 있고 읽거나 쓰는 코드가 없는 것은 안 쓰는 자리로 표시했습니다.</p>
     </div>
 
 ${tables.map(section).join("\n\n")}
