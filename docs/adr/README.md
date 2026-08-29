@@ -14,3 +14,4 @@
 | [0006](0006-llm-call-log-storage.md) | 모델 호출 원본을 표 둘에 나눠 담고 본문만 90일 뒤 지우기 | Accepted |
 | [0007](0007-keep-sqlite-single-file.md) | SQLite 파일 하나와 단일 VM 구성을 유지하기 | Accepted |
 | [0008](0008-offsite-db-snapshot-backup.md) | DB를 6시간마다 스냅샷으로 떠서 VM 밖에 보관하기 | Accepted |
+| [0009](0009-slack-feedback-polling.md) | 슬랙 채널에 남긴 표시를 폴링으로 모아 표 하나에 쌓기 | Accepted |

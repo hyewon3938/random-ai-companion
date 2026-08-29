@@ -20,6 +20,7 @@ import { runPresenceTick } from "./presence.js";
 import { resumePendingReplies } from "./pending.js";
 import { runTraceTick } from "./trace.js";
 import { enqueueReplyTraces } from "./reply-trace.js";
+import { runFeedbackTick } from "./feedback.js";
 
 // 이 프로세스는 실시간 대화(반응형)와 선톡 발송을 담당한다.
 //
@@ -94,6 +95,16 @@ cron.schedule(
       logErr("[trace] 답장 게시 준비 실패:", e);
     }
     runTraceTick().catch((e) => logErr("[trace] tick error:", e));
+  },
+  { timezone: "Asia/Seoul" },
+);
+
+// 슬랙 채널에 남긴 표시 수집: 10분 틱, LLM 콜 없음. 채널에 올라간 답장에 리액션으로 분류를
+// 고르고 이유를 스레드에 적어 두면 그것을 읽어 쌓는다. 리액션을 뗀 것도 다시 읽어 맞춘다.
+cron.schedule(
+  "*/10 * * * *",
+  () => {
+    runFeedbackTick().catch((e) => logErr("[feedback] tick error:", e));
   },
   { timezone: "Asia/Seoul" },
 );

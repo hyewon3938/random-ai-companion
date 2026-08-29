@@ -146,3 +146,33 @@ export type HoldOutcome = (typeof HOLD_OUTCOME)[keyof typeof HOLD_OUTCOME];
 
 export const isHoldOutcome = (v: string): boolean =>
   (Object.values(HOLD_OUTCOME) as string[]).includes(v.trim());
+
+/**
+ * 슬랙 트레이스 채널에 사람이 남기는 표시 — 그 답장의 무엇이 잘못됐는가.
+ * 채널을 읽다가 리액션 하나로 분류를 고르고, 이유는 스레드 답글로 적는다(feedback.ts).
+ */
+export type FeedbackKind = "fact" | "tone" | "timing" | "good";
+
+export const FEEDBACK_KIND_NAME: Record<FeedbackKind, string> = {
+  fact: "사실 오류",
+  tone: "말투",
+  timing: "타이밍",
+  good: "좋음",
+};
+
+// 분류를 고르는 이모지. 슬랙이 돌려주는 이름을 그대로 키로 쓴다 — 👍는 :thumbsup:으로 눌러도
+// :+1:로 오는 것이 보통이지만, 클라이언트에 따라 누른 이름이 그대로 오기도 해서 둘 다 받는다.
+const FEEDBACK_BY_EMOJI: Record<string, FeedbackKind> = {
+  x: "fact",
+  speech_balloon: "tone",
+  alarm_clock: "timing",
+  "+1": "good",
+  thumbsup: "good",
+};
+
+/** 리액션 이름을 분류로. 목록에 없는 이모지는 표시가 아니라 잡담이므로 null. */
+export const toFeedbackKind = (name: string): FeedbackKind | null => {
+  // 살색 변형(:+1::skin-tone-3:)은 앞부분만 본다.
+  const base = name.split("::")[0].trim();
+  return FEEDBACK_BY_EMOJI[base] ?? null;
+};

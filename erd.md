@@ -339,8 +339,11 @@ erDiagram
     characters ||--o{ send_failures : "전송 실패 기록"
     characters ||--o{ llm_calls : "모델 호출 기록"
     characters ||--o{ trace_events : "슬랙에 게시할 내용"
+    characters ||--o{ call_feedback : "사람이 남긴 표시"
     pending_replies }o..|| messages : "user_msg_at이 가리킴"
     llm_calls }o..o{ prompt_blobs : "내용 해시가 가리킴"
+    llm_calls ||--o{ call_feedback : "이 답장에 대한 표시"
+    trace_events }o..o{ call_feedback : "게시 시각으로 되짚음"
 
     characters {
         INTEGER id PK
@@ -385,6 +388,12 @@ erDiagram
         INTEGER id PK
         INTEGER character_id FK
         TEXT dedupe_key "같은 키는 한 번만"
+    }
+    call_feedback {
+        INTEGER id PK
+        INTEGER call_id FK
+        TEXT slack_ts "표시가 달린 글"
+        TEXT kind "네 분류 중 하나"
     }
 ```
 
@@ -554,6 +563,30 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 
 보낼 것을 행으로 남겨 두기 때문에 봇이 다시 뜨거나 슬랙이 응답하지 않아도 게시가 밀리기만 한다. 부모가 아직 게시되지 않은 자식은 다음 틱으로 미루고, 채널에 봇이 없는 경우처럼 다시 시도해도 결과가 같은 오류는 재시도하지 않고 실패로 적는다.
 
+**call_feedback** — 슬랙 채널에 올라간 답장을 읽고 사람이 남긴 표시. 리액션으로 고른 분류 하나가 행 하나이고, 그렇게 본 이유를 적은 스레드 답글도 같은 표에 들어간다
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | O | PK |
+| character_id | INTEGER | | FK characters.id |
+| call_id | INTEGER | | FK llm_calls.id — 표시가 달린 글을 만든 모델 호출. 호출과 이어지지 않는 게시(아침 각본 알림 같은)에 달린 표시는 비어 있다 |
+| slack_ts | TEXT | O | 표시가 달린 글의 슬랙 시각. 이 값으로 게시 기록을 찾아 어느 호출인지 되짚는다 |
+| trace_kind | TEXT | | 표시가 달린 글의 게시 종류 |
+| source | TEXT | O | 표시를 남긴 방법 — `reaction` 리액션으로 고른 분류 · `reply` 스레드에 적은 이유 |
+| kind | TEXT | | 네 분류 중 하나 — `fact` 사실 오류 · `tone` 말투 · `timing` 타이밍 · `good` 좋음. 이유 쪽은 비어 있다 |
+| slack_user | TEXT | | 표시를 남긴 슬랙 계정 |
+| text | TEXT | | 스레드에 적은 이유 |
+| reply_ts | TEXT | | 그 답글 자신의 슬랙 시각 |
+| dedupe_key | TEXT | O | 같은 표시를 두 번 쌓지 않게 하는 키, UNIQUE |
+| created_at | TEXT | O | 표시를 확인한 시각. 이유는 슬랙에 적힌 시각이고, 리액션은 누른 시각을 슬랙이 주지 않아 처음 읽은 시각이다 |
+| removed_at | TEXT | | 리액션을 뗀 것을 확인한 시각. 행은 지우지 않는다 |
+
+키·인덱스: PK `id`, UNIQUE `dedupe_key`, 인덱스 `(call_id)`, 인덱스 `(slack_ts, source)`
+
+10분 간격으로 채널을 다시 읽어 지금 붙어 있는 리액션과 이 표를 맞춘다. 없어진 리액션은 행을 지우지 않고 removed_at에 시각을 적어서, 무엇이 있다가 없어졌는지가 남는다. 이유 쪽은 새로 적힌 것만 넣고 고치거나 지우지 않는다.
+
+표시가 붙은 호출은 90일 정리에서 뺀다. 답장이 왜 그렇게 나왔는지 사람이 판단한 기록이라, 프롬프트와 출력이 함께 있어야 나중에 채점표의 정답지로 쓸 수 있다. 리액션을 뗀 호출은 다시 정리 대상이 된다.
+
 ## 쓰는 곳과 읽는 곳
 
 쓰는 주체는 다섯이다. 생성 배치(캐릭터를 만들 때 한 번), 새벽 정리(하루 한 번), 답장 파이프라인(대화할 때), 선톡 모듈(발송할 때), 월 리듬(한 달치를 만들 때). 대화 중에는 저장 항목을 판정하지 않고 오늘 메모에만 적고, 기억으로 옮기는 일은 새벽 정리가 한다.
@@ -582,7 +615,8 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | llm_usage | llm 래퍼 | 운영 점검 |
 | llm_calls | llm 래퍼(호출할 때), 답장 파이프라인(판단 근거) | 운영 점검 |
 | prompt_blobs | llm 래퍼 | 운영 점검(llm_calls의 해시로 찾아 읽음) |
-| trace_events | 각본 알림 틱, 파이프라인 | 슬랙 게시 틱 |
+| trace_events | 각본 알림 틱, 파이프라인 | 슬랙 게시 틱, 표시 수집 틱(게시 시각으로 호출 되짚기) |
+| call_feedback | 표시 수집 틱 | 운영 점검, 90일 정리(뺄 호출 고르기) |
 
 ## 값이 정해진 컬럼
 
@@ -611,6 +645,8 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | characters.status | `active` 대화 중 · `ended` 이별 |
 | messages.role | `user` 유저 · `assistant` 캐릭터 |
 | trace_events.status | `pending` 대기 · `sent` 게시 · `failed` 실패 · `skipped` 건너뜀 |
+| call_feedback.source 표시를 남긴 방법 | `reaction` 리액션으로 고른 분류 · `reply` 스레드에 적은 이유 |
+| call_feedback.kind 분류 | `fact` 사실 오류 · `tone` 말투 · `timing` 타이밍 · `good` 좋음 |
 | messages 메타의 발송 종류, send_failures.kind | `reply` 답장 · `recover` 복구 · `morning` 아침 · `checkin` 안부 · `away` 자리비움 · `catchup` 근황 · `goodnight` 밤 인사 (send_failures는 뒤 셋만) |
 
 영역 이름은 캐릭터마다 목록이 달라서 CHECK 대신 areas 테이블로 관리한다. 각본 블록의 두 태그는 plan_json 안에 있어 CHECK가 걸리지 않으므로 쓰기 코드에서 검사한다. llm_calls.purpose는 값이 목록으로 정해져 있는데도 CHECK를 걸지 않는다. 호출하는 자리가 늘 때마다 제약을 다시 만들어야 하고 제약에 걸린 INSERT는 기록을 통째로 잃어서, 코드의 타입으로 막는 쪽을 택했다.
@@ -619,7 +655,7 @@ plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한�
 
 ## 외래 키가 아닌 참조
 
-의도한 트레이드오프 일곱 곳이다. 전부 쓰는 주체가 한두 곳으로 정해져 있어 정합성은 쓰기 코드에서 검증한다.
+의도한 트레이드오프 여덟 곳이다. 전부 쓰는 주체가 한두 곳으로 정해져 있어 정합성은 쓰기 코드에서 검증한다.
 
 - **tags의 kind + ref_id** — 기억 · 일기 · 예정된 일 세 테이블을 한 테이블이 가리키므로 FK를 걸 수 없다. 테이블을 셋으로 쪼개면 FK가 생기는 대신, 사람 이름 하나로 인물 · 일정 · 일기를 함께 찾는 검색이 쿼리 세 번이 되어서 한 테이블을 택했다.
 - **schedules의 parent_kind + parent_id** — 일정을 만든 항목이 기억 데이터(memory_items)일 수도, 앞선 일정(schedules)일 수도 있어 tags처럼 종류 열과 id 둘로 가리킨다.
@@ -628,6 +664,7 @@ plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한�
 - **영역 이름** — memory_items · schedules의 area는 areas에 있는 이름을 문자열로 적는다. 새벽의 목록 관리가 항목을 다른 영역으로 다시 앉힐 때 여러 테이블을 같이 고치는 자리라, FK 대신 저장할 때의 이름 검사로 지킨다.
 - **llm_calls의 세 해시** — system_hashes · turns_hash · output_hash가 prompt_blobs.hash를 가리킨다. 본문을 90일 뒤에 지우면서 호출 메타와 사용량은 남기므로, 가리키는 본문이 없는 행이 정상으로 생긴다.
 - **today_notes.message_id** — 메모의 원문이 있는 messages 행을 가리킨다. 나중에 원문을 확인할 때만 쓰는 참조라 FK 없이 id만 적는다.
+- **call_feedback.slack_ts** — 표시가 달린 글의 게시 기록(trace_events)을 시각으로 찾는다. 게시함은 30일이 지나면 행을 지우므로 가리키는 게시 기록이 없는 표시가 정상으로 남고, 어느 호출이었는지는 저장할 때 call_id에 옮겨 적어 둔다.
 
 ## 지금 구조에서 바뀌는 것
 
