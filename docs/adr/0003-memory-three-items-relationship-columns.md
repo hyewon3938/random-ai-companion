@@ -2,7 +2,7 @@
 
 ## 상태
 
-Accepted (2026-08-27)
+Accepted (2026-08-27) — 관계 항목 중 관계의 결은 [ADR-0010](0010-character-attitude-in-identity.md)이 대체
 
 ## 맥락
 
