@@ -51,7 +51,7 @@ yarn dev        # 로컬 기동 (long polling)
 ## 규칙
 
 - **문체**: 사람이 읽는 한국어 산문(설계 문서·README·이슈·PR 본문·유저에게 보내는 답)은 `writing` 스킬을 먼저 로드하고 쓴다. 코드·주석은 대상이 아니다.
-- **공개 톤**: 이 repo는 공개 전환 예정이다. 특정 서비스명 비교·개인 맥락·실제 대화 로그를 커밋하지 않는다. 사적 맥락은 전부 LOCAL-CONTEXT.md(gitignored)로.
+- **공개 톤**: 이 repo는 공개되어 있다. 특정 서비스명 비교·개인 맥락·실제 대화 로그를 커밋하지 않는다. 사적 맥락은 전부 LOCAL-CONTEXT.md(gitignored)로.
 - **보안**: `.env`, `*.db`, `logs/`, `data/` 커밋 금지 (gitignore 반영됨).
 - **코드**: TypeScript strict + ESM(import에 `.js` 확장자), named export, kebab-case 파일명, any 금지. 커밋은 Conventional Commits 한글.
 - **작업 단위**: 새 작업은 이슈부터 만들고 main에서 브랜치를 판다(`타입/이슈번호-영문요약`). 끝나면 PR 본문에 `Closes #이슈번호`를 넣어 올리고 `gh pr merge <번호> --merge --delete-branch`로 머지·브랜치 삭제까지 한 세션에서 끝낸다. 커밋 메시지의 `(#번호)`는 링크만 걸고 이슈를 닫지 않는다. 머지 전 사람 확인이 필요한 자리는 time-and-memory.md 「작업 세션 나누기」에 적혀 있다.
