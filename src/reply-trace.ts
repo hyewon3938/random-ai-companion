@@ -119,8 +119,12 @@ interface CallContext {
   arrival?: { waitMs: number; spanMs: number; msgs: number };
   search?: {
     tags?: string[];
-    /** 검색어를 고르며 대조한 태그 수 — 걸린 것이 없을 때 검색이 돌긴 했는지 가른다. */
+    /** 고를 수 있었던 태그 수 — 걸린 것이 없을 때 검색이 돌긴 했는지 가른다. */
     tagPool?: number;
+    /** 검색어를 무엇이 골랐는지 — model이면 짧은 호출, match면 그 호출이 실패해 글자 일치만. */
+    tagBy?: string;
+    /** 주제를 고른 호출 번호. */
+    tagCallId?: number | null;
     memories?: string[];
     oldDiaries?: string[];
     dropped?: string[];
@@ -365,14 +369,17 @@ const timingLines = (ctx: CallContext): string[] => {
 const searchLines = (ctx: CallContext): string[] => {
   const s = ctx.search;
   if (!s) return [];
-  // 태그는 코드가 고른다 — 저장된 태그 이름을 이번 발화와 맞춰 보는 방식이라 모델이
-  // 주제를 뽑는 자리가 아니다. 걸린 것이 없을 때도 대조는 돌았다는 걸 개수로 보인다.
-  const pool = s.tagPool ? ` (붙어 있는 태그 ${s.tagPool}개와 대조)` : "";
+  // 태그는 답장을 만들기 전에 짧은 호출이 저장된 이름 중에서 고르고, 글자가 일치하는
+  // 것을 코드가 더한다. 걸린 것이 없을 때도 고를 수 있었던 수를 적어 검색이 돌았다는
+  // 것을 보인다.
+  const pool = s.tagPool ? ` (붙어 있는 태그 ${s.tagPool}개 중)` : "";
   const bits = [
     s.tags?.length
       ? `태그 ${s.tags.join("·")}${pool}`
       : `걸린 태그 없음${pool}`,
   ];
+  if (s.tagBy === "match")
+    bits.push("주제 고르기 실패 — 글자가 일치하는 태그만");
   const found = s.memories?.length ?? 0;
   bits.push(
     found ? `기억 ${found}건 — ${s.memories?.join(" / ")}` : "기억 0건",
@@ -426,6 +433,8 @@ const callsLine = (row: CallRow, ctx: CallContext): string | null => {
   const parts: string[] = [];
   const hold = callBrief(ctx.timing?.holdCallId);
   if (hold) parts.push(`붙잡기 판정 ${hold}`);
+  const picked = callBrief(ctx.search?.tagCallId);
+  if (picked) parts.push(`주제 고르기 ${picked}`);
   parts.push(
     `답장 #${row.id} ${row.created_at.slice(11, 19)} ${shortModel(row.model)}`,
   );

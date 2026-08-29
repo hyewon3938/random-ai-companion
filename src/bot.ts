@@ -34,6 +34,7 @@ import {
 import { traceProactiveSend } from "./reply-trace.js";
 import { chat, chatJson, type CallMeta, type ChatTurn } from "./llm.js";
 import { saveTodayNote } from "./memory.js";
+import { pickTags } from "./tag-pick.js";
 import {
   currentSpeechLevel,
   db,
@@ -751,9 +752,10 @@ const respond = async (
 
     // 2. 지금 만든다
     // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
-    // searchText는 이번 발화 — 태그 검색의 재료. 무엇을 찾아 넣었는지(검색 태그·기억)를
-    // 받아 둔다 — 답장 호출 기록에 함께 남긴다. 예고해 둔 자리 비움이 곧 시작되면
-    // 배웅 답 상황 문단을 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다).
+    // 검색 태그는 답장을 만들기 전에 짧은 호출로 먼저 고른다 — 이번 답장에 바로 쓰기
+    // 때문에 여기서 돌아야 한다. 무엇을 찾아 넣었는지(검색 태그·기억)를 받아 둬서 답장
+    // 호출 기록에 함께 남긴다. 예고해 둔 자리 비움이 곧 시작되면 배웅 답 상황 문단을
+    // 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다).
     const built: BuildTrace = {
       tags: [],
       tagPool: 0,
@@ -761,10 +763,11 @@ const respond = async (
       oldDiaries: [],
       dropped: [],
     };
+    const pick = await pickTags(character.id, turn.text);
     const away =
       kind === "reply" ? upcomingAnnouncedAway(chatId, character.id) : null;
     const system = buildSystemBlocks(character.id, chatId, {
-      searchText: turn.text,
+      pick,
       trace: built,
       ...(away ? { situation: farewellSituation(away) } : {}),
     });
@@ -950,7 +953,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
       dropped: [],
     };
     const system = buildSystemBlocks(row.character_id, chatId, {
-      searchText: turn.text,
+      pick: await pickTags(row.character_id, turn.text),
       trace: built,
       situation: gatherSituation(activity),
     });
