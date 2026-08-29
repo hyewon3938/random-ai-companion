@@ -9,6 +9,9 @@ import {
   getDiariesByIds,
   getDayPlan,
   getUpcomingSchedules,
+  getSchedulesByIds,
+  type ScheduleRow,
+  type ScheduleStateRow,
   currentSpeechLevel,
   lastMessageBefore,
   listMemoryItems,
@@ -42,6 +45,7 @@ import {
 import {
   ACTIVITY_CATEGORY_NAME,
   RESPONSIVENESS_NAME,
+  SCHEDULE_STATUS_NAME,
   type Responsiveness,
   type SpeechLevel,
 } from "./labels.js";
@@ -223,8 +227,9 @@ const daySection = (characterId: number): string => {
 };
 
 // 다가오는 일정 슬롯 — 캐릭터의 예정과 유저에게 들은 예정 (하루 각본보다 성긴 층)
-const scheduleSection = (characterId: number): string => {
-  const rows = getUpcomingSchedules(characterId, kstDateString());
+// 행은 조립하는 쪽이 읽어서 넘긴다 — 여기 실린 번호를 아래 주제 검색에서 빼야 같은 일정이
+// 두 자리에 겹쳐 들어가지 않는다.
+const scheduleSection = (rows: ScheduleRow[]): string => {
   if (!rows.length) return "";
   const mine = rows.filter((r) => r.owner === "char");
   const theirs = rows.filter((r) => r.owner === "user");
@@ -238,6 +243,20 @@ const scheduleSection = (characterId: number): string => {
   ]
     .filter(Boolean)
     .join("\n");
+};
+
+// 주제로 찾은 일정 한 줄. 위 슬롯과 달리 주인과 상태를 함께 적는다 — 여기 실리는 것은
+// 대부분 이미 지나갔거나 접힌 일정이라, 상태가 없으면 앞으로의 약속처럼 읽힌다.
+const scheduleHitLine = (r: ScheduleStateRow, today: string): string => {
+  const state =
+    r.status !== "active"
+      ? SCHEDULE_STATUS_NAME[r.status]
+      : r.date < today
+        ? "지난 일"
+        : SCHEDULE_STATUS_NAME.active;
+  return `${r.date}${r.time_hint ? ` ${r.time_hint}` : ""} ${r.content} (${
+    r.owner === "user" ? "상대" : "너"
+  } 쪽 · ${state})`;
 };
 
 // 자리 비움을 '서사로 중계'한다. 막연한 침묵은 이탈이지만,
@@ -384,6 +403,8 @@ export interface BuildTrace {
   memories: string[];
   /** 함께 꺼낸 옛 일기 날짜. */
   oldDiaries: string[];
+  /** 주제로 찾아 넣은 일정 — 날짜와 내용. */
+  schedules: string[];
   /** 태그는 맞았지만 개수 상한에 걸려 빠진 후보 — 기억 키와 옛 일기 날짜. */
   dropped: string[];
 }
@@ -431,6 +452,10 @@ export const buildSystemBlocks = (
     .filter(Boolean)
     .join("\n\n");
 
+  // 오늘 날짜는 한 번만 읽어 두 자리가 같은 값을 쓴다 — [다가오는 일정]이 싣는 경계와 아래
+  // 검색 결과에 '지난 일'을 붙이는 경계가 어긋나면 같은 일정이 두 자리에서 다르게 읽힌다.
+  const today = kstDateString();
+  const upcoming = getUpcomingSchedules(characterId, today);
   const diaries = getRecentDiaries(characterId, RECENT_DIARY_DAYS);
   const diarySection = diaries.length
     ? `[너의 최근 일기 — 기억의 원본]\n${diaries.map((d) => `${d.date}: ${d.entry_json}`).join("\n")}`
@@ -450,7 +475,7 @@ export const buildSystemBlocks = (
     `[오늘/내일] ${workdayContext()}.`,
     firstMeeting,
     daySection(characterId),
-    scheduleSection(characterId),
+    scheduleSection(upcoming),
     diarySection,
     coldStart,
   ]
@@ -484,6 +509,31 @@ export const buildSystemBlocks = (
     ? `[지금 얘기와 관련 있는 옛 일기]\n${oldDiaries.map((d) => `${d.date}: ${d.entry_json}`).join("\n")}`
     : "";
 
+  // 주제로 찾은 일정. 일기와 같은 모양이되 빼는 기준이 날짜가 아니라 행 번호다 — 날짜로 자르면
+  // 오래전 일정이 통째로 안 걸리는데, 이 경로가 꺼내려는 것이 바로 그 지난 일정이다.
+  // 대신 하루 동안 같은 데이터층의 [다가오는 일정]에 이미 실린 행을 뺀다.
+  const upcomingIds = new Set(upcoming.map((r) => r.id));
+  const schedIds = tags.length
+    ? searchTaggedRefs(characterId, "schedule", tags)
+    : [];
+  const schedById = new Map(
+    getSchedulesByIds(characterId, schedIds).map((r) => [r.id, r]),
+  );
+  const schedHits = schedIds
+    .map((id) => schedById.get(id))
+    .filter((r): r is NonNullable<typeof r> => !!r && !upcomingIds.has(r.id));
+  const foundSchedules = schedHits.slice(0, SEARCH_LIMIT.schedule);
+  dropped.push(
+    ...schedHits
+      .slice(SEARCH_LIMIT.schedule)
+      .map((r) => `일정 ${r.date} ${r.content}`),
+  );
+  const schedSearchSection = foundSchedules.length
+    ? `[지금 얘기와 관련 있는 일정]\n${foundSchedules
+        .map((r) => scheduleHitLine(r, today))
+        .join("\n")}\n- 괄호 안 상태가 '${SCHEDULE_STATUS_NAME.active}'이 아니면 아직 남은 약속이 아니다. 지나갔거나 없어진 일을 앞으로의 예정처럼 말하지 않는다.`
+    : "";
+
   if (opts.trace) {
     opts.trace.tags = tags;
     opts.trace.tagPool = tagPool;
@@ -491,6 +541,7 @@ export const buildSystemBlocks = (
     opts.trace.tagCallId = opts.pick?.callId ?? null;
     opts.trace.memories = found.map(memoryKeyOf);
     opts.trace.oldDiaries = oldDiaries.map((d) => d.date);
+    opts.trace.schedules = foundSchedules.map((r) => `${r.date} ${r.content}`);
     opts.trace.dropped = dropped;
   }
 
@@ -509,6 +560,7 @@ export const buildSystemBlocks = (
   const live = [
     memorySection,
     oldDiarySection,
+    schedSearchSection,
     todaySection,
     lastTalkSection,
     nowSection(chatId, characterId, rel?.speech_level ?? null),

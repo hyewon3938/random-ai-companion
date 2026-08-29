@@ -60,6 +60,19 @@ export const MEMORY_ORIGIN_NAME: Record<MemoryOrigin, string> = {
 /** 이 사실을 유저가 아는가 — 캐릭터 쪽 기억에만 쓴다. */
 export type UserKnows = "unknown" | "known" | "waiting";
 
+/**
+ * 일정 한 건의 상태. 지금 이 값을 바꿔 쓰는 코드는 없지만(붙잡혀 접은 일정은 day_actuals에
+ * 남는다), 프롬프트에 일정을 실을 때 상태를 함께 적어 이미 없어진 일을 예정처럼 말하지 않게
+ * 한다 — 나중에 status를 쓰는 코드가 생겨도 프롬프트 쪽은 그대로 맞는다.
+ */
+export type ScheduleStatus = "active" | "cancelled" | "deferred";
+
+export const SCHEDULE_STATUS_NAME: Record<ScheduleStatus, string> = {
+  active: "예정",
+  cancelled: "취소",
+  deferred: "미룸",
+};
+
 /** 유저가 이 주제에 보이는 관심 수준 — 캐릭터 쪽 기억에만 쓴다. */
 export type Interest = "high" | "medium" | "low";
 

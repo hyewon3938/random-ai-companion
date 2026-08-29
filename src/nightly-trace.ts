@@ -287,7 +287,11 @@ const headText = (
     .filter((s) => s.date && s.content)
     .map(
       (s) =>
-        `${s.date}${s.time_hint ? ` ${s.time_hint}` : ""} · ${s.content} (${s.who === "user" ? "유저" : "캐릭터"} 쪽)`,
+        // 태그는 붙지 않은 날도 적는다 — 나중에 이 일정을 주제로 꺼낼 수 있는지가 화면에 그대로 보인다.
+        `${s.date}${s.time_hint ? ` ${s.time_hint}` : ""} · ${s.content} (${s.who === "user" ? "유저" : "캐릭터"} 쪽) · 태그 ${
+          (Array.isArray(s.tags) ? s.tags : []).filter(Boolean).join("·") ||
+          "없음"
+        }`,
     );
   const sched = listSection("새 일정", schedules);
   if (sched) parts.push(sched);
