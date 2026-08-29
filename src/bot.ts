@@ -530,6 +530,12 @@ const WAIT_BASE_MS = 20000; // 최소 대기(짧게 치는 사람 기본 20~25�
 const WAIT_CEIL_MS = 40000; // 길게 치는 사람도 이 이상은 응답이 끊긴 듯 느껴짐
 const pending = new Map<string, ReturnType<typeof setTimeout>>();
 const responding = new Set<string>();
+// 도착 대기 기록 — 유저 말이 다 오기를 기다린 시간, 그동안 도착한 메시지 수, 첫 메시지 시각.
+// 답장 텀에 넣지 않는 값이라 따로 들고 있다가 답장 호출 기록에 붙인다(reply-trace가 읽는다).
+const arrivals = new Map<
+  string,
+  { waitMs: number; firstAt: number; msgs: number }
+>();
 
 // 선톡 틱(dispatch·followup·presence) 간 chat 단위 상호 배제.
 // 크론 주기상 매 15분(디스패치+팔로업)·매 30분(3종 전부)마다 같은 분에 발화하는데, 각 틱은
@@ -675,6 +681,17 @@ const respond = async (
     await ensureTodayPlan(character.id).catch((e) =>
       logErr("[bot] day plan error:", e),
     );
+    // 도착 대기 — 유저 말이 다 오기를 기다린 시간. 답장을 만들기 시작하는 지금 시점에
+    // 걸린 시간까지 재 둔다(생성에 걸린 시간이 섞이지 않게 여기서 계산한다).
+    const arrived = arrivals.get(chatId);
+    arrivals.delete(chatId);
+    const arrival = arrived
+      ? {
+          waitMs: arrived.waitMs,
+          spanMs: Math.max(0, Date.now() - arrived.firstAt),
+          msgs: arrived.msgs,
+        }
+      : null;
     // 지금 답장하는 유저 메시지. 생성이 끝났을 때 이보다 새 메시지가 와 있으면 이 답장은 버린다.
     const turn = pendingUserTurn(chatId);
     if (!turn) {
@@ -797,6 +814,7 @@ const respond = async (
           search: built,
           turns: turns.length,
           userMsgs: turn.n,
+          ...(arrival ? { arrival } : {}),
           ...(relUpdate ? { relUpdate } : {}),
           ...(retryCallId ? { retryCallId } : {}),
           ...facts,
@@ -924,6 +942,11 @@ setWakeHandler(async (row: PendingReplyRow) => {
     /* 깨우기 자체는 유효 — 활동 이름 없이 진행한다 */
   }
   const activity = meta.activity ?? "하던 일";
+  // 이 구간에 처음 온 메시지가 얼마나 기다렸는지 — 깨우기 표시를 건 그 메시지 시각 기준.
+  const firstAt = Date.parse(row.user_msg_at.replace(" ", "T") + "+09:00");
+  const waitedMs = Number.isFinite(firstAt)
+    ? Math.max(0, Date.now() - firstAt)
+    : null;
   const last = lastMessage(chatId);
 
   // ① 몰아 답장 — 마지막 말이 유저 차례로 남아 있으면 그 사이 온 메시지가 있다는 뜻.
@@ -969,7 +992,11 @@ setWakeHandler(async (row: PendingReplyRow) => {
       if (!wakeMeta.callId) return;
       try {
         setCallContext(wakeMeta.callId, {
-          gathered: { activity, blockStart: meta.blockStart ?? null },
+          gathered: {
+            activity,
+            blockStart: meta.blockStart ?? null,
+            waitedMs,
+          },
           search: built,
           turns: turns.length,
           userMsgs: turn.n,
@@ -1133,7 +1160,14 @@ bot.on("message:text", async (ctx) => {
     );
   // 여기서 기다리는 건 유저 말이 다 도착할 때까지의 시간뿐이다(20~40초).
   // 각본상 자리를 비운 만큼의 텀은 답장을 만든 뒤 pending_replies가 맡는다.
-  arm(chatId, computeWait(chatId));
+  const waitMs = computeWait(chatId);
+  const prevArrival = arrivals.get(chatId);
+  arrivals.set(chatId, {
+    waitMs,
+    firstAt: prevArrival?.firstAt ?? Date.now(),
+    msgs: (prevArrival?.msgs ?? 0) + 1,
+  });
+  arm(chatId, waitMs);
 });
 
 // 배포·재시작으로 놓친 답장 복구: 유저 메시지가 디바운스 대기 중에 프로세스가 죽으면
