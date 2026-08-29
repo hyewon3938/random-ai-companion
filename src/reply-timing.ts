@@ -1,6 +1,11 @@
 import { currentBlock } from "./context.js";
 import { blockCategory, type PlanBlock } from "./day-plan.js";
-import { recordDayActual, getDayActuals, setCallContext } from "./db.js";
+import {
+  recordDayActual,
+  getDayActuals,
+  setCallContext,
+  getScheduleById,
+} from "./db.js";
 import { chat, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
 import {
@@ -9,6 +14,7 @@ import {
   isHoldOutcome,
   type Responsiveness,
   type ActivityCategory,
+  type BlockSource,
 } from "./labels.js";
 import { getKstNow, kstClock, kstDateString } from "./kst.js";
 
@@ -89,13 +95,41 @@ const HOLD_SYSTEM = `너는 메신저 대화를 읽고 한 가지만 판정한�
 상대가 지금 하던 일을 멈추고 대화에 붙어 있어 주길 바라는 말이면 "붙잡음",
 답을 나중에 받아도 되는 평범한 말이면 "아님"이라고만 답한다. 다른 말은 하지 않는다.`;
 
+// 판정에 얹을 한 줄 — 상대가 이 일정을 아는가. 알고 보낸 말과 모르고 보낸 말은 무게가 다르다.
+// 각본에는 이 값이 없으므로 블록의 출처를 따라 원본 일정을 읽는다. 출처가 없는 블록(잠·식사·
+// 그날 갑자기 생긴 일)이나 필드가 없는 옛 각본, 원본이 지워진 경우에는 줄 없이 판정한다.
+const knowsLine = (
+  characterId: number,
+  block: TimingTrace["block"],
+): string | null => {
+  if (block?.source !== "schedule" || typeof block.source_id !== "number")
+    return null;
+  try {
+    const row = getScheduleById(characterId, block.source_id);
+    if (!row) return null;
+    // waiting은 아직 말하지 않고 꺼낼 자리를 기다리는 것 — 상대는 모르는 쪽이다.
+    return row.user_knows === "known"
+      ? "상대는 내게 이 일정이 있다는 걸 안다."
+      : "상대는 내게 이 일정이 있다는 걸 모른다.";
+  } catch {
+    // 원본을 못 읽으면 줄만 빼고 판정한다 — 판정 자체를 막지 않는다.
+    return null;
+  }
+};
+
 const askHold = async (
   characterId: number,
   block: TimingTrace["block"],
   userText: string,
 ): Promise<{ held: boolean; callId: number | null }> => {
   const activity = block?.activity ?? "하던 일";
-  const prompt = `내가 지금 하는 일: ${activity}\n상대가 방금 보낸 말: ${userText}`;
+  const prompt = [
+    `내가 지금 하는 일: ${activity}`,
+    knowsLine(characterId, block),
+    `상대가 방금 보낸 말: ${userText}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
   const meta: CallMeta = { purpose: "hold", characterId };
   try {
     const out = await chat(
@@ -138,6 +172,9 @@ export interface TimingTrace {
     activity: string;
     responsiveness: Responsiveness;
     category: ActivityCategory;
+    /** 이 블록을 펼친 원본 — 붙잡기 판정이 여기를 따라 원본 일정을 읽는다. */
+    source?: BlockSource;
+    source_id?: number;
   } | null;
   /** 붙잡기 판정을 물었는가, 물었다면 붙잡혔는가. */
   asked: boolean;
@@ -187,6 +224,8 @@ export const decideReplyTiming = async (
     activity: b.activity,
     responsiveness: resp,
     category: cat,
+    source: b.source,
+    source_id: b.source_id,
   };
 
   // 예외 둘 — 표를 따르지 않고 바로 답한다.
