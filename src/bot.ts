@@ -33,6 +33,12 @@ import {
 } from "./pending.js";
 import { traceProactiveSend } from "./reply-trace.js";
 import { chat, chatJson, type CallMeta, type ChatTurn } from "./llm.js";
+import {
+  REPLY_MAX_TOKENS,
+  capBubbles,
+  mergeSignals,
+  parseReplyOutput,
+} from "./reply-signal.js";
 import { saveTodayNote } from "./memory.js";
 import { pickTags } from "./tag-pick.js";
 import {
@@ -153,19 +159,15 @@ export const logErr = (prefix: string, e: unknown): void => {
   console.error(prefix, redactToken(inspect(e, { depth: 5 })));
 };
 
-// 생각·문장 단위로 나뉜 말풍선(LLM이 줄바꿈으로 끊음). 상한을 넘는 초과분만 마지막에 합침
-const MAX_BUBBLES = 6;
+// 줄바꿈으로 끊은 말풍선 — 선톡 문안이 쓴다(문안 여섯 곳은 자기 형식으로 답해 본문이 통글이다).
+// 답장은 봉투의 reply 배열에서 나오므로 이 길을 타지 않는다. 상한 계산만 한곳(capBubbles)에서 쓴다.
 const splitBubbles = (text: string): string[] => {
   const parts = text
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
   if (parts.length === 0) return [text.trim()];
-  if (parts.length <= MAX_BUBBLES) return parts;
-  return [
-    ...parts.slice(0, MAX_BUBBLES - 1),
-    parts.slice(MAX_BUBBLES - 1).join(" "),
-  ];
+  return capBubbles(parts);
 };
 
 // 순간 네트워크 오류로 전송이 통째로 실패하지 않게 재시도한다(VM↔텔레그램 API 일시 단절 대비).
@@ -278,52 +280,6 @@ export const sendProactive = async (
     total,
   });
   return { delivered: sent.length, total };
-};
-
-// LLM이 답장 앞뒤에 붙인 시스템 태그를 전부 읽고 떼어낸다(유저에게 노출 방지).
-// 앞머리에서 값을 읽는 태그는 [남음] 하나 — 조정 가능한 자기 일정을 접거나 미루고 곁에 남기로 한 신호.
-// 응답 속도 태그([한참후]·[잠시후]·[즉시])는 지연을 각본 블록에서 계산하게 바뀐 뒤로 값을 쓰지
-// 않지만, 유저에게 보이면 안 되므로 떼어내는 대상에는 그대로 남는다.
-// 답장 끝의 [메모] 줄은 NOTE_RULE(context.ts)이 시킨 오늘 메모 — 내용을 note로 돌려주고,
-// 발송 시 pending.ts가 saveTodayNote로 저장한다.
-interface ReplyTags {
-  stay: boolean;
-  note: string | null;
-  text: string;
-}
-
-// 앞머리 대괄호는 어떤 형태든 태그로 보고 전부 떼어낸다. [남음][즉시]처럼 겹쳐 나오면
-// 하나만 벗기던 버그가 있어 연속으로 벗기고, 종류 판정도 벗기는 자리에서 함께 한다 —
-// 맨 앞 하나만 정규식으로 따로 보면 태그가 겹친 순간 뒤쪽 신호를 통째로 놓친다.
-// export는 단독 회귀 검증용 — 봇 밖에서 부르는 곳은 없다.
-export const parseReplyTags = (reply: string): ReplyTags => {
-  // [메모] 줄 추출 — 규칙은 맨 끝 한 줄이지만, 모델이 중간에 찍거나 여러 줄을 찍어도
-  // 유저에게 새어 나가면 안 되므로 위치와 개수에 관계없이 전부 떼어낸다.
-  // 앞머리 태그 벗기기보다 먼저 한다 — 답장이 [메모]로 시작하면(메모만 있는 답장 등)
-  // 아래 루프가 태그만 삼키고 메모 내용이 유저에게 보이는 문장으로 남는다.
-  const notes: string[] = [];
-  let text = reply
-    .split("\n")
-    .filter((line) => {
-      const nm = line.match(/^\s*\[메모\]\s*(.*)$/);
-      if (!nm) return true;
-      if (nm[1].trim()) notes.push(nm[1].trim());
-      return false;
-    })
-    .join("\n");
-  let stay = false;
-  let m: RegExpMatchArray | null;
-  // 길이 상한 20 — 응답 속도 태그(4자)뿐 아니라 대화 기록에 붙는 시간 마커를 모델이 흉내 내
-  // 답장에 찍는 경우("3일 전(금) 21:40" = 14자)까지 덮는 값.
-  while ((m = text.match(/^\s*\[([^\]\n]{1,20})\]\s*/))) {
-    if (m[1].includes("남음")) stay = true;
-    text = text.slice(m[0].length);
-  }
-  return {
-    stay,
-    note: notes.length > 0 ? notes.join(" / ") : null,
-    text: text.trim(),
-  };
 };
 
 // 연속 동일 role 메시지 병합 + 시간이 벌어진 지점에 시간 마커.
@@ -770,6 +726,8 @@ const respond = async (
     const system = buildSystemBlocks(character.id, chatId, {
       pick,
       trace: built,
+      // 답장만 봉투(JSON)로 받는다 — 본문과 신호가 한 덩이로 온다.
+      signals: true,
       ...(away ? { situation: farewellSituation(away) } : {}),
     });
     const turns = toTurns(getRecentMessages(chatId, 40));
@@ -778,22 +736,25 @@ const respond = async (
       characterId: character.id,
       chatId,
     };
-    // 태그는 여기서 전부 떼어낸다(유저 비노출).
-    let { text, stay, note } = parseReplyTags(
-      await chat(system, turns, 1024, config.model, meta),
+    // 본문과 신호를 여기서 가른다 — 신호 칸은 유저에게 나가지 않는다.
+    const first = parseReplyOutput(
+      await chat(system, turns, REPLY_MAX_TOKENS, config.model, meta),
     );
-    // 빈 답장 방어: LLM이 태그만 뱉거나 빈 문자열을 주는 경우가 있다 → 한 번 재생성, 그래도 비면 스킵.
-    // (빈 텍스트를 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.)
-    // 태그만 뱉은 답이 바로 이 경우라, 재생성분의 신호도 함께 살린다.
+    let bubbles = first.bubbles;
+    let signals = first.signals;
+    let parse = first.parse;
+    // 빈 답장 방어: 모델이 신호 칸만 뱉거나 빈 문자열을 주는 경우가 있다 → 한 번 재생성,
+    // 그래도 비면 스킵. (빈 텍스트를 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.)
+    // 신호만 뱉은 답이 바로 이 경우라, 첫 답이 준 신호를 재생성분과 합친다.
     let retryCallId: number | null = null;
-    if (!text) {
+    if (!bubbles.length) {
       const retryMeta: CallMeta = { ...meta, attempt: 2 };
-      const retry = parseReplyTags(
-        await chat(system, turns, 1024, config.model, retryMeta),
+      const retry = parseReplyOutput(
+        await chat(system, turns, REPLY_MAX_TOKENS, config.model, retryMeta),
       );
-      text = retry.text;
-      stay = stay || retry.stay;
-      note = retry.note ?? note;
+      bubbles = retry.bubbles;
+      signals = mergeSignals(signals, retry.signals);
+      parse = retry.parse;
       retryCallId = retryMeta.callId ?? null;
     }
     // 이 답장이 어떤 근거로 나왔는지를 호출 기록에 붙인다 — 검색한 태그·기억, 텀 계산의
@@ -832,9 +793,11 @@ const respond = async (
         logErr("[llm] 재생성 호출 표시 실패:", e);
       }
 
-    // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 신호([남음]).
+    // 봉투를 어느 길로 읽었는지는 답장을 버리는 경우에도 남긴다 — 형식이 깨진 날을 되짚는 자리다.
+    attach({ outputParse: parse });
+    // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 stay 신호.
     // 붙잡기 판정이 이미 접었으면 그 기록이 남아 있어 recordHold가 알아서 넘어간다.
-    const staged = stay ? recordHold(character.id) : null;
+    const staged = signals.stay ? recordHold(character.id) : null;
     if (timing.held)
       attach({
         dayActual: {
@@ -845,7 +808,7 @@ const respond = async (
         },
       });
     else if (staged) attach({ dayActual: { ...staged, by: "stay" } });
-    if (!text) {
+    if (!bubbles.length) {
       attach({ dropped: "빈 답장" });
       console.warn(`[bot] empty reply — skip (chat=${chatId})`);
       return;
@@ -860,10 +823,9 @@ const respond = async (
 
     // 3. 정한 시각에 나가게 저장한다. 대기가 0이어도 같은 길로 보낸다 —
     // 발송 직전에 죽어도 pending_replies에 남아 다시 뜰 때 이어진다.
-    const bubbles = splitBubbles(text);
     attach({
-      stay,
-      note,
+      stay: signals.stay,
+      note: signals.note,
       bubbles: bubbles.length,
       // 말풍선 사이 간격은 발송할 때 글자 수에서 나온다(1초 안쪽 흔들림) — 길이를 남겨 둔다.
       bubbleLens: bubbles.map((b) => b.length),
@@ -873,8 +835,8 @@ const respond = async (
       characterId: character.id,
       userMsgAt: turn.at,
       bubbles,
-      // 답장 끝 [메모] 줄(NOTE_RULE) — 발송이 성공하면 pending.ts가 saveTodayNote로 저장한다.
-      noteToSave: note,
+      // 봉투의 note 신호(NOTE_RULE) — 발송이 성공하면 pending.ts가 saveTodayNote로 저장한다.
+      noteToSave: signals.note,
       waitMs: timing.waitMs,
       kind,
       // 발송·폐기 결과를 이 답장을 만든 호출의 트레이스에 잇는다.
@@ -884,7 +846,7 @@ const respond = async (
     // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
     setRecoveryMark(chatId, turn.at);
     console.log(
-      `[send] kind=${kind} chat=${chatId} len=${text.length} wait=${Math.round(timing.waitMs / 1000)}s`,
+      `[send] kind=${kind} chat=${chatId} bubbles=${bubbles.length} wait=${Math.round(timing.waitMs / 1000)}s`,
     );
   } finally {
     responding.delete(chatId);
@@ -956,6 +918,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
     const system = buildSystemBlocks(row.character_id, chatId, {
       pick: await pickTags(row.character_id, turn.text),
       trace: built,
+      signals: true,
       situation: gatherSituation(activity),
     });
     const turns = toTurns(getRecentMessages(chatId, 40));
@@ -964,18 +927,21 @@ setWakeHandler(async (row: PendingReplyRow) => {
       characterId: row.character_id,
       chatId,
     };
-    let { text, stay, note } = parseReplyTags(
-      await chat(system, turns, 1024, config.model, wakeMeta),
+    const first = parseReplyOutput(
+      await chat(system, turns, REPLY_MAX_TOKENS, config.model, wakeMeta),
     );
+    let bubbles = first.bubbles;
+    let signals = first.signals;
+    let parse = first.parse;
     let retryCallId: number | null = null;
-    if (!text) {
+    if (!bubbles.length) {
       const retryMeta: CallMeta = { ...wakeMeta, attempt: 2 };
-      const retry = parseReplyTags(
-        await chat(system, turns, 1024, config.model, retryMeta),
+      const retry = parseReplyOutput(
+        await chat(system, turns, REPLY_MAX_TOKENS, config.model, retryMeta),
       );
-      text = retry.text;
-      stay = stay || retry.stay;
-      note = retry.note ?? note;
+      bubbles = retry.bubbles;
+      signals = mergeSignals(signals, retry.signals);
+      parse = retry.parse;
       retryCallId = retryMeta.callId ?? null;
     }
     // 몰아 답장의 근거. 텀 대신 어느 구간이 끝나 답하는지를 남긴다 — 이 길은 표를 타지 않는다.
@@ -1006,9 +972,10 @@ setWakeHandler(async (row: PendingReplyRow) => {
       } catch (e) {
         logErr("[llm] 재생성 호출 표시 실패:", e);
       }
-    const staged = stay ? recordHold(row.character_id) : null;
+    attach({ outputParse: parse });
+    const staged = signals.stay ? recordHold(row.character_id) : null;
     if (staged) attach({ dayActual: { ...staged, by: "stay" } });
-    if (!text) {
+    if (!bubbles.length) {
       attach({ dropped: "빈 답장" });
       console.warn(`[wake] empty reply — skip (chat=${chatId})`);
       return;
@@ -1021,10 +988,9 @@ setWakeHandler(async (row: PendingReplyRow) => {
       return;
     }
     // 바로 보낸다 — 구간이 끝나는 시각이 이미 이 답장의 텀이다.
-    const bubbles = splitBubbles(text);
     attach({
-      stay,
-      note,
+      stay: signals.stay,
+      note: signals.note,
       bubbles: bubbles.length,
       bubbleLens: bubbles.map((b) => b.length),
     });
@@ -1048,10 +1014,10 @@ setWakeHandler(async (row: PendingReplyRow) => {
           : {}),
       },
     );
-    if (note) saveTodayNote(row.character_id, note);
+    if (signals.note) saveTodayNote(row.character_id, signals.note);
     setRecoveryMark(chatId, turn.at);
     console.log(
-      `[wake] 몰아 답장 chat=${chatId} @ ${activity} len=${text.length}`,
+      `[wake] 몰아 답장 chat=${chatId} @ ${activity} bubbles=${bubbles.length}`,
     );
     return;
   }

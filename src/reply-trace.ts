@@ -34,6 +34,11 @@ import {
   type SpeechLevel,
 } from "./labels.js";
 import { getKstNow, logicalDateOf, clockLabel } from "./kst.js";
+import { PARSE_NAME, type ReplyParse } from "./reply-signal.js";
+
+// 저장된 문자열이 지금 아는 길 이름인지 대조해 이름을 붙인다 — 옛 기록·모르는 값은 그대로 적는다.
+const parseName = (v: string): string =>
+  v in PARSE_NAME ? PARSE_NAME[v as ReplyParse] : v;
 
 // 한 틱에 준비하는 호출 수. 슬랙 발송은 게시함이 따로 조절하므로 여기서는 읽기 상한만 둔다.
 const BATCH = 20;
@@ -134,8 +139,11 @@ interface CallContext {
   turns?: number;
   /** 한 번에 답한 유저 메시지 수(나눠 보낸 것을 묶은 결과). */
   userMsgs?: number;
+  /** 봉투의 신호 칸 — 키 이름은 그대로 둔다(이미 올라간 기록과 어긋나지 않게). */
   stay?: boolean;
   note?: string | null;
+  /** 봉투를 어느 길로 읽었는지(json·salvage·plain·empty). */
+  outputParse?: string;
   bubbles?: number;
   bubbleLens?: number[];
   dropped?: string;
@@ -411,12 +419,14 @@ const outcomeLines = (ctx: CallContext): string[] => {
   // 붙였는지 안 붙였는지를 늘 적는다 — 없을 때 줄이 사라지면 모델이 안 붙인 건지
   // 기록이 안 된 건지 구별되지 않는다.
   out.push(
-    `*답장 표시* [남음] ${ctx.stay ? "붙임" : "없음"} · [메모] ${ctx.note ? "붙임" : "없음"}`,
+    `*답장 신호* 남음 ${ctx.stay ? "붙임" : "없음"} · 메모 ${ctx.note ? "붙임" : "없음"}${
+      ctx.outputParse ? ` · 형식 ${parseName(ctx.outputParse)}` : ""
+    }`,
   );
   if (ctx.note) out.push(`*오늘 메모* ${esc(clip(ctx.note, 200))}`);
   if (ctx.dayActual) {
     const d = ctx.dayActual;
-    const by = d.by === "judge" ? "붙잡기 판정" : "[남음] 표시";
+    const by = d.by === "judge" ? "붙잡기 판정" : "답장의 남음 신호";
     out.push(
       `*각본과 달라진 하루* ${esc(`${d.blockStart ?? ""} ${d.activity ?? ""}`.trim())} → ${esc(d.outcome ?? "")} (${by})`,
     );
