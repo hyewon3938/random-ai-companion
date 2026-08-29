@@ -106,7 +106,17 @@ interface CallContext {
     /** 붙잡기 판정을 물었으면 그 호출 번호. */
     holdCallId?: number | null;
   };
-  gathered?: { activity?: string; blockStart?: string | null };
+  gathered?: {
+    activity?: string;
+    blockStart?: string | null;
+    /** 그 구간에 처음 온 메시지가 답장을 받기까지 기다린 시간. */
+    waitedMs?: number | null;
+  };
+  /**
+   * 도착 대기 — 유저 말이 다 오기를 기다린 시간(waitMs), 첫 메시지가 온 뒤 답장을 만들기
+   * 시작할 때까지 걸린 시간(spanMs), 그동안 도착한 메시지 수(msgs). 답장 텀과 다른 값이다.
+   */
+  arrival?: { waitMs: number; spanMs: number; msgs: number };
   search?: {
     tags?: string[];
     /** 검색어를 고르며 대조한 태그 수 — 걸린 것이 없을 때 검색이 돌긴 했는지 가른다. */
@@ -214,6 +224,12 @@ const fmtWait = (ms: number): string => {
   if (ms < 1000) return "바로";
   if (ms < 60_000) return `${Math.round(ms / 1000)}초`;
   const m = Math.floor(ms / 60_000);
+  // 몰아 답장은 몇 시간을 기다리기도 한다 — 분으로만 적으면 크기가 안 잡힌다.
+  if (m >= 60) {
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return rm ? `${h}시간 ${rm}분` : `${h}시간`;
+  }
   const s = Math.round((ms % 60_000) / 1000);
   return s ? `${m}분 ${s}초` : `${m}분`;
 };
@@ -305,15 +321,32 @@ const timingLines = (ctx: CallContext): string[] => {
     if (!ctx.gathered) return [];
     const activity = ctx.gathered.activity ?? "하던 일";
     const start = ctx.gathered.blockStart;
-    return [
+    const out = [
       `*텀* 몰아 답장 — ${esc(activity)} 구간이 끝나 바로 보냈다`,
       `*지금 하는 일* ${esc(start ? `${start} ${activity}` : activity)} — 방금 끝났다`,
     ];
+    const waited = ctx.gathered.waitedMs;
+    if (typeof waited === "number") {
+      const n = ctx.userMsgs ?? 1;
+      out.push(
+        `*쌓인 메시지* ${esc(`${n}통 · 첫 메시지가 온 지 ${fmtWait(waited)} 만에 답한다`)}`,
+      );
+    }
+    return out;
+  }
+  const out: string[] = [];
+  // 도착 대기는 답장 텀 앞에 붙는 시간이다 — 텀만 보면 유저가 기다린 시간과 어긋난다.
+  if (ctx.arrival) {
+    const a = ctx.arrival;
+    const bits = [`${fmtWait(a.waitMs)} 기다림`];
+    if (a.msgs > 1) bits.push(`메시지 ${a.msgs}통`);
+    bits.push(`첫 메시지로부터 ${fmtWait(a.spanMs)}`);
+    out.push(`*도착 대기* ${esc(bits.join(" · "))}`);
   }
   const bits = [`${fmtWait(t.waitMs ?? 0)} 뒤`];
   if (ctx.sendAt) bits.push(`${ctx.sendAt.slice(11, 19)} 발송 예정`);
   if (t.path) bits.push(PATH_NAME[t.path] ?? t.path);
-  const out = [`*텀* ${esc(bits.join(" · "))}`];
+  out.push(`*텀* ${esc(bits.join(" · "))}`);
   out.push(
     `*지금 하는 일* ${t.block ? esc(blockText(t.block)) : "각본에 이 시각 블록이 없다"}`,
   );
