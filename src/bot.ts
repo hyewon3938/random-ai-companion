@@ -17,7 +17,6 @@ import {
 } from "./day-plan.js";
 import { ensureMonthPlan } from "./life-plan.js";
 import { buildSystemBlocks, type BuildTrace } from "./context.js";
-import { polishBubble } from "./bubble-polish.js";
 import {
   decideReplyTiming,
   recordHold,
@@ -35,6 +34,7 @@ import {
 import { traceProactiveSend } from "./reply-trace.js";
 import { chat, chatJson, type CallMeta, type ChatTurn } from "./llm.js";
 import { saveTodayNote } from "./memory.js";
+import { pickTags } from "./tag-pick.js";
 import {
   currentSpeechLevel,
   db,
@@ -230,16 +230,13 @@ const sendBubbleList = async (
   return { sent };
 };
 
-// 말풍선으로 쪼개고 다듬는 것까지 한 번에 — 선톡처럼 만들자마자 보내는 쪽이 쓴다.
-// 답장은 만들어 두고 나중에 보내므로, 쪼갠 결과를 저장한 뒤 sendBubbleList로 바로 간다.
-const toBubbles = (text: string): string[] =>
-  splitBubbles(text).map(polishBubble);
-
+// 선톡처럼 만들자마자 보내는 쪽이 쓴다. 답장은 만들어 두고 나중에 보내므로,
+// 쪼갠 결과를 저장한 뒤 sendBubbleList로 바로 간다.
 const sendBubblesTo = (
   chatId: string,
   text: string,
 ): Promise<{ sent: string[]; error?: unknown }> =>
-  sendBubbleList(chatId, toBubbles(text));
+  sendBubbleList(chatId, splitBubbles(text));
 
 // 선제 발송(선톡): 유저 메시지 없이 캐릭터가 먼저 보낸다. 아침 안부(morning)·침묵 팔로업(followup)이 호출
 // 반환: 실제로 나간 말풍선 수 / 전체. 아무것도 못 나가면 throw(= 호출부가 재시도해도 안전),
@@ -297,7 +294,7 @@ interface ReplyTags {
 // 앞머리 대괄호는 어떤 형태든 태그로 보고 전부 떼어낸다. [남음][즉시]처럼 겹쳐 나오면
 // 하나만 벗기던 버그가 있어 연속으로 벗기고, 종류 판정도 벗기는 자리에서 함께 한다 —
 // 맨 앞 하나만 정규식으로 따로 보면 태그가 겹친 순간 뒤쪽 신호를 통째로 놓친다.
-// export는 단독 회귀 검증용(bubble-polish와 같은 이유) — 봇 밖에서 부르는 곳은 없다.
+// export는 단독 회귀 검증용 — 봇 밖에서 부르는 곳은 없다.
 export const parseReplyTags = (reply: string): ReplyTags => {
   // [메모] 줄 추출 — 규칙은 맨 끝 한 줄이지만, 모델이 중간에 찍거나 여러 줄을 찍어도
   // 유저에게 새어 나가면 안 되므로 위치와 개수에 관계없이 전부 떼어낸다.
@@ -530,6 +527,12 @@ const WAIT_BASE_MS = 20000; // 최소 대기(짧게 치는 사람 기본 20~25�
 const WAIT_CEIL_MS = 40000; // 길게 치는 사람도 이 이상은 응답이 끊긴 듯 느껴짐
 const pending = new Map<string, ReturnType<typeof setTimeout>>();
 const responding = new Set<string>();
+// 도착 대기 기록 — 유저 말이 다 오기를 기다린 시간, 그동안 도착한 메시지 수, 첫 메시지 시각.
+// 답장 텀에 넣지 않는 값이라 따로 들고 있다가 답장 호출 기록에 붙인다(reply-trace가 읽는다).
+const arrivals = new Map<
+  string,
+  { waitMs: number; firstAt: number; msgs: number }
+>();
 
 // 선톡 틱(dispatch·followup·presence) 간 chat 단위 상호 배제.
 // 크론 주기상 매 15분(디스패치+팔로업)·매 30분(3종 전부)마다 같은 분에 발화하는데, 각 틱은
@@ -675,6 +678,17 @@ const respond = async (
     await ensureTodayPlan(character.id).catch((e) =>
       logErr("[bot] day plan error:", e),
     );
+    // 도착 대기 — 유저 말이 다 오기를 기다린 시간. 답장을 만들기 시작하는 지금 시점에
+    // 걸린 시간까지 재 둔다(생성에 걸린 시간이 섞이지 않게 여기서 계산한다).
+    const arrived = arrivals.get(chatId);
+    arrivals.delete(chatId);
+    const arrival = arrived
+      ? {
+          waitMs: arrived.waitMs,
+          spanMs: Math.max(0, Date.now() - arrived.firstAt),
+          msgs: arrived.msgs,
+        }
+      : null;
     // 지금 답장하는 유저 메시지. 생성이 끝났을 때 이보다 새 메시지가 와 있으면 이 답장은 버린다.
     const turn = pendingUserTurn(chatId);
     if (!turn) {
@@ -738,9 +752,10 @@ const respond = async (
 
     // 2. 지금 만든다
     // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
-    // searchText는 이번 발화 — 태그 검색의 재료. 무엇을 찾아 넣었는지(검색 태그·기억)를
-    // 받아 둔다 — 답장 호출 기록에 함께 남긴다. 예고해 둔 자리 비움이 곧 시작되면
-    // 배웅 답 상황 문단을 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다).
+    // 검색 태그는 답장을 만들기 전에 짧은 호출로 먼저 고른다 — 이번 답장에 바로 쓰기
+    // 때문에 여기서 돌아야 한다. 무엇을 찾아 넣었는지(검색 태그·기억)를 받아 둬서 답장
+    // 호출 기록에 함께 남긴다. 예고해 둔 자리 비움이 곧 시작되면 배웅 답 상황 문단을
+    // 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다).
     const built: BuildTrace = {
       tags: [],
       tagPool: 0,
@@ -748,10 +763,11 @@ const respond = async (
       oldDiaries: [],
       dropped: [],
     };
+    const pick = await pickTags(character.id, turn.text);
     const away =
       kind === "reply" ? upcomingAnnouncedAway(chatId, character.id) : null;
     const system = buildSystemBlocks(character.id, chatId, {
-      searchText: turn.text,
+      pick,
       trace: built,
       ...(away ? { situation: farewellSituation(away) } : {}),
     });
@@ -780,9 +796,9 @@ const respond = async (
       retryCallId = retryMeta.callId ?? null;
     }
     // 이 답장이 어떤 근거로 나왔는지를 호출 기록에 붙인다 — 검색한 태그·기억, 텀 계산의
-    // 입력과 결과, 다듬기 전후, 말풍선 수. 기록이 실패해도 답장은 그대로 나간다.
+    // 입력과 결과, 말풍선 수. 기록이 실패해도 답장은 그대로 나간다.
     // 여러 번 나눠 부르므로 덮어쓰지 않고 쌓는다 — 뒤에 붙는 발송 예정 시각이 앞의
-    // 다듬기 기록을 지우면 안 된다.
+    // 검색 기록을 지우면 안 된다.
     const facts: Record<string, unknown> = {};
     const attach = (extra: Record<string, unknown>): void => {
       Object.assign(facts, extra);
@@ -797,6 +813,7 @@ const respond = async (
           search: built,
           turns: turns.length,
           userMsgs: turn.n,
+          ...(arrival ? { arrival } : {}),
           ...(relUpdate ? { relUpdate } : {}),
           ...(retryCallId ? { retryCallId } : {}),
           ...facts,
@@ -842,20 +859,13 @@ const respond = async (
 
     // 3. 정한 시각에 나가게 저장한다. 대기가 0이어도 같은 길로 보낸다 —
     // 발송 직전에 죽어도 pending_replies에 남아 다시 뜰 때 이어진다.
-    const split = splitBubbles(text);
-    const bubbles = split.map(polishBubble);
+    const bubbles = splitBubbles(text);
     attach({
       stay,
       note,
       bubbles: bubbles.length,
       // 말풍선 사이 간격은 발송할 때 글자 수에서 나온다(1초 안쪽 흔들림) — 길이를 남겨 둔다.
       bubbleLens: bubbles.map((b) => b.length),
-      // 다듬기가 실제로 고친 말풍선만 — 손대지 않은 것까지 두 벌 남기면 저장만 커진다.
-      polished: split
-        .map((b, i) =>
-          b === bubbles[i] ? null : { before: b, after: bubbles[i] },
-        )
-        .filter(Boolean),
     });
     const scheduled = schedulePendingReply({
       chatId,
@@ -924,6 +934,11 @@ setWakeHandler(async (row: PendingReplyRow) => {
     /* 깨우기 자체는 유효 — 활동 이름 없이 진행한다 */
   }
   const activity = meta.activity ?? "하던 일";
+  // 이 구간에 처음 온 메시지가 얼마나 기다렸는지 — 깨우기 표시를 건 그 메시지 시각 기준.
+  const firstAt = Date.parse(row.user_msg_at.replace(" ", "T") + "+09:00");
+  const waitedMs = Number.isFinite(firstAt)
+    ? Math.max(0, Date.now() - firstAt)
+    : null;
   const last = lastMessage(chatId);
 
   // ① 몰아 답장 — 마지막 말이 유저 차례로 남아 있으면 그 사이 온 메시지가 있다는 뜻.
@@ -938,7 +953,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
       dropped: [],
     };
     const system = buildSystemBlocks(row.character_id, chatId, {
-      searchText: turn.text,
+      pick: await pickTags(row.character_id, turn.text),
       trace: built,
       situation: gatherSituation(activity),
     });
@@ -969,7 +984,11 @@ setWakeHandler(async (row: PendingReplyRow) => {
       if (!wakeMeta.callId) return;
       try {
         setCallContext(wakeMeta.callId, {
-          gathered: { activity, blockStart: meta.blockStart ?? null },
+          gathered: {
+            activity,
+            blockStart: meta.blockStart ?? null,
+            waitedMs,
+          },
           search: built,
           turns: turns.length,
           userMsgs: turn.n,
@@ -1001,18 +1020,12 @@ setWakeHandler(async (row: PendingReplyRow) => {
       return;
     }
     // 바로 보낸다 — 구간이 끝나는 시각이 이미 이 답장의 텀이다.
-    const split = splitBubbles(text);
-    const bubbles = split.map(polishBubble);
+    const bubbles = splitBubbles(text);
     attach({
       stay,
       note,
       bubbles: bubbles.length,
       bubbleLens: bubbles.map((b) => b.length),
-      polished: split
-        .map((b, i) =>
-          b === bubbles[i] ? null : { before: b, after: bubbles[i] },
-        )
-        .filter(Boolean),
     });
     const { sent, error } = await sendBubbleList(chatId, bubbles);
     if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
@@ -1133,7 +1146,14 @@ bot.on("message:text", async (ctx) => {
     );
   // 여기서 기다리는 건 유저 말이 다 도착할 때까지의 시간뿐이다(20~40초).
   // 각본상 자리를 비운 만큼의 텀은 답장을 만든 뒤 pending_replies가 맡는다.
-  arm(chatId, computeWait(chatId));
+  const waitMs = computeWait(chatId);
+  const prevArrival = arrivals.get(chatId);
+  arrivals.set(chatId, {
+    waitMs,
+    firstAt: prevArrival?.firstAt ?? Date.now(),
+    msgs: (prevArrival?.msgs ?? 0) + 1,
+  });
+  arm(chatId, waitMs);
 });
 
 // 배포·재시작으로 놓친 답장 복구: 유저 메시지가 디바운스 대기 중에 프로세스가 죽으면

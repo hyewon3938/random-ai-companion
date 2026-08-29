@@ -18,6 +18,8 @@ import {
   getDayActuals,
   listMemoryItems,
   listTagNames,
+  getUserProfile,
+  saveUserProfile,
   type CharacterRow,
   type DaySeed,
   type MemoryRow,
@@ -103,9 +105,17 @@ export interface RelationshipExtract {
   feelings?: string;
 }
 
+// 상대 프로필 갱신분 — 대화에서 분명히 드러난 값만. 넣은 항목만 갱신되고,
+// 빈 값은 이미 아는 값을 덮지 않는다(db.ts saveUserProfile).
+export interface UserProfileExtract {
+  job?: string;
+  region?: string;
+}
+
 export interface ExtractOutput {
   memories: MemoryExtract[];
   relationship?: RelationshipExtract | null;
+  user_profile?: UserProfileExtract | null;
   schedules: {
     who: "user" | "char";
     date: string;
@@ -153,6 +163,7 @@ export interface NightlyGathered {
   people: string; // 주변 인물 줄들 (캐릭터 쪽·유저 쪽 모두)
   ongoing: string; // 진행 중인 일 줄들
   relationship: string; // 관계 여덟 항목의 지금 값
+  userProfile: string; // 대화로 채우는 상대 프로필 두 값(하는 일·사는 지역)의 지금 상태
   todayNotes: string[]; // 그 하루 동안 대화하며 적어 둔 오늘 메모
   dayActuals: string[]; // 각본과 달라진 블록 기록
   existingKeys: { itemType: MemoryItemType; owner: MemoryOwner; key: string }[]; // 추출이 같은 주제에 재사용할 키 목록
@@ -194,6 +205,16 @@ const personLine = (r: MemoryRow): string => {
 
 const ongoingLine = (r: MemoryRow): string =>
   `- ${r.owner === "user" ? "(상대) " : ""}${r.area}/${r.subject}: ${r.value}${r.end_condition ? ` (끝나는 조건: ${r.end_condition})` : ""}`;
+
+// 대화로 채우는 프로필 두 값의 지금 상태. 모르는 값을 그대로 드러내 추출 호출이
+// 무엇을 찾아야 하는지 알게 하고, 이미 아는 값은 다시 쓰지 않게 한다.
+const userProfileLines = (chatId: string): string => {
+  const p = getUserProfile(chatId);
+  return [
+    `- 하는 일: ${p.job ?? "(모름)"}`,
+    `- 사는 지역: ${p.region ?? "(모름)"}`,
+  ].join("\n");
+};
 
 const relationshipLines = (r: RelationshipRow | undefined): string => {
   if (!r) return "";
@@ -296,6 +317,7 @@ export const gatherNightlyInput = (
       .map(ongoingLine)
       .join("\n"),
     relationship: relationshipLines(getRelationship(character.id)),
+    userProfile: userProfileLines(character.chat_id),
     todayNotes: getTodayNotes(character.id, `${diaryDate} 05:00:00`)
       .filter((n) => n.created_at < `${diaryNext} 05:00:00`)
       .map((n) => `[${n.created_at.slice(11, 16)}] ${n.note}`),
@@ -348,6 +370,7 @@ const applyNightlyTxn = db.transaction(
 
     const ex = out.extract;
     let memCount = 0;
+    let profileFilled: string[] = [];
     const skippedKeys: string[] = [];
     if (ex) {
       // 같은 키를 다시 쓸 때 모델이 생략한 추가 정보(어떤 사이·만나는 결 등)가
@@ -416,6 +439,23 @@ const applyNightlyTxn = db.transaction(
         );
       }
 
+      // 상대 프로필 — 대화로 채우는 두 값(하는 일·사는 지역). 이미 아는 값과 같으면 건너뛰고,
+      // 빈 값은 기존 값을 덮지 않는다(saveUserProfile이 한 번 더 막는다).
+      const curProfile = getUserProfile(g.chatId);
+      const job = ex.user_profile?.job?.trim();
+      const region = ex.user_profile?.region?.trim();
+      const nextProfile = {
+        job: job && job !== curProfile.job ? job : undefined,
+        region: region && region !== curProfile.region ? region : undefined,
+      };
+      if (nextProfile.job || nextProfile.region) {
+        saveUserProfile(g.chatId, nextProfile, ts);
+        profileFilled = [
+          nextProfile.job ? "하는 일" : "",
+          nextProfile.region ? "사는 곳" : "",
+        ].filter(Boolean);
+      }
+
       for (const s of ex.schedules ?? [])
         if (s.date && s.content)
           addSchedule(
@@ -474,7 +514,7 @@ const applyNightlyTxn = db.transaction(
       }
     }
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${memCount ? `, 기억 ${memCount}건` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${memCount ? `, 기억 ${memCount}건` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
@@ -592,6 +632,9 @@ ${g.ongoing || "(없음)"}
 [상대와의 관계 — 지금 값]
 ${g.relationship || "(이제 막 시작한 사이)"}
 
+[상대 프로필 — 지금 값]
+${g.userProfile}
+
 [이미 있는 키 — 같은 주제는 반드시 이 키를 그대로 다시 쓴다 (항목 owner 영역/무엇)]
 ${keyLines || "(없음)"}
 
@@ -611,7 +654,7 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"stage":"지금 어떤 사이","speech_note":"말투의 결","address_terms":"서로 부르는 말","texture":"관계의 결","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지"}]}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"stage":"지금 어떤 사이","speech_note":"말투의 결","address_terms":"서로 부르는 말","texture":"관계의 결","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지"}]}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.
@@ -624,6 +667,11 @@ memories 규칙:
 - user_knows: '나'(char) 쪽 기억에만 — 이 사실을 상대가 아는가.
 
 relationship 규칙: 이 하루로 실제 달라진 항목만 넣는다 (넣은 항목만 갱신되고, 나머지는 그대로 남는다). 각 항목은 짧은 서술로. 존댓말·반말 같은 말투 값은 여기서 바꾸지 않는다. 달라진 게 없으면 relationship은 null.
+user_profile 규칙:
+- 상대가 하는 일·사는 지역이 대화에서 분명히 드러났을 때만 넣는다. 어림짐작으로 채우지 않고, 확실하지 않으면 비워 둔다.
+- 위 [상대 프로필 — 지금 값]에 이미 있는 값과 같으면 넣지 않는다. 두 값 다 그대로면 user_profile은 null.
+- 값은 짧게 — 하는 일은 직업 한 덩어리(예: 중학교 교사), 사는 지역은 시·구 정도(예: 서울 마포구). 문장으로 쓰지 않는다.
+- 여기 넣은 값은 프롬프트에 늘 들어간다. 같은 내용을 memories에 또 넣지 않고, 이야기가 붙는 것(회사를 옮긴 사정, 동네에서 자주 가는 곳 같은)만 memories로 남긴다.
 schedules 규칙: 기준 날짜로 환산 가능한 날짜만. 위 정체성의 직업·생활과 어긋나는 날짜면 제외한다.`;
 };
 

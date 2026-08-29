@@ -1,6 +1,7 @@
 // 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 // 입력 형식: {"characterId": n, "output": {"entry": {...},
-//            "extract": {"memories":[...], "relationship":{...}|null, "schedules":[...]}|null,
+//            "extract": {"memories":[...], "relationship":{...}|null,
+//                        "user_profile":{"job"?,"region"?}|null, "schedules":[...]}|null,
 //            "plan": {...}|null, "send": {"window_start","window_end","text","kind"?}|null,
 //            "arcs": {...}|null, "rhythm": [...]|null}}
 // 사용: cat out.json | docker exec -i random-ai-companion npx tsx src/tools/nightly-write.ts

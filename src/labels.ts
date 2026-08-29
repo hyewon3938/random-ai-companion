@@ -81,6 +81,7 @@ export const SPEECH_LEVEL_NAME: Record<SpeechLevel, string> = {
 export type CallPurpose =
   | "reply"
   | "hold"
+  | "tags"
   | "day_plan"
   | "life_plan"
   | "arc"
@@ -100,6 +101,7 @@ export type CallPurpose =
 export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
   reply: "답장",
   hold: "붙잡기 판정",
+  tags: "주제 고르기",
   day_plan: "하루 각본",
   life_plan: "월 리듬",
   arc: "아크",

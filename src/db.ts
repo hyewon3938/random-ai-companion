@@ -287,7 +287,7 @@ const TABLES: Record<string, string> = {
   created_at TEXT NOT NULL`,
 
   // 모델 호출 원본. 무엇을 넣었고 무엇이 나왔는지를 그대로 남겨, 답이 이상할 때 그 호출의
-  // 프롬프트를 열어 볼 수 있게 한다. 판단 근거(검색한 태그와 기억, 답장 텀, 다듬기 전후)는
+  // 프롬프트를 열어 볼 수 있게 한다. 판단 근거(검색한 태그와 기억, 답장 텀, 말풍선 수)는
   // 호출 시점 값으로 context_json에 붙인다 — 기억 검색은 꺼낸 기록을 남기는 쓰기 동작이라
   // 나중에 같은 검색을 다시 돌려 재현할 수 없다.
   //
@@ -1474,7 +1474,7 @@ export const recordLlmCall = (call: LlmCallInput): number => {
   return Number(info.lastInsertRowid);
 };
 
-/** 호출 행에 그때의 판단 근거를 붙인다 — 검색한 태그와 기억, 답장 텀, 다듬기 전후. */
+/** 호출 행에 그때의 판단 근거를 붙인다 — 검색한 태그와 기억, 답장 텀, 말풍선 수. */
 export const setCallContext = (callId: number, context: unknown): void => {
   db.prepare(`UPDATE llm_calls SET context_json = ? WHERE id = ?`).run(
     JSON.stringify(context),
@@ -1517,6 +1517,45 @@ export const pruneLlmCalls = (
     )
     .run().changes;
   return { calls, blobs };
+};
+
+// 게시함 보관 기간. 지나면 행을 통째로 지운다 — 이미 올라간 글은 슬랙이 들고 있고, 이 표는
+// 무엇을 올릴지 쌓아 두는 자리라 올리고 난 뒤에는 같은 글을 두 번 올리지 않게 막는 몫만 남는다.
+// 그 몫(dedupe_key)이 필요한 기간은 게시 자리마다 길어야 하루다 — 아침 각본 알림은 오늘 날짜만
+// 보고, 프롬프트 고정 두 덩이는 논리일마다 키가 갈리고, 호출 게시는 llm_calls.traced 표시와
+// 3시간 상한이 막고, 새벽 정리는 그 날짜 일기가 있으면 게시까지 건너뛴다. 하루치를 지워 다시
+// 보내는 tools/retrace.ts가 그보다 뒤 날짜를 볼 수 있어, 여유를 크게 두고 30일로 잡았다.
+export const TRACE_EVENT_RETENTION_DAYS = 30;
+
+// 기간이 지나도 남기는 행. 하나라도 참이면 지우지 않는다 — 뺄 행이 생기면 여기에 한 줄 더한다.
+// 조건은 NULL을 내지 않게 쓴다. NOT (거짓 OR NULL)은 NULL이라 그 행이 조용히 안 지워진다.
+const TRACE_EVENT_KEEP = [
+  // 아직 슬랙에 못 올라간 행. 여기서 지우면 영영 못 올린다.
+  `status = 'pending'`,
+  // 아직 못 올라간 자식이 매달린 부모. 부모를 먼저 지우면 자식이 스레드를 잃고 접힌다.
+  `(thread_key IS NOT NULL
+        AND thread_key IN (SELECT parent_key FROM trace_events
+                            WHERE status = 'pending' AND parent_key IS NOT NULL))`,
+];
+
+/**
+ * 보관 기간이 지난 게시 행을 지운다. 올리지 못한 failed·skipped도 함께 지운다 — 슬랙 설정이
+ * 잘못된 채로 오래 두면 모든 행이 failed가 되므로, 이것만 빼 두면 표가 다시 끝없이 커진다.
+ * 무엇이 왜 실패했는지는 게시를 포기하는 자리에서 로그로 남는다.
+ */
+export const pruneTraceEvents = (
+  days: number = TRACE_EVENT_RETENTION_DAYS,
+): number => {
+  const cutoff = kstDateString(
+    new Date(getKstNow().getTime() - days * 86400000),
+  );
+  return db
+    .prepare(
+      `DELETE FROM trace_events
+        WHERE created_at < ?
+          AND NOT (${TRACE_EVENT_KEEP.join(" OR ")})`,
+    )
+    .run(cutoff).changes;
 };
 
 export const hasUserMessageSince = (chatId: string, since: string): boolean =>
@@ -1622,24 +1661,38 @@ export const saveUserPreferences = (
   ).run(chatId, JSON.stringify(prefs));
 };
 
-// 유저 프로필(성별·나이대). user_preferences(매칭 전용·비주입)와 달리 이건
-// 캐릭터가 상대를 대하는 데 쓰는 공개 정보다. env로 지정하지 않았으면 밤 정리가 대화로 채운다.
+// 캐릭터 프롬프트에 들어가는 유저 프로필. user_preferences(매칭 전용·비주입)와 달리 이건
+// 캐릭터가 상대를 대하는 데 쓰는 공개 정보다. 값이 들어오는 길은 둘로 갈린다 —
+// 성별·나이대는 env(USER_GENDER/USER_AGE_BAND)나 가입 때 받고, 하는 일·사는 지역은
+// 대화에서 분명히 드러나면 새벽 정리가 채운다(nightly.ts 추출 출력의 user_profile).
 // chat_id 기준(교체돼도 유지) — 유저의 정체는 어떤 캐릭터를 만나든 그대로다.
 // 이름은 다루지 않는다 — 호칭을 시스템이 강제하면 자리 잡은 반말을 격식체로 되돌리는 회귀가 났다(2026-07-12).
 export interface StoredUserProfile {
   gender?: string;
   ageBand?: string;
+  job?: string;
+  region?: string;
 }
 
 export const getUserProfile = (chatId: string): StoredUserProfile => {
   const row = db
-    .prepare(`SELECT gender, age_band FROM user_profile WHERE chat_id = ?`)
+    .prepare(
+      `SELECT gender, age_band, job, region FROM user_profile WHERE chat_id = ?`,
+    )
     .get(chatId) as
-    { gender: string | null; age_band: string | null } | undefined;
+    | {
+        gender: string | null;
+        age_band: string | null;
+        job: string | null;
+        region: string | null;
+      }
+    | undefined;
   if (!row) return {};
   return {
     gender: row.gender ?? undefined,
     ageBand: row.age_band ?? undefined,
+    job: row.job ?? undefined,
+    region: row.region ?? undefined,
   };
 };
 
@@ -1686,15 +1739,27 @@ export const saveUserProfile = (
   const cur = getUserProfile(chatId);
   const gender = p.gender?.trim() || cur.gender;
   const ageBand = p.ageBand?.trim() || cur.ageBand;
+  const job = p.job?.trim() || cur.job;
+  const region = p.region?.trim() || cur.region;
   db.prepare(
-    // 이 함수가 맡은 컬럼만 고친다 — REPLACE로 행을 다시 넣으면 온보딩이 채우는
-    // 이름·생년·직업·사는 곳이 같이 지워진다.
-    `INSERT INTO user_profile (chat_id, gender, age_band, updated_at) VALUES (?, ?, ?, ?)
+    // 이 함수가 맡은 컬럼만 고친다 — REPLACE로 행을 다시 넣으면 가입 때 받는
+    // 이름·생년이 같이 지워진다.
+    `INSERT INTO user_profile (chat_id, gender, age_band, job, region, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(chat_id) DO UPDATE SET
        gender = excluded.gender,
        age_band = excluded.age_band,
+       job = excluded.job,
+       region = excluded.region,
        updated_at = excluded.updated_at`,
-  ).run(chatId, gender ?? null, ageBand ?? null, at);
+  ).run(
+    chatId,
+    gender ?? null,
+    ageBand ?? null,
+    job ?? null,
+    region ?? null,
+    at,
+  );
 };
 
 // 마지막 유저 메시지 이후 캐릭터가 먼저 보낸(proactive) 수 — '연속 무응답'을 세어 매달림을 막는다.

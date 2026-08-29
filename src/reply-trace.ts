@@ -6,10 +6,10 @@
 //
 // 한 건이 채널에 남기는 것:
 //   본문   — 무슨 말에 답했는지, 텀이 어떻게 나왔는지, 무엇을 검색해 넣었는지,
-//            모델이 뭐라고 썼고 다듬기가 뭘 고쳤는지
+//            모델이 뭐라고 썼는지
 //   스레드 — 그 호출의 실시간 꼬리 전문(호출마다 달라지는 부분)
 //   스레드 — 발송·폐기 결과(pending.ts가 그때 쌓는다)
-// 하루 종일 같은 앞 두 층은 그날 첫 호출에서 한 번만 올리고, 일간층이 바뀌면 바뀐 줄만 올린다.
+// 하루 종일 같은 앞 두 덩이는 그날 첫 호출에서 한 번만 올리고, 하루 중에 바뀌면 바뀐 줄만 올린다.
 //
 // 새벽 정리 쪽 호출(diary·extract·arc·day_plan·life_plan)은 여기서 건너뛴다 —
 // 구간 3이 이전 값과 함께 올린다. 두 곳이 같은 호출을 올리면 채널이 두 벌로 찬다.
@@ -106,11 +106,25 @@ interface CallContext {
     /** 붙잡기 판정을 물었으면 그 호출 번호. */
     holdCallId?: number | null;
   };
-  gathered?: { activity?: string; blockStart?: string | null };
+  gathered?: {
+    activity?: string;
+    blockStart?: string | null;
+    /** 그 구간에 처음 온 메시지가 답장을 받기까지 기다린 시간. */
+    waitedMs?: number | null;
+  };
+  /**
+   * 도착 대기 — 유저 말이 다 오기를 기다린 시간(waitMs), 첫 메시지가 온 뒤 답장을 만들기
+   * 시작할 때까지 걸린 시간(spanMs), 그동안 도착한 메시지 수(msgs). 답장 텀과 다른 값이다.
+   */
+  arrival?: { waitMs: number; spanMs: number; msgs: number };
   search?: {
     tags?: string[];
-    /** 검색어를 고르며 대조한 태그 수 — 걸린 것이 없을 때 검색이 돌긴 했는지 가른다. */
+    /** 고를 수 있었던 태그 수 — 걸린 것이 없을 때 검색이 돌긴 했는지 가른다. */
     tagPool?: number;
+    /** 검색어를 무엇이 골랐는지 — model이면 짧은 호출, match면 그 호출이 실패해 글자 일치만. */
+    tagBy?: string;
+    /** 주제를 고른 호출 번호. */
+    tagCallId?: number | null;
     memories?: string[];
     oldDiaries?: string[];
     dropped?: string[];
@@ -122,7 +136,6 @@ interface CallContext {
   note?: string | null;
   bubbles?: number;
   bubbleLens?: number[];
-  polished?: ({ before: string; after: string } | null)[];
   dropped?: string;
   /** 첫 답이 비어 다시 부른 호출 번호. */
   retryCallId?: number | null;
@@ -214,6 +227,12 @@ const fmtWait = (ms: number): string => {
   if (ms < 1000) return "바로";
   if (ms < 60_000) return `${Math.round(ms / 1000)}초`;
   const m = Math.floor(ms / 60_000);
+  // 몰아 답장은 몇 시간을 기다리기도 한다 — 분으로만 적으면 크기가 안 잡힌다.
+  if (m >= 60) {
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return rm ? `${h}시간 ${rm}분` : `${h}시간`;
+  }
   const s = Math.round((ms % 60_000) / 1000);
   return s ? `${m}분 ${s}초` : `${m}분`;
 };
@@ -305,15 +324,32 @@ const timingLines = (ctx: CallContext): string[] => {
     if (!ctx.gathered) return [];
     const activity = ctx.gathered.activity ?? "하던 일";
     const start = ctx.gathered.blockStart;
-    return [
+    const out = [
       `*텀* 몰아 답장 — ${esc(activity)} 구간이 끝나 바로 보냈다`,
       `*지금 하는 일* ${esc(start ? `${start} ${activity}` : activity)} — 방금 끝났다`,
     ];
+    const waited = ctx.gathered.waitedMs;
+    if (typeof waited === "number") {
+      const n = ctx.userMsgs ?? 1;
+      out.push(
+        `*쌓인 메시지* ${esc(`${n}통 · 첫 메시지가 온 지 ${fmtWait(waited)} 만에 답한다`)}`,
+      );
+    }
+    return out;
+  }
+  const out: string[] = [];
+  // 도착 대기는 답장 텀 앞에 붙는 시간이다 — 텀만 보면 유저가 기다린 시간과 어긋난다.
+  if (ctx.arrival) {
+    const a = ctx.arrival;
+    const bits = [`${fmtWait(a.waitMs)} 기다림`];
+    if (a.msgs > 1) bits.push(`메시지 ${a.msgs}통`);
+    bits.push(`첫 메시지로부터 ${fmtWait(a.spanMs)}`);
+    out.push(`*도착 대기* ${esc(bits.join(" · "))}`);
   }
   const bits = [`${fmtWait(t.waitMs ?? 0)} 뒤`];
   if (ctx.sendAt) bits.push(`${ctx.sendAt.slice(11, 19)} 발송 예정`);
   if (t.path) bits.push(PATH_NAME[t.path] ?? t.path);
-  const out = [`*텀* ${esc(bits.join(" · "))}`];
+  out.push(`*텀* ${esc(bits.join(" · "))}`);
   out.push(
     `*지금 하는 일* ${t.block ? esc(blockText(t.block)) : "각본에 이 시각 블록이 없다"}`,
   );
@@ -333,14 +369,17 @@ const timingLines = (ctx: CallContext): string[] => {
 const searchLines = (ctx: CallContext): string[] => {
   const s = ctx.search;
   if (!s) return [];
-  // 태그는 코드가 고른다 — 저장된 태그 이름을 이번 발화와 맞춰 보는 방식이라 모델이
-  // 주제를 뽑는 자리가 아니다. 걸린 것이 없을 때도 대조는 돌았다는 걸 개수로 보인다.
-  const pool = s.tagPool ? ` (붙어 있는 태그 ${s.tagPool}개와 대조)` : "";
+  // 태그는 답장을 만들기 전에 짧은 호출이 저장된 이름 중에서 고르고, 글자가 일치하는
+  // 것을 코드가 더한다. 걸린 것이 없을 때도 고를 수 있었던 수를 적어 검색이 돌았다는
+  // 것을 보인다.
+  const pool = s.tagPool ? ` (붙어 있는 태그 ${s.tagPool}개 중)` : "";
   const bits = [
     s.tags?.length
       ? `태그 ${s.tags.join("·")}${pool}`
       : `걸린 태그 없음${pool}`,
   ];
+  if (s.tagBy === "match")
+    bits.push("주제 고르기 실패 — 글자가 일치하는 태그만");
   const found = s.memories?.length ?? 0;
   bits.push(
     found ? `기억 ${found}건 — ${s.memories?.join(" / ")}` : "기억 0건",
@@ -355,15 +394,6 @@ const searchLines = (ctx: CallContext): string[] => {
 
 const outcomeLines = (ctx: CallContext): string[] => {
   const out: string[] = [];
-  if (ctx.polished?.length) {
-    const fixed = ctx.polished.filter(
-      (p): p is { before: string; after: string } => Boolean(p),
-    );
-    for (const p of fixed)
-      out.push(
-        `*다듬기* ${esc(clip(p.before, 120))} → ${esc(clip(p.after, 120))}`,
-      );
-  }
   if (ctx.bubbles)
     out.push(
       `*보낸 말* 말풍선 ${ctx.bubbles}개${ctx.bubbleLens?.length ? ` (${ctx.bubbleLens.join("·")}자)` : ""}`,
@@ -403,6 +433,8 @@ const callsLine = (row: CallRow, ctx: CallContext): string | null => {
   const parts: string[] = [];
   const hold = callBrief(ctx.timing?.holdCallId);
   if (hold) parts.push(`붙잡기 판정 ${hold}`);
+  const picked = callBrief(ctx.search?.tagCallId);
+  if (picked) parts.push(`주제 고르기 ${picked}`);
   parts.push(
     `답장 #${row.id} ${row.created_at.slice(11, 19)} ${shortModel(row.model)}`,
   );
@@ -501,7 +533,7 @@ const renderDraft = (row: CallRow): string => {
 
 // ── 하루 고정 두 덩이 ───────────────────────────────────────────────────
 
-const LAYER_NAME = ["불변층", "일간층"] as const;
+const LAYER_NAME = ["잘 바뀌지 않는 데이터", "하루 동안 같은 데이터"] as const;
 const LAYER_KEY = ["fixed", "daily"] as const;
 
 const prevLayeredCall = (row: CallRow): CallRow | undefined =>
@@ -594,6 +626,35 @@ export const lineDiff = (
     : out.join("\n");
 };
 
+/** 프롬프트를 대괄호 머리글로 갈라 대목 이름 → 본문으로 만든다. 머리글 앞의 글은 이름 없이 담는다. */
+const sectionsOf = (text: string): Map<string, string> => {
+  const out = new Map<string, string>();
+  let name = "";
+  for (const line of text.split("\n")) {
+    const head = /^\[([^\]]+)\]/.exec(line);
+    if (head) name = head[1].split(" — ")[0].trim();
+    out.set(name, out.has(name) ? `${out.get(name)}\n${line}` : line);
+  }
+  return out;
+};
+
+/** 내용이 달라진 대목의 이름. 머리글 없는 앞부분만 달라졌으면 이름을 댈 수 없어 빈 배열. */
+export const changedSections = (before: string, after: string): string[] => {
+  const a = sectionsOf(before);
+  const b = sectionsOf(after);
+  return [...new Set([...a.keys(), ...b.keys()])].filter(
+    (name) => name !== "" && a.get(name) !== b.get(name),
+  );
+};
+
+/** 바뀐 대목 이름을 세 개까지, 못 찾으면 덩이 이름으로. */
+const changeLabel = (names: string[], layer: 0 | 1): string => {
+  if (!names.length) return LAYER_NAME[layer];
+  return names.length > 3
+    ? `${names.slice(0, 3).join(" · ")} 외 ${names.length - 3}곳`
+    : names.join(" · ");
+};
+
 const postLayerChange = (
   row: CallRow,
   layer: 0 | 1,
@@ -615,7 +676,10 @@ const postLayerChange = (
       kind: "prompt_change",
       dedupeKey: key,
       threadKey: key,
-      text: `:pencil2: *${LAYER_NAME[layer]}이 바뀌었다* — ${row.created_at.slice(11, 16)} 호출 #${row.id}부터`,
+      text: `:pencil2: *바뀐 부분 — ${changeLabel(
+        before && after ? changedSections(before, after) : [],
+        layer,
+      )}* · ${row.created_at.slice(11, 16)} 호출 #${row.id}부터`,
     });
     for (const part of chunked(esc(body)))
       recordTraceEvent({

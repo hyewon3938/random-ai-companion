@@ -9,6 +9,8 @@ import {
   db,
   pruneLlmCalls,
   LLM_CALL_RETENTION_DAYS,
+  pruneTraceEvents,
+  TRACE_EVENT_RETENTION_DAYS,
   type CharacterRow,
 } from "./db.js";
 import { runNightly } from "./nightly.js";
@@ -96,8 +98,9 @@ cron.schedule(
   { timezone: "Asia/Seoul" },
 );
 
-// 호출 원본 정리: 하루 한 번. 보관 기간이 지난 호출은 본문 해시와 판단 근거만 지우고
-// 메타는 남긴다. 어느 본문도 가리키지 않게 된 글자는 같이 지운다.
+// 관측 기록 정리: 하루 한 번. 보관 기간이 지난 호출은 본문 해시와 판단 근거만 지우고
+// 메타는 남긴다. 어느 본문도 가리키지 않게 된 글자는 같이 지운다. 슬랙 게시함은 이미 올린
+// 글을 슬랙이 들고 있어 행을 통째로 지우고, 아직 못 올린 것만 남긴다.
 cron.schedule(
   "50 5 * * *",
   () => {
@@ -109,6 +112,15 @@ cron.schedule(
         );
     } catch (e) {
       logErr("[llm] 호출 원본 정리 실패:", e);
+    }
+    try {
+      const events = pruneTraceEvents();
+      if (events)
+        console.log(
+          `[trace] ${TRACE_EVENT_RETENTION_DAYS}일 지난 게시 행 ${events}건을 지웠다`,
+        );
+    } catch (e) {
+      logErr("[trace] 게시함 정리 실패:", e);
     }
   },
   { timezone: "Asia/Seoul" },

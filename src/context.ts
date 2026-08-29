@@ -18,7 +18,6 @@ import {
 import {
   alwaysIncluded,
   orderedIdentity,
-  tagSearch,
   searchMemories,
   memoryKeyOf,
   searchTaggedRefs,
@@ -26,6 +25,7 @@ import {
   memoryLine,
   todayNotes,
 } from "./memory.js";
+import type { TagPick, TagPicker } from "./tag-pick.js";
 import { RECENT_DIARY_DAYS, SEARCH_LIMIT } from "./thresholds.js";
 import {
   kstDescription,
@@ -355,8 +355,11 @@ const nowSection = (
 export interface BuildTrace {
   /** 유저 발화에서 고른 검색어. */
   tags: string[];
-  /** 검색어를 고르며 대조한 태그 수 — 걸린 것이 없을 때 검색이 돌긴 했는지 가른다. */
+  /** 고를 수 있었던 태그 수 — 걸린 것이 없을 때 검색이 돌긴 했는지 가른다. */
   tagPool: number;
+  /** 검색어를 무엇이 골랐는지와 그 모델 호출 번호. */
+  tagBy?: TagPicker;
+  tagCallId?: number | null;
   /** 꺼내 넣은 기억 — 항목·주인·키. */
   memories: string[];
   /** 함께 꺼낸 옛 일기 날짜. */
@@ -366,8 +369,8 @@ export interface BuildTrace {
 }
 
 export interface BuildOptions {
-  /** 태그 검색의 재료 — 답장이면 유저의 이번 발화. 추가 모델 호출 없이 코드가 태그를 고른다. */
-  searchText?: string;
+  /** 이번 발화로 고른 검색 태그 — 답장 경로가 pickTags로 먼저 고른 결과를 넘긴다. */
+  pick?: TagPick;
   /** 상황 문단 — 선톡 문안, 불가 구간 끝 몰아 답장, 배웅 답이 쓴다. 프롬프트 맨 끝에 붙는다. */
   situation?: string;
   /** 넘겨 주면 검색 결과를 여기에 적어 돌려준다(호출 기록용). */
@@ -430,7 +433,7 @@ export const buildSystemBlocks = (
     .join("\n\n");
 
   // 꼬리 — 이번 발화의 태그로 검색한 기억·옛 일기와 오늘 메모, 그리고 지금 이 순간의 사실.
-  const { tags, pool: tagPool } = tagSearch(characterId, opts.searchText ?? "");
+  const { tags, pool: tagPool } = opts.pick ?? { tags: [], pool: 0 };
   // 상한에 걸려 빠진 후보도 받아 둔다 — 넣은 것만 봐서는 왜 그 기억이 안 들어갔는지 알 수 없다.
   const dropped: string[] = [];
   const found = tags.length
@@ -459,6 +462,8 @@ export const buildSystemBlocks = (
   if (opts.trace) {
     opts.trace.tags = tags;
     opts.trace.tagPool = tagPool;
+    opts.trace.tagBy = opts.pick?.by ?? "none";
+    opts.trace.tagCallId = opts.pick?.callId ?? null;
     opts.trace.memories = found.map(memoryKeyOf);
     opts.trace.oldDiaries = oldDiaries.map((d) => d.date);
     opts.trace.dropped = dropped;
