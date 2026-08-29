@@ -449,6 +449,8 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 
 키·인덱스: PK `id`, 인덱스 `(status, date)`
 
+유저가 이틀째 답이 없어 아침 대신 점심에 보내는 날도 `morning` 행으로 저장하고 window_start·window_end만 점심 시간대로 잡는다. 보내는 문장과 준비 시점이 아침 선톡과 같아서 종류를 하나 더 만들면 저장값만 늘고 분기가 두 벌이 된다. 슬랙 기록에서는 llm_calls.purpose가 `lunch`로 갈라 준다.
+
 **recovery_marks** — 대화방별로 답장을 마친 마지막 유저 메시지 시각. pending_replies 행이 생기기 전에 멈춘 경우를 부팅 때 잡아냄
 
 | 컬럼 | 타입 | 필수 | 설명 |
@@ -495,7 +497,7 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | id | INTEGER | O | PK |
 | character_id | INTEGER | | FK characters.id |
 | chat_id | TEXT | | |
-| purpose | TEXT | O | 어느 자리의 호출인가 — `reply` 답장 · `hold` 붙잡기 판정 · `day_plan` 하루 각본 · `life_plan` 월 리듬 · `arc` 흐름 · `diary` 일기 · `extract` 기억 정리 · `genesis` 캐릭터 생성 · `bible` 옛 랜덤 생성 · 선톡 여섯(`morning` · `reconnect` · `catchup` · `goodnight` · `away` · `comeback`) · `tool` 개발 도구 |
+| purpose | TEXT | O | 어느 자리의 호출인가 — `reply` 답장 · `hold` 붙잡기 판정 · `day_plan` 하루 각본 · `life_plan` 월 리듬 · `arc` 흐름 · `diary` 일기 · `extract` 기억 정리 · `genesis` 캐릭터 생성 · `bible` 옛 랜덤 생성 · 선톡 일곱(`morning` · `lunch` · `reconnect` · `catchup` · `goodnight` · `away` · `comeback`) · `tool` 개발 도구 |
 | model | TEXT | O | |
 | max_tokens | INTEGER | | 출력 상한 |
 | attempt | INTEGER | O | 같은 자리에서 몇 번째로 부른 호출인가. 응답 형식이 어긋나 다시 부르면 attempt가 2인 행이 따로 생긴다 |
@@ -602,7 +604,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | 각본 블록의 활동 성격 | `personal` 개인 · `social` 사회 · `official` 공적 |
 | arcs.period 기간 | `year` 올해 · `season` 계절 · `month` 달 · `week` 주 |
 | day_plans.made_by | `nightly` 새벽 정리 · `ondemand` 대화 중 만든 임시 각본 |
-| scheduled_messages.kind 선톡 종류 | `morning` 아침 선톡 · `checkin` 안부 선톡 |
+| scheduled_messages.kind 선톡 종류 | `morning` 아침 선톡, 점심에 보내는 날도 이 값 · `checkin` 안부 선톡 |
 | scheduled_messages.status | `pending` 대기 · `sent` 발송 · `skipped` 폐기 |
 | pending_replies.status | `waiting` 대기 · `sent` 발송 · `superseded` 새 메시지로 폐기 · `failed` 실패 |
 | pending_replies.kind | `reply` 답장 · `recover` 복구 발송 · `wake` 구간 끝 깨우기 |
