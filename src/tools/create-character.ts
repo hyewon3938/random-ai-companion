@@ -35,7 +35,7 @@ for (const c of counts) console.log(`  ${c.item_type}: ${c.n}`);
 
 const rel = db
   .prepare(
-    `SELECT stage, speech_level, speech_note, address_terms, texture, history, feelings
+    `SELECT stage, speech_level, speech_note, address_terms, history, feelings
      FROM relationships WHERE character_id = ?`,
   )
   .get(id) as Record<string, string | null> | undefined;
