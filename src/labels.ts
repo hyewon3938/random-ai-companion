@@ -24,6 +24,14 @@ export const ACTIVITY_CATEGORY_NAME: Record<ActivityCategory, string> = {
   official: "공적",
 };
 
+/** 각본 블록의 출처 — 이 블록이 무엇을 그날치로 펼친 사본인가. 원본이 있는 블록에만 붙는다. */
+export type BlockSource = "schedule" | "routine";
+
+export const BLOCK_SOURCE_NAME: Record<BlockSource, string> = {
+  schedule: "예정된 일",
+  routine: "매주 루틴",
+};
+
 /** 기억 한 건이 들어가는 저장 항목. 주인(캐릭터·유저)과 짝지어 여섯 조합이 된다. */
 export type MemoryItemType = "fact" | "ongoing" | "person";
 
@@ -109,8 +117,8 @@ export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
   tool: "개발 도구",
 };
 
-// 각본 블록의 두 태그는 plan_json 안에 있어 DB CHECK가 닿지 않는다. 저장된 옛 각본과 외부
-// 생성분에는 한글 값이 남아 있으므로, 읽는 자리에서 식별자로 되돌린다.
+// 각본 블록의 닫힌 목록 값(답장 여건·활동 성격·출처)은 plan_json 안에 있어 DB CHECK가 닿지
+// 않는다. 저장된 옛 각본과 외부 생성분에는 한글 값이 남아 있으므로, 읽는 자리에서 식별자로 되돌린다.
 const RESPONSIVENESS_BY_TEXT: Record<string, Responsiveness> = {
   instant: "instant",
   intermittent: "intermittent",
@@ -130,11 +138,21 @@ const ACTIVITY_CATEGORY_BY_TEXT: Record<string, ActivityCategory> = {
   공적: "official",
 };
 
+const BLOCK_SOURCE_BY_TEXT: Record<string, BlockSource> = {
+  schedule: "schedule",
+  routine: "routine",
+  "예정된 일": "schedule",
+  "매주 루틴": "routine",
+};
+
 export const toResponsiveness = (v: unknown): Responsiveness | null =>
   typeof v === "string" ? (RESPONSIVENESS_BY_TEXT[v.trim()] ?? null) : null;
 
 export const toActivityCategory = (v: unknown): ActivityCategory | null =>
   typeof v === "string" ? (ACTIVITY_CATEGORY_BY_TEXT[v.trim()] ?? null) : null;
+
+export const toBlockSource = (v: unknown): BlockSource | null =>
+  typeof v === "string" ? (BLOCK_SOURCE_BY_TEXT[v.trim()] ?? null) : null;
 
 // 유저가 붙잡아 일정을 접었을 때 오늘 실제 기록에 남기는 결말. 코드가 적고 프롬프트가 그대로 읽는다.
 // day_actuals.outcome은 자유 서술이라 CHECK가 없다 — 코드가 판정에 쓰는 두 값만 여기서 고정한다.

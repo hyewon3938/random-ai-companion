@@ -11,6 +11,7 @@ import {
   listMemoryItems,
   type DaySeed,
   type MemoryRow,
+  type ScheduleRow,
 } from "./db.js";
 import {
   alwaysIncluded,
@@ -28,8 +29,10 @@ import {
 import {
   toResponsiveness,
   toActivityCategory,
+  toBlockSource,
   type Responsiveness,
   type ActivityCategory,
+  type BlockSource,
 } from "./labels.js";
 
 // 하루 각본: 시스템이 캐릭터의 하루를 시간 블록으로 미리 짜둔다.
@@ -48,6 +51,13 @@ export interface PlanBlock {
   //   공적 = 미룰 수 없는 공적 의무(업무·회의·시험·발표·공적 회식). 접을 수 없다.
   // 옵셔널 — 없으면 activity로 추론(blockCategory). 구 각본·외부 생성분과 호환.
   category?: ActivityCategory;
+  // 출처: 이 블록이 어느 원본을 그날치로 펼친 것인가.
+  //   schedule = 예정된 일 한 건(source_id가 그 행 번호) / routine = 매주 루틴(되짚을 행이 없어 번호 없음)
+  // 유저가 붙잡을 때 붙잡기 판정이 이 값을 따라 원본 일정을 읽고, 유저가 아는 일인지 본다.
+  // 옵셔널 — 어느 원본에서도 나오지 않은 블록(잠·식사·그날 갑자기 생긴 일)에는 붙지 않고,
+  // 필드가 없는 구 각본·외부 생성분과도 호환된다(없으면 무시).
+  source?: BlockSource;
+  source_id?: number; // source="schedule"인 블록에만. schedules.id
 }
 
 // 공적 의무(못 미룸, 대개 폰도 불가) 키워드.
@@ -82,6 +92,11 @@ export const isAwayUnavail = (b: PlanBlock): boolean =>
 
 // trace.ts가 슬랙에 각본 생성 프롬프트를 올릴 때도 이 시스템 문장을 함께 보여준다.
 export const PLAN_SYSTEM = `너는 한 인물의 하루 흐름을 짜는 작가다. 과장 없이, 실제 그 직업과 성격의 사람이 보낼 법한 평범한 하루를 시간 블록으로 만든다. 루틴이 기본이고 변화는 잔잔하게 준다.`;
+
+// 그날 확정 일정 한 줄. 줄 앞에 그 일정의 행 번호를 붙인다 — 생성이 그 줄을 블록으로 펼치면
+// source_id에 이 번호를 그대로 적어, 나중에 블록에서 원본 일정을 되짚을 수 있다.
+const scheduleLine = (s: ScheduleRow): string =>
+  `- [${s.id}] ${s.time_hint ? `${s.time_hint} ` : ""}${s.content}`;
 
 // 며칠에 걸쳐 하는 일 한 줄. 새벽 정리가 같은 항목을 프롬프트에 넣는 방식(nightly.ts)을 따르되,
 // 각본에는 캐릭터 쪽 항목만 들어가서 누구 일인지 적을 자리가 없다.
@@ -124,7 +139,7 @@ ${persona || "(없음)"}
 [오늘의 컨디션 시드 — 미리 정해진 오늘의 몸 상태·기상 성향]
 ${seedLine(seed)}
 
-[이 날의 확정 일정 — 있으면 반드시 하루에 자연스럽게 반영 (advance_known=true)]
+[이 날의 확정 일정 — 있으면 반드시 하루에 자연스럽게 반영 (advance_known=true). 줄 앞의 [번호]는 그 일정의 번호다]
 ${schedules || "(없음)"}
 ${ongoingSection(ongoing)}
 [삶의 큰 흐름 — 하루의 결에 은은하게 반영]
@@ -161,19 +176,54 @@ ${diary || "(없음)"}
   - "official"(공적) = 미룰 수 없는 공적 의무(회사 업무·회의·시험·발표·공적 회식). 미룰 수 없다. 업무·공적 회식은 intermittent로 답할 수 있으나, 회의·시험·발표는 폰을 볼 수 없어 "unavailable".
   - 잠·기상·준비는 "personal".
 
-[JSON 형식 — 이 구조 그대로]
-{"date":"${date}","blocks":[{"start":"00:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":false,"category":"social"},{"start":"19:00","end":"20:00","activity":"운동","responsiveness":"unavailable","advance_known":false,"category":"personal"}, ...]}
-위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다.`;
+- 각 블록의 source = 이 블록이 어느 원본에서 나왔는가. 원본이 있는 블록에만 적는다.
+  - 위 [이 날의 확정 일정]의 한 줄을 그날치로 펼친 블록이면 "schedule", source_id에 그 줄 앞 [번호]를 그대로 적는다. 한 일정이 두 블록으로 쪼개졌으면 두 블록에 같은 번호를 적는다.
+  - 위 [생활 리듬]의 매주 루틴에서 나온 블록이면 "routine". 되짚을 원본 행이 없으니 source_id는 적지 않는다.
+  - 어느 쪽도 아닌 블록(잠·식사·이동·그날 갑자기 생긴 일)에는 두 값을 적지 않는다.
 
-// 두 태그는 plan_json 안에 있어 DB가 값을 검사해 주지 않는다. 생성이 한글 이름으로 답하거나
-// 모르는 값을 내면 여기서 식별자로 되돌리고, 그래도 못 알아보면 무난한 쪽으로 채운다.
-const normalize = (plan: DayPlan): DayPlan => ({
+[JSON 형식 — 이 구조 그대로]
+{"date":"${date}","blocks":[{"start":"00:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"unavailable","advance_known":false,"category":"official"},{"start":"19:00","end":"20:00","activity":"운동","responsiveness":"unavailable","advance_known":true,"category":"personal","source":"routine"}, ...]}
+위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다. source_id의 12도 예시이니, 실제 번호는 위 [이 날의 확정 일정]에 적힌 것을 쓴다.`;
+
+// 행 번호로 쓸 수 있는 값인가. 생성이 숫자를 따옴표에 넣어 답하는 일이 있어 문자열도 받는다.
+const toScheduleId = (v: unknown): number | null => {
+  const n = typeof v === "string" ? Number(v.trim()) : v;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : null;
+};
+
+// 출처 두 칸을 함께 판정한다 — 둘은 한 쌍이라 따로 살아남으면 뜻이 없다.
+// "schedule"은 되짚을 행 번호가 있어야 원본을 찾을 수 있으니 번호가 없으면 출처째로 버리고,
+// "routine"은 되짚을 행이 없는 게 정상이라 번호 없이 남긴다.
+const normalizeSource = (
+  b: PlanBlock,
+): Pick<PlanBlock, "source" | "source_id"> => {
+  const source = toBlockSource(b.source);
+  if (source === "schedule") {
+    const id = toScheduleId(b.source_id);
+    return id === null ? {} : { source, source_id: id };
+  }
+  if (source === "routine") return { source };
+  return {};
+};
+
+// 세 값(답장 여건·활동 성격·출처)은 plan_json 안에 있어 DB가 값을 검사해 주지 않는다. 생성이
+// 한글 이름으로 답하거나 모르는 값을 내면 여기서 식별자로 되돌리고, 그래도 못 알아보면
+// 앞 둘은 무난한 쪽으로 채우고 출처는 지운다(없어도 되는 값이라 아무거나 채우면 거짓이 된다).
+// 내보내는 이유: 모델을 부르지 않고도 이 방어선을 검증할 수 있어야 한다. 부르는 곳은 아직
+// ensureTodayPlan 한 곳뿐이다.
+export const normalizePlan = (plan: DayPlan): DayPlan => ({
   ...plan,
-  blocks: (plan.blocks ?? []).map((b) => ({
-    ...b,
-    responsiveness: toResponsiveness(b.responsiveness) ?? "intermittent",
-    category: toActivityCategory(b.category) ?? blockCategory(b),
-  })),
+  blocks: (plan.blocks ?? []).map((b) => {
+    // 출처 두 칸은 스프레드로 딸려 오면 모르는 값이 그대로 살아남는다 —
+    // 빼 두고 판정 결과만 얹는다.
+    const { source: _source, source_id: _sourceId, ...rest } = b;
+    return {
+      ...rest,
+      responsiveness: toResponsiveness(b.responsiveness) ?? "intermittent",
+      category: toActivityCategory(b.category) ?? blockCategory(b),
+      ...normalizeSource(b),
+    };
+  }),
 });
 
 // 각본 생성 프롬프트 조립 — 재료는 전부 DB에서 읽는다: 정체성(생활/잠·생활/매주 루틴 포함),
@@ -182,11 +232,12 @@ const normalize = (plan: DayPlan): DayPlan => ({
 export const buildPlanPrompt = (characterId: number, date: string): string => {
   const identity = orderedIdentity(alwaysIncluded(characterId));
   const seed = getDaySeed(characterId, date);
-  // 일정 슬롯에서 이 날의 캐릭터 예정을 가져와 각본에 반영한다
+  // 일정 슬롯에서 이 날의 캐릭터 예정을 가져와 각본에 반영한다. 한 줄에 하나씩 —
+  // 줄마다 앞에 붙는 행 번호가 슬래시로 이어 붙이면 어느 일정 것인지 흐려진다.
   const todays = getUpcomingSchedules(characterId, date)
     .filter((s) => s.date === date && s.owner === "char")
-    .map((s) => `${s.time_hint ? `${s.time_hint} ` : ""}${s.content}`)
-    .join(" / ");
+    .map(scheduleLine)
+    .join("\n");
   // 며칠에 걸쳐 이어 하는 일. 이걸 각본이 모르면 캐릭터가 여러 날에 나눠 하는 일이 하루
   // 흐름에 한 번도 드러나지 않는다. 캐릭터 쪽 항목만, 최근에 손댄 것부터 상한까지.
   const ongoing = listMemoryItems(characterId, "ongoing")
@@ -249,7 +300,7 @@ export const ensureTodayPlan = async (
   saveDayPlan(
     characterId,
     date,
-    JSON.stringify(normalize(plan)),
+    JSON.stringify(normalizePlan(plan)),
     nightly ? "nightly" : "ondemand",
   );
 };
