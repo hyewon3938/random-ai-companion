@@ -6,7 +6,8 @@
 // 게시 기록은 반영 트랜잭션 바깥에서 남긴다 — 게시가 실패해도 새벽 정리는 되돌아가지 않는다.
 // 이전 값과 새 값을 나란히 보여주려고, 트랜잭션을 부르기 전에 출력이 쓸 키의 행을 미리 읽어 둔다.
 //
-//   본문   — 반영 요약, 그날 오늘 메모, 각본과 달라진 하루, 관계 갱신(이전→새 값), 새 일정
+//   본문   — 반영 요약, 그날 오늘 메모, 각본과 달라진 하루, 관계 갱신(이전→새 값),
+//            상대 프로필 갱신, 새 일정
 //   스레드 — 기억 신규·덮어쓰기, 일기 전문, 오늘 선톡 문안과 발송 창, 새벽 정리가 부른 호출 원문
 //
 // 게시를 위한 모델 호출은 없다. 전부 DB 값과 코드 계산이다.
@@ -16,9 +17,11 @@ import {
   getBlob,
   getRelationship,
   getTags,
+  getUserProfile,
   listMemoryItems,
   type MemoryRow,
   type RelationshipRow,
+  type StoredUserProfile,
 } from "./db.js";
 import {
   chunked,
@@ -118,6 +121,7 @@ interface MemorySnap {
 export interface NightlySnapshot {
   memories: Map<string, MemorySnap>;
   relationship: RelationshipRow | undefined;
+  profile: StoredUserProfile;
 }
 
 /**
@@ -148,7 +152,11 @@ export const beforeNightlyTrace = (
           tags: getTags("memory", r.id),
         });
       }
-    return { memories, relationship: getRelationship(g.characterId) };
+    return {
+      memories,
+      relationship: getRelationship(g.characterId),
+      profile: getUserProfile(g.chatId),
+    };
   } catch (err) {
     console.error("[trace] 새벽 정리 이전 값 읽기 실패:", err);
     return null;
@@ -200,6 +208,32 @@ const relationshipBlocks = (
   return out;
 };
 
+// 대화로 채우는 두 값만 본다 — 성별·나이대는 새벽 정리가 손대지 않는다.
+const PROFILE_FIELDS: [keyof StoredUserProfile, string][] = [
+  ["job", "하는 일"],
+  ["region", "사는 곳"],
+];
+
+const profileBlocks = (
+  before: StoredUserProfile,
+  after: StoredUserProfile,
+): string[] => {
+  const out: string[] = [];
+  for (const [f, name] of PROFILE_FIELDS) {
+    const b = before[f] ?? "";
+    const a = after[f] ?? "";
+    if (b === a) continue;
+    out.push(
+      [
+        `*${name}*`,
+        `> 이전: ${esc(b || "(모르던 값)")}`,
+        `> 새 값: ${esc(a || "(비움)")}`,
+      ].join("\n"),
+    );
+  }
+  return out;
+};
+
 const SILENCE_NOTE: Record<NightlyGathered["silenceTier"], string | null> = {
   normal: null,
   quiet: "각본·선톡은 만들지 않았다 — 일기·시드만",
@@ -223,6 +257,7 @@ const headText = (
   out: NightlyOutput,
   snap: NightlySnapshot,
   after: RelationshipRow | undefined,
+  afterProfile: StoredUserProfile,
   result: string,
 ): string => {
   const parts: string[] = [
@@ -246,6 +281,9 @@ const headText = (
   const rel = relationshipBlocks(snap.relationship, after);
   if (rel.length)
     parts.push([`*관계 갱신* ${rel.length}항목`, ...rel].join("\n"));
+  const prof = profileBlocks(snap.profile, afterProfile);
+  if (prof.length)
+    parts.push([`*상대 프로필 갱신* ${prof.length}항목`, ...prof].join("\n"));
   const schedules = (out.extract?.schedules ?? [])
     .filter((s) => s.date && s.content)
     .map(
@@ -544,13 +582,14 @@ export const afterNightlyTrace = (
   try {
     const parentKey = `nightly:${g.characterId}:${g.diaryDate}`;
     const after = getRelationship(g.characterId);
+    const afterProfile = getUserProfile(g.chatId);
     db.transaction(() => {
       recordTraceEvent({
         characterId: g.characterId,
         kind: "nightly",
         dedupeKey: parentKey,
         threadKey: parentKey,
-        text: headText(g, out, snap, after, result),
+        text: headText(g, out, snap, after, afterProfile, result),
       });
       memoryChild(g, out, snap, parentKey);
       diaryChild(g, parentKey);

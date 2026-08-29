@@ -15,8 +15,9 @@ export const config = {
   // (밤 정리는 기본적으로 외부 scheduled task(구독)가 수행하고, 이 모델은 API 폴백 경로에서 쓰인다)
   modelDeep: process.env.MODEL_DEEP ?? "claude-opus-4-8",
   dbPath: process.env.DB_PATH ?? "./data/companion.db",
-  // 유저 프로필(성별·나이대) — 매칭/온보딩 전 단계라 env로 미리 주입할 수 있다(단일 유저 PoC).
-  // 안 넣으면 밤 정리가 대화로 학습한다. 이름은 다루지 않는다(호칭은 대화에 맡긴다 — user-profile.ts 참고).
+  // 유저 프로필 중 성별·나이대 — 가입 절차 전 단계라 env로 미리 주입할 수 있다(단일 유저 PoC).
+  // 안 넣으면 미상으로 두고 대화로 알아간다. 하는 일·사는 지역은 env가 없고, 대화에서 드러나면
+  // 새벽 정리가 채운다. 이름은 다루지 않는다(호칭은 대화에 맡긴다 — user-profile.ts 참고).
   userProfile: {
     gender: process.env.USER_GENDER?.trim() || undefined,
     ageBand: process.env.USER_AGE_BAND?.trim() || undefined,
