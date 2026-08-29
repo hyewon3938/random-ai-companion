@@ -1,6 +1,6 @@
 # random-ai-companion — 작업 가이드
 
-나와 같은 시간을 살고 먼저 물어봐주는 AI 대화 상대 (만남은 카드 한 장으로 시작). 컨셉·가설·설계 총론은 [README.md](README.md), 규모와 비용 검토는 [scaling.md](scaling.md)가 단일 소스다.
+나와 같은 시간을 살고 먼저 물어봐주는 AI 대화 상대 (만남은 카드 한 장으로 시작). 컨셉·가설·설계 총론은 [README.md](README.md), 규모와 비용 검토는 [scaling.md](scaling.md), 실행 환경과 외부 서비스 구성은 [infra.md](infra.md)가 단일 소스다.
 
 세부 설계 문서는 `docs/` 아래에 두고 커밋하지 않는다(gitignored). 타겟·어필 포인트는 `positioning.md`, 설계 논리·층은 `architecture.md`, 캐릭터 속성 체계는 `character-design.md`, 수집·생성 데이터 카탈로그는 `data-model.md`. 로컬 전용 컨텍스트는 `LOCAL-CONTEXT.md` — 새 세션은 그 파일부터 읽을 것.
 
