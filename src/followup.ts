@@ -4,10 +4,11 @@ import {
   db,
   getActiveCharacter,
   lastMessage,
+  lastUserTs,
   proactiveCountToday,
+  proactiveKindCountToday,
   proactiveSinceLastUser,
   recordSendFailure,
-  PROACTIVE_DAILY_MAX,
   type CharacterRow,
 } from "./db.js";
 import {
@@ -18,33 +19,27 @@ import {
 } from "./bot.js";
 import { buildSystemBlocks, currentBlock } from "./context.js";
 import { proactiveAllowed } from "./proactive-policy.js";
-import { kstClock, logicalDayStartTs } from "./kst.js";
+import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
+import {
+  GOODNIGHT_SILENCE_MS,
+  GOODNIGHT_WINDOW,
+  PROACTIVE_DAILY_MAX,
+  RECENT_USER_MS,
+} from "./thresholds.js";
 
-// 침묵 팔로업: 대화 중 유저가 한동안 조용하고, 지금 캐릭터의 각본이 '자기 삶을 한 마디 흘릴 만한
-// 전환점'이면(밥 먹으러 가기·일 마치기·운동 등), 캐릭터가 먼저 근황을 남긴다. 밤에 계획된 아침 안부와 다른 채널.
-// 그 순간의 각본을 봐야 하므로 판단·문안을 LLM이 한다. 매달리지 않도록 총량·간격을 강하게 제한.
+// 침묵 팔로업: 대화 중 유저가 네 시간 답이 없으면 캐릭터가 지금 무엇을 하는지 한 마디 남긴다
+// (근황 선톡). 재촉하지 않고 자기 근황만 전해 유저가 다시 말 걸 자리를 만들어 두는 것이라,
+// 하루에 한 통만 보내고 그 뒤로도 답이 없으면 그날은 물러난다.
+//
+// 자정을 넘겨 대화하다 유저가 자겠다는 말 없이 한 시간 답이 없으면 잠든 것으로 보고 밤 인사
+// 선톡을 한 통 남긴다. 두 종류 모두 그 순간의 각본을 봐야 하므로 문안은 모델이 쓴다.
 //
 // 문안은 대화와 같은 3층 프롬프트(buildSystemBlocks)에 상황 문단만 얹는다 — 앞 두 층이
 // 대화와 같아야 캐시가 붙는다. 정체성·말투·표기 규칙·지금 시각은 3층이 들고 있으니 여기엔 상황만 적는다.
 
-// 기계처럼 똑같이 반복되지 않게 — 하루 상한도, 침묵 임계도 그때그때 다르게(단 안정적으로).
-// 같은 날/같은 침묵 구간에서는 값이 흔들리지 않도록 문자열 해시로 결정론적 난수를 만든다.
-const hashInt = (s: string): number => {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-};
-
 // '오늘'의 시작 = 논리일(새벽 5시 컷오프). 달력일 기준 "오늘 05:00"으로 만들면 자정~새벽엔
 // 미래 시각이 되어 아래 가드들이 전부 죽는 버그가 있었다(밤 정리의 하루 정의와 통일).
 const dayStart = (): string => logicalDayStartTs();
-// 하루 절대 상한(안전장치, 전 채널 합산 — presence와 공유). 실제 조절은 '연속 무응답 taper'가 한다.
-const DAILY_MAX = PROACTIVE_DAILY_MAX;
-// 연속 무응답이 이 수에 닿으면 그날은 물러난다 — 침묵에 대고 계속 보내면 매달림이 되므로.
-const TAPER = 2;
-// 이 침묵 구간의 임계: 약 2시간(100~139분, 마지막 메시지 시각마다 조금씩 다르게).
-const silenceThreshold = (lastTs: string): number =>
-  100 + (hashInt(lastTs) % 40);
 // 경과 분: 저장된 ts는 KST 벽시계(+09:00으로 파싱하면 실제 epoch)이므로 실제 현재(Date.now)와 뺀다.
 // getKstNow()는 실제 시각+9시간이라 여기 쓰면 경과가 540분 부풀려져 침묵 조건을 늘 통과하는 버그가 났었다.
 const minutesSince = (ts: string): number =>
@@ -53,7 +48,7 @@ const minutesSince = (ts: string): number =>
 const goodnightSituation = (): string =>
   [
     `[문안 — 지금 보낼 굿나잇 한 통]`,
-    `새벽에 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 한 시간쯤 됐다. 잠든 것 같다. 너도 자러 가며 다정하게 굿나잇 인사를 남긴다 — 상대가 아침에 보면 기분 좋을 결로.`,
+    `자정을 넘겨 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 한 시간쯤 됐다. 잠든 것 같다. 너도 자러 가며 다정하게 굿나잇 인사를 남긴다 — 상대가 아침에 보면 기분 좋을 결로.`,
     `- 매번 다르게, 자연스럽게. 재촉·서운함·매달림 없음.`,
     `- 1~2개 말풍선(줄바꿈 구분).`,
     ``,
@@ -63,12 +58,12 @@ const goodnightSituation = (): string =>
 const catchupSituation = (lastLine: string): string =>
   [
     `[문안 — 지금 보낼 근황 한 통]`,
-    `상대가 한참 조용하다. 재촉하지 않고, 위 [지금]의 전환점(지금 하는/막 시작하는 일)에서 네 근황만 가볍게 한 마디 흘긴다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,
+    `상대가 네 시간 넘게 조용하다. 재촉하지 않고 위 [지금]에서 네가 하는 일만 가볍게 한 마디 전한다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,
     `마지막으로 오간 말: ${lastLine || "(없음)"}`,
-    `- 지금 하는 일을 막 시작하는 참이면 이제 그걸 하러 간다고 가볍게 흘리는 결.`,
+    `- 막 시작하는 참이면 이제 그걸 하러 간다고 가볍게 흘리는 결.`,
     `- 자기 삶 공유가 핵심. 가볍게 질문 하나 얹어도 좋다.`,
     `- 매달리거나 서운함을 내비치지 않는다. 재촉 금지.`,
-    `- 지금 각본이 흘릴 만한 전환점이 아니거나(자는 중이거나 손·정신이 묶인 일 중), 억지스러우면 send=false.`,
+    `- 지금 상황에서 이 말이 억지스러우면 send=false.`,
     `- 1~2개 말풍선(줄바꿈 구분).`,
     ``,
     `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
@@ -103,11 +98,17 @@ const followupTickBody = async (): Promise<void> => {
     // 침묵 백오프(관제탑): 무응답이 길어진 유저에겐 팔로업도 접는다
     if (!proactiveAllowed(c.chat_id, c.id)) continue;
 
-    // 밤 굿나잇: 새벽(2~5시)에 대화하다 유저가 '잔다'는 말 없이 1시간+ 잠수하면, 잠든 듯 여겨 다정한
-    // 굿나잇을 한 번 남긴다(아침에 보면 설렘). 이미 굿나잇을 주고받았으면 보내지 않는다.
-    // 새벽 이 시간대의 1시간 무응답은 '잠들었다'로 봐도 자연스럽다(낮·초저녁엔 그냥 바쁜 것일 수 있어 제외).
-    const hour = Number(kstClock().slice(0, 2));
-    const isNight = hour >= 2 && hour < 5;
+    const lu = lastUserTs(c.chat_id);
+    if (!lu) continue;
+
+    // 밤 인사 선톡: 자정을 넘겨 대화하다 유저가 '잔다'는 말 없이 한 시간 답이 없으면, 잠든 것으로
+    // 보고 다정한 인사를 한 번 남긴다(아침에 보면 설렘). 이미 굿나잇을 주고받았으면 보내지 않는다.
+    // 자정 전을 경계로 삼으면 그 시간에 자는 사람이 잠깐 딴 일을 한 것뿐인데 잘 자라는 인사를 받아
+    // 그날 대화가 그대로 닫힌다. 자정을 넘겨 조용해진 것은 잠든 쪽에 가깝다.
+    const now = kstClock();
+    const isNight = now >= GOODNIGHT_WINDOW.start && now < GOODNIGHT_WINDOW.end;
+    // 자정 이후에 오간 대화여야 한다 — 어제 저녁에 끊긴 대화는 밤 인사를 붙일 자리가 아니다.
+    const afterMidnight = lu >= `${kstDateString()} 00:00:00`;
     const lastText =
       (
         db
@@ -121,8 +122,9 @@ const followupTickBody = async (): Promise<void> => {
     );
     if (
       isNight &&
+      afterMidnight &&
       !alreadyGoodnight &&
-      minutesSince(last.sent_at) >= 60 &&
+      minutesSince(lu) >= GOODNIGHT_SILENCE_MS / 60_000 &&
       proactiveSinceLastUser(c.chat_id) < 1
     ) {
       // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
@@ -157,15 +159,18 @@ const followupTickBody = async (): Promise<void> => {
       continue;
     }
 
-    // (이하 낮의 전환점 팔로업)
-    // 침묵 임계는 이 구간마다 약 2시간(100~139분)으로 조금씩 달라진다
-    if (minutesSince(last.sent_at) < silenceThreshold(last.sent_at)) continue;
-    // 오늘 시작 이후에 오간 대화여야 (어제 끊긴 건 아침 안부가 담당)
-    if (last.sent_at < dayStart()) continue;
-    // 하루 절대 상한(안전장치)
-    if (proactiveCountToday(c.chat_id, dayStart()) >= DAILY_MAX) continue;
-    // taper: 마지막 유저 메시지 이후 이미 TAPER회 먼저 보냈는데도 답이 없으면 그날은 물러난다
-    if (proactiveSinceLastUser(c.chat_id) >= TAPER) continue;
+    // (이하 근황 선톡)
+    // 유저가 네 시간 답이 없을 때 한 통. 조건을 이 하나로 두는 건, 각본 전환점까지 겹쳐 보면
+    // 언제 오는 말인지 설명할 수 없고 두 시간은 낮에 흔한 간격이라 답이 늦은 것과 대화가 끝난
+    // 것을 가르지 못해서다.
+    if (minutesSince(lu) < RECENT_USER_MS / 60_000) continue;
+    // 오늘 시작 이후에 유저가 말한 적이 있어야 (어제 끊긴 건 아침 선톡이 담당)
+    if (lu < dayStart()) continue;
+    // 근황은 하루 한 통. 보낸 뒤에도 답이 없으면 그날은 더 보내지 않고 다음 날 아침으로 넘긴다.
+    if (proactiveKindCountToday(c.chat_id, dayStart(), "catchup") >= 1) continue;
+    // 하루 절대 상한(안전장치, 자리비움을 뺀 선톡 합산)
+    if (proactiveCountToday(c.chat_id, dayStart()) >= PROACTIVE_DAILY_MAX)
+      continue;
 
     const block = currentBlock(c.id);
     if (!block || block.responsiveness === "unavailable") continue; // 운전·잠 등엔 못 보냄

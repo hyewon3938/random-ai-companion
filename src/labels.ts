@@ -81,6 +81,7 @@ export type CallPurpose =
   | "genesis"
   | "bible"
   | "morning"
+  | "lunch"
   | "reconnect"
   | "catchup"
   | "goodnight"
@@ -99,6 +100,7 @@ export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
   genesis: "캐릭터 생성",
   bible: "옛 랜덤 생성",
   morning: "아침 선톡",
+  lunch: "점심 선톡",
   reconnect: "안부 선톡",
   catchup: "근황 선톡",
   goodnight: "밤 인사 선톡",

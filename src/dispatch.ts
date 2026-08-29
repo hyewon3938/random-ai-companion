@@ -10,8 +10,9 @@ import {
   releaseProactive,
   logErr,
 } from "./bot.js";
-import { silenceState } from "./proactive-policy.js";
+import { dailySendPlan } from "./proactive-policy.js";
 import { getKstNow, kstClock, kstDateString } from "./kst.js";
+import { RECENT_USER_MS, SEND_GRACE_MIN } from "./thresholds.js";
 
 // 선톡 디스패처: LLM 콜 없이, 밤 정리가 준비해둔 문안을 발송 창 안에서 내보내는 틱.
 // 유저가 오늘 이미 먼저 말을 걸었다면 보내지 않는다 — 선톡은 침묵을 여는 용도이고,
@@ -20,9 +21,9 @@ import { getKstNow, kstClock, kstDateString } from "./kst.js";
 const stamp = (): string =>
   `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
 
-// 유저가 방금까지 대화 중이었는지를 보는 창. 논리일(새벽 5시) 기준으로 재면 유저가 새벽 4시에
-// 말을 걸었을 때 그 대화가 어제로 들어가, 세 시간 뒤 아침 선톡이 그대로 나간다.
-const RECENT_USER_MS = 4 * 60 * 60 * 1000;
+// 유저가 방금까지 대화 중이었는지는 RECENT_USER_MS 창으로 본다. 논리일(새벽 5시) 기준으로
+// 재면 유저가 새벽 4시에 말을 걸었을 때 그 대화가 어제로 들어가, 세 시간 뒤 아침 선톡이
+// 그대로 나간다.
 
 const stampBefore = (ms: number): string => {
   const t = new Date(getKstNow().getTime() - ms);
@@ -43,7 +44,7 @@ const addMin = (hhmm: string, m: number): string => {
 //   - 창 종료 +90분: 문안이 쓰인 순간에서 너무 멀어지지 않게. 06:15 기상 문안은 아무리 늦어도 08:40까지.
 //   - 시간대별 절대 상한: 늦게 시작하는 하루(09:50 시작)의 문안이 점심까지 밀리지 않게.
 // 둘 중 이른 쪽이 마감이고, 넘기면 폐기하되 왜 폐기됐는지를 행에 남긴다.
-const GRACE_MIN = 90;
+const GRACE_MIN = SEND_GRACE_MIN;
 
 const hardCap = (windowStart: string): string =>
   windowStart < "11:00" ? "11:00" : windowStart < "15:00" ? "14:00" : "22:00";
@@ -69,20 +70,17 @@ export const runDispatchTick = async (): Promise<void> => {
     for (const r of getPendingSends(today)) {
       if (now < r.window_start) continue;
 
-      // 침묵 백오프(관제탑): 무응답이 길어진 유저에겐 아침 안부를 보내지 않는다.
-      // 문안 생성 단계(밤 정리)에서 이미 걸러지지만, 경계일에 걸친 문안을 위한 이중 가드.
-      // 안부 선톡(kind=checkin) 문안은 백오프 그 자체이므로 이 게이트를 지나간다.
-      if (r.kind !== "checkin") {
-        const st = silenceState(r.chat_id, r.character_id);
-        if (st.tier !== "normal") {
-          markScheduledSend(
-            r.id,
-            "skipped",
-            `침묵 백오프 (무응답 ${st.days}일, ${st.tier})`,
-            null,
-          );
-          continue;
-        }
+      // 발송 직전 재확인(관제탑): 밤에 정한 종류가 지금도 맞는지 본다. 문안 준비 단계에서
+      // 이미 같은 판정을 거쳤지만, 날짜 경계를 넘긴 문안을 거르는 이중 가드다.
+      // 점심 문안은 아침 문안과 같은 종류로 저장하므로 둘을 함께 통과시킨다.
+      const plan = dailySendPlan(r.chat_id, r.character_id, today);
+      const allowed =
+        r.kind === "checkin"
+          ? plan.kind === "checkin"
+          : plan.kind === "morning" || plan.kind === "lunch";
+      if (!allowed) {
+        markScheduledSend(r.id, "skipped", `보내지 않는 날 (${plan.reason})`, null);
+        continue;
       }
 
       const deadline = graceUntil(r.window_start, r.window_end);
