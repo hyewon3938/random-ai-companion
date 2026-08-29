@@ -98,11 +98,10 @@ export interface MemoryExtract {
   interest?: Interest;
 }
 
-// 관계 갱신분 — 넣은 항목만 갱신된다. 말투 값(speech_level)은 답장 파이프라인 몫이라 여기 없음.
+// 관계 갱신분 — 넣은 항목만 갱신된다. 여기 없는 세 항목(stage·speech_level·address_terms)은
+// 답장 파이프라인 몫이다(relationship-update.ts) — 낮에 달라진 값을 새벽까지 묵히지 않는다.
 export interface RelationshipExtract {
-  stage?: string;
   speech_note?: string;
-  address_terms?: string;
   rapport?: string;
   cautions?: string;
   history?: string;
@@ -464,9 +463,7 @@ const applyNightlyTxn = db.transaction(
         updateRelationshipNotes(
           g.characterId,
           {
-            stage: clean(r.stage),
             speechNote: clean(r.speech_note),
-            addressTerms: clean(r.address_terms),
             rapport: clean(r.rapport),
             cautions: clean(r.cautions),
             history: clean(r.history),
@@ -720,7 +717,7 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"stage":"지금 어떤 사이","speech_note":"상대에게 쓰는 말투","address_terms":"서로 부르는 말","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"]}]}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"]}]}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.
@@ -732,7 +729,7 @@ memories 규칙:
 - tags: ${TAG_RULE}
 - user_knows: '나'(char) 쪽 기억에만 — 이 사실을 상대가 아는가.
 
-relationship 규칙: 이 하루로 실제 달라진 항목만 넣는다 (넣은 항목만 갱신되고, 나머지는 그대로 남는다). 각 항목은 짧은 서술로. 존댓말·반말 같은 말투 값은 여기서 바꾸지 않는다. 달라진 게 없으면 relationship은 null.
+relationship 규칙: 이 하루로 실제 달라진 항목만 넣는다 (넣은 항목만 갱신되고, 나머지는 그대로 남는다). 각 항목은 짧은 서술로. 지금 어떤 사이인지·서로 부르는 말·존댓말과 반말은 대화하는 자리에서 이미 갱신되니 여기서 건드리지 않는다. 달라진 게 없으면 relationship은 null.
 user_profile 규칙:
 - 상대가 하는 일·사는 지역이 대화에서 분명히 드러났을 때만 넣는다. 어림짐작으로 채우지 않고, 확실하지 않으면 비워 둔다.
 - 위 [상대 프로필 — 지금 값]에 이미 있는 값과 같으면 넣지 않는다. 두 값 다 그대로면 user_profile은 null.

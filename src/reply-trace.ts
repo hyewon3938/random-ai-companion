@@ -93,6 +93,13 @@ interface BlockHash {
   cache?: boolean;
 }
 
+/** 관계 한 항목이 바뀐 기록(relationship-update.ts RelChange). */
+interface RelUpdateEntry {
+  field?: string;
+  from?: string | null;
+  to?: string;
+}
+
 // 답장 호출에 붙는 판단 근거(bot.ts attach)의 모양. 없는 값이 많아 전부 옵셔널이다.
 interface CallContext {
   timing?: {
@@ -160,8 +167,9 @@ interface CallContext {
     outcome?: string;
     by?: string;
   };
-  /** 이 답장을 만들며 바뀐 관계 항목. */
-  relUpdate?: { field?: string; from?: string | null; to?: string };
+  /** 이 답장을 만들며 바뀐 관계 항목. 한 답장에서 셋까지 바뀔 수 있어 목록으로 온다.
+   *  이미 쌓인 기록은 항목 하나가 객체로 들어 있어 두 모양을 다 읽는다. */
+  relUpdate?: RelUpdateEntry | RelUpdateEntry[];
   /** 발송 예정 시각(만들어 두고 기다리는 답장). */
   sendAt?: string;
   /** 몰아 답장처럼 그 자리에서 바로 보낸 경우의 발송 결과. */
@@ -435,16 +443,17 @@ const outcomeLines = (ctx: CallContext): string[] => {
     );
   }
   if (ctx.relUpdate) {
-    const r = ctx.relUpdate;
     const name = (v: string | null | undefined): string =>
       !v
         ? "없음"
         : v in SPEECH_LEVEL_NAME
           ? SPEECH_LEVEL_NAME[v as SpeechLevel]
           : v;
-    out.push(
-      `*관계 갱신* ${esc(r.field ?? "")} ${esc(name(r.from))} → ${esc(name(r.to))}`,
-    );
+    const list = Array.isArray(ctx.relUpdate) ? ctx.relUpdate : [ctx.relUpdate];
+    for (const r of list)
+      out.push(
+        `*관계 갱신* ${esc(r.field ?? "")} ${esc(name(r.from))} → ${esc(name(r.to))}`,
+      );
   }
   if (ctx.sent) out.push(`*발송* 말풍선 ${esc(ctx.sent)} 나감 — 바로 보냈다`);
   if (ctx.dropped) out.push(`:wastebasket: *폐기* ${esc(ctx.dropped)}`);

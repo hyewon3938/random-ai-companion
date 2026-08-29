@@ -16,6 +16,10 @@ export interface ReplySignals {
   stay: boolean;
   /** 오늘 메모로 남길 한 줄(옛 [메모]). */
   note: string | null;
+  /** 사이가 달라졌을 때 새로 쓴 한 줄(관계 stage). */
+  stage: string | null;
+  /** 서로 부르는 말이 달라졌을 때 새 호칭(관계 address_terms). */
+  addressTerms: string | null;
 }
 
 /** 답을 어느 길로 읽었는지 — 운영에서 형식이 얼마나 지켜지는지 보려고 남긴다. */
@@ -28,7 +32,12 @@ export interface ReplyOutput {
   parse: ReplyParse;
 }
 
-export const EMPTY_SIGNALS: ReplySignals = { stay: false, note: null };
+export const EMPTY_SIGNALS: ReplySignals = {
+  stay: false,
+  note: null,
+  stage: null,
+  addressTerms: null,
+};
 
 // 봉투 키·따옴표가 본문 밖에서 토큰을 쓰고, 잘리면 본문 일부가 아니라 JSON 한 덩이가 통째로
 // 못 쓰게 된다. 실제로 쓴 만큼만 과금되므로 상한은 여유 있게 둔다.
@@ -39,6 +48,8 @@ export const REPLY_MAX_TOKENS = 1200;
 const SIGNAL_LINES = [
   `- stay: 하려던 일을 접거나 미루고 상대 곁에 남기로 했을 때만 true.`,
   `- note: 오늘 메모로 남길 한 문장.`,
+  `- stage: 이번 대화로 둘 사이가 실제로 달라졌을 때만, 지금 어떤 사이인지 한 줄로 새로 쓴다. 매일 넣는 칸이 아니다.`,
+  `- address_terms: 서로 부르는 말이 달라졌을 때만, 서로를 뭐라고 부르는지 짧게 적는다. 부르던 대로면 넣지 않는다.`,
 ].join("\n");
 
 // 답장 경로에서만 프롬프트 맨 끝에 붙는다(context.ts BuildOptions.signals).
@@ -100,6 +111,8 @@ const asFlag = (v: unknown): boolean => v === true || v === "true";
 const readSignals = (o: Record<string, unknown>): ReplySignals => ({
   stay: asFlag(o.stay),
   note: asText(o.note),
+  stage: asText(o.stage),
+  addressTerms: asText(o.address_terms),
 });
 
 /** 첫 답이 비어 다시 부른 경우 — 두 답의 신호를 하나로 합친다(먼저 나온 값을 남긴다). */
@@ -109,6 +122,8 @@ export const mergeSignals = (
 ): ReplySignals => ({
   stay: a.stay || b.stay,
   note: a.note ?? b.note,
+  stage: a.stage ?? b.stage,
+  addressTerms: a.addressTerms ?? b.addressTerms,
 });
 
 // 배열이면 원소마다, 문자열 하나면 그것만. 원소 안에 줄바꿈이 들어와도 말풍선으로 나눈다 —

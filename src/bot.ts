@@ -42,20 +42,22 @@ import {
 import { saveTodayNote } from "./memory.js";
 import { pickTags } from "./tag-pick.js";
 import {
-  currentSpeechLevel,
+  applyReplySignals,
+  speechRatchet,
+  type RelChange,
+} from "./relationship-update.js";
+import {
   db,
   getActiveCharacter,
   getDayPlan,
   getRecentMessages,
   getRecoveryMark,
-  getRelationship,
   hasWaitingWakeRow,
   lastMessage,
   logMessage,
   recentUserGaps,
   setCallContext,
   setRecoveryMark,
-  setSpeechLevel,
   type CharacterRow,
   type MessageRow,
   type PendingReplyRow,
@@ -696,16 +698,13 @@ const respond = async (
         `[pending] 깨우기 ${droppedWake}건 거둠 — 지금 답장이 대신한다 (chat=${chatId})`,
       );
 
-    // 말투 래칫: 최근 답장이 반말로 정착했으면(휴리스틱 판정) 관계의 말투 값을 casual로
-    // 굳힌다. casual이 된 뒤에는 되돌리지 않는다 — 존댓말 회귀를 막는 한 방향 래칫.
-    // 저장해 두면 최근 대화를 안 보는 경로(선톡 문안)도 같은 값을 읽는다.
-    const prevSpeech = getRelationship(character.id)?.speech_level ?? null;
-    let relUpdate: { field: string; from: string | null; to: string } | null =
-      null;
-    if (prevSpeech !== "casual" && currentSpeechLevel(chatId) === "반말") {
-      setSpeechLevel(character.id, "casual", nowIso());
-      relUpdate = { field: "말투", from: prevSpeech, to: "casual" };
-    }
+    // 말투 래칫 — 프롬프트를 조립하기 전에 부른다. 저장해 두면 이번 답장은 물론 최근 대화를
+    // 안 보는 경로(선톡 문안)도 같은 값을 읽는다. 단계·호칭은 답을 읽은 뒤에 같은 목록에 쌓인다.
+    const relUpdates: RelChange[] = speechRatchet(
+      character.id,
+      chatId,
+      nowIso(),
+    );
 
     // 2. 지금 만든다
     // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
@@ -777,7 +776,7 @@ const respond = async (
           turns: turns.length,
           userMsgs: turn.n,
           ...(arrival ? { arrival } : {}),
-          ...(relUpdate ? { relUpdate } : {}),
+          ...(relUpdates.length ? { relUpdate: relUpdates } : {}),
           ...(retryCallId ? { retryCallId } : {}),
           ...facts,
         });
@@ -794,6 +793,9 @@ const respond = async (
         logErr("[llm] 재생성 호출 표시 실패:", e);
       }
 
+    // 관계 신호 — 이번 대화로 사이나 부르는 말이 달라졌으면 그 자리에서 저장한다.
+    // 조립 전에 굳힌 말투와 한 목록에 모아 트레이스가 *관계 갱신* 한 자리에서 읽는다.
+    relUpdates.push(...applyReplySignals(character.id, signals, nowIso()));
     // 봉투를 어느 길로 읽었는지는 답장을 버리는 경우에도 남긴다 — 형식이 깨진 날을 되짚는 자리다.
     attach({ outputParse: parse });
     // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 stay 신호.
@@ -917,6 +919,13 @@ setWakeHandler(async (row: PendingReplyRow) => {
       schedules: [],
       dropped: [],
     };
+    // 이 길도 프롬프트를 스스로 조립한다 — 조립 전에 말투를 굳혀야 몰아 답장이 옛 말투로
+    // 나가지 않는다.
+    const relUpdates: RelChange[] = speechRatchet(
+      row.character_id,
+      chatId,
+      nowIso(),
+    );
     const system = buildSystemBlocks(row.character_id, chatId, {
       pick: await pickTags(row.character_id, turn.text),
       trace: built,
@@ -961,6 +970,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
           search: built,
           turns: turns.length,
           userMsgs: turn.n,
+          ...(relUpdates.length ? { relUpdate: relUpdates } : {}),
           ...(retryCallId ? { retryCallId } : {}),
           ...facts,
         });
@@ -974,6 +984,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
       } catch (e) {
         logErr("[llm] 재생성 호출 표시 실패:", e);
       }
+    relUpdates.push(...applyReplySignals(row.character_id, signals, nowIso()));
     attach({ outputParse: parse });
     const staged = signals.stay ? recordHold(row.character_id) : null;
     if (staged) attach({ dayActual: { ...staged, by: "stay" } });
