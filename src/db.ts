@@ -287,7 +287,7 @@ const TABLES: Record<string, string> = {
   created_at TEXT NOT NULL`,
 
   // 모델 호출 원본. 무엇을 넣었고 무엇이 나왔는지를 그대로 남겨, 답이 이상할 때 그 호출의
-  // 프롬프트를 열어 볼 수 있게 한다. 판단 근거(검색한 태그와 기억, 답장 텀, 다듬기 전후)는
+  // 프롬프트를 열어 볼 수 있게 한다. 판단 근거(검색한 태그와 기억, 답장 텀, 말풍선 수)는
   // 호출 시점 값으로 context_json에 붙인다 — 기억 검색은 꺼낸 기록을 남기는 쓰기 동작이라
   // 나중에 같은 검색을 다시 돌려 재현할 수 없다.
   //
@@ -1455,7 +1455,7 @@ export const recordLlmCall = (call: LlmCallInput): number => {
   return Number(info.lastInsertRowid);
 };
 
-/** 호출 행에 그때의 판단 근거를 붙인다 — 검색한 태그와 기억, 답장 텀, 다듬기 전후. */
+/** 호출 행에 그때의 판단 근거를 붙인다 — 검색한 태그와 기억, 답장 텀, 말풍선 수. */
 export const setCallContext = (callId: number, context: unknown): void => {
   db.prepare(`UPDATE llm_calls SET context_json = ? WHERE id = ?`).run(
     JSON.stringify(context),

@@ -17,7 +17,6 @@ import {
 } from "./day-plan.js";
 import { ensureMonthPlan } from "./life-plan.js";
 import { buildSystemBlocks, type BuildTrace } from "./context.js";
-import { polishBubble } from "./bubble-polish.js";
 import {
   decideReplyTiming,
   recordHold,
@@ -230,16 +229,13 @@ const sendBubbleList = async (
   return { sent };
 };
 
-// 말풍선으로 쪼개고 다듬는 것까지 한 번에 — 선톡처럼 만들자마자 보내는 쪽이 쓴다.
-// 답장은 만들어 두고 나중에 보내므로, 쪼갠 결과를 저장한 뒤 sendBubbleList로 바로 간다.
-const toBubbles = (text: string): string[] =>
-  splitBubbles(text).map(polishBubble);
-
+// 선톡처럼 만들자마자 보내는 쪽이 쓴다. 답장은 만들어 두고 나중에 보내므로,
+// 쪼갠 결과를 저장한 뒤 sendBubbleList로 바로 간다.
 const sendBubblesTo = (
   chatId: string,
   text: string,
 ): Promise<{ sent: string[]; error?: unknown }> =>
-  sendBubbleList(chatId, toBubbles(text));
+  sendBubbleList(chatId, splitBubbles(text));
 
 // 선제 발송(선톡): 유저 메시지 없이 캐릭터가 먼저 보낸다. 아침 안부(morning)·침묵 팔로업(followup)이 호출
 // 반환: 실제로 나간 말풍선 수 / 전체. 아무것도 못 나가면 throw(= 호출부가 재시도해도 안전),
@@ -297,7 +293,7 @@ interface ReplyTags {
 // 앞머리 대괄호는 어떤 형태든 태그로 보고 전부 떼어낸다. [남음][즉시]처럼 겹쳐 나오면
 // 하나만 벗기던 버그가 있어 연속으로 벗기고, 종류 판정도 벗기는 자리에서 함께 한다 —
 // 맨 앞 하나만 정규식으로 따로 보면 태그가 겹친 순간 뒤쪽 신호를 통째로 놓친다.
-// export는 단독 회귀 검증용(bubble-polish와 같은 이유) — 봇 밖에서 부르는 곳은 없다.
+// export는 단독 회귀 검증용 — 봇 밖에서 부르는 곳은 없다.
 export const parseReplyTags = (reply: string): ReplyTags => {
   // [메모] 줄 추출 — 규칙은 맨 끝 한 줄이지만, 모델이 중간에 찍거나 여러 줄을 찍어도
   // 유저에게 새어 나가면 안 되므로 위치와 개수에 관계없이 전부 떼어낸다.
@@ -797,9 +793,9 @@ const respond = async (
       retryCallId = retryMeta.callId ?? null;
     }
     // 이 답장이 어떤 근거로 나왔는지를 호출 기록에 붙인다 — 검색한 태그·기억, 텀 계산의
-    // 입력과 결과, 다듬기 전후, 말풍선 수. 기록이 실패해도 답장은 그대로 나간다.
+    // 입력과 결과, 말풍선 수. 기록이 실패해도 답장은 그대로 나간다.
     // 여러 번 나눠 부르므로 덮어쓰지 않고 쌓는다 — 뒤에 붙는 발송 예정 시각이 앞의
-    // 다듬기 기록을 지우면 안 된다.
+    // 검색 기록을 지우면 안 된다.
     const facts: Record<string, unknown> = {};
     const attach = (extra: Record<string, unknown>): void => {
       Object.assign(facts, extra);
@@ -860,20 +856,13 @@ const respond = async (
 
     // 3. 정한 시각에 나가게 저장한다. 대기가 0이어도 같은 길로 보낸다 —
     // 발송 직전에 죽어도 pending_replies에 남아 다시 뜰 때 이어진다.
-    const split = splitBubbles(text);
-    const bubbles = split.map(polishBubble);
+    const bubbles = splitBubbles(text);
     attach({
       stay,
       note,
       bubbles: bubbles.length,
       // 말풍선 사이 간격은 발송할 때 글자 수에서 나온다(1초 안쪽 흔들림) — 길이를 남겨 둔다.
       bubbleLens: bubbles.map((b) => b.length),
-      // 다듬기가 실제로 고친 말풍선만 — 손대지 않은 것까지 두 벌 남기면 저장만 커진다.
-      polished: split
-        .map((b, i) =>
-          b === bubbles[i] ? null : { before: b, after: bubbles[i] },
-        )
-        .filter(Boolean),
     });
     const scheduled = schedulePendingReply({
       chatId,
@@ -1028,18 +1017,12 @@ setWakeHandler(async (row: PendingReplyRow) => {
       return;
     }
     // 바로 보낸다 — 구간이 끝나는 시각이 이미 이 답장의 텀이다.
-    const split = splitBubbles(text);
-    const bubbles = split.map(polishBubble);
+    const bubbles = splitBubbles(text);
     attach({
       stay,
       note,
       bubbles: bubbles.length,
       bubbleLens: bubbles.map((b) => b.length),
-      polished: split
-        .map((b, i) =>
-          b === bubbles[i] ? null : { before: b, after: bubbles[i] },
-        )
-        .filter(Boolean),
     });
     const { sent, error } = await sendBubbleList(chatId, bubbles);
     if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
