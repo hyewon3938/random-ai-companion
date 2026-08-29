@@ -324,6 +324,28 @@ const TABLES: Record<string, string> = {
   bytes INTEGER NOT NULL,
   first_seen_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL`,
+
+  // 슬랙 트레이스 채널에 사람이 남긴 표시(feedback.ts). 채널을 읽다가 이상한 답장에 리액션으로
+  // 분류를 고르고 이유를 스레드 답글로 적으면, 10분 간격 틱이 그것을 읽어 여기에 쌓는다.
+  // 표시가 달린 글의 slack_ts로 게시 기록을 되짚어 어느 모델 호출이었는지(call_id)까지 적는다 —
+  // 호출과 이어지지 않는 글(하루 각본 알림 같은)에 달린 표시는 call_id 없이 그대로 둔다.
+  //
+  // 지우지 않고 removed_at으로 표시한다. 폴링이라 리액션을 뗀 것은 다음 회차에 없어진 것으로
+  // 드러나는데, 행을 지워 버리면 무엇이 있다가 없어졌는지가 남지 않는다.
+  call_feedback: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER REFERENCES characters(id),
+  call_id INTEGER REFERENCES llm_calls(id),
+  slack_ts TEXT NOT NULL,
+  trace_kind TEXT,
+  source TEXT NOT NULL CHECK (source IN ('reaction','reply')),
+  kind TEXT CHECK (kind IN ('fact','tone','timing','good')),
+  slack_user TEXT,
+  text TEXT,
+  reply_ts TEXT,
+  dedupe_key TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  removed_at TEXT`,
 };
 
 // attention_override·capture_marks는 정의에서 뺐다 — 붙잡힌 상태는 day_actuals가, 세션 중 사실
@@ -344,6 +366,8 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_trace_events_thread ON trace_events (thread_key)`,
   `CREATE INDEX IF NOT EXISTS idx_llm_calls_created ON llm_calls (created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_llm_calls_purpose ON llm_calls (character_id, purpose, id)`,
+  `CREATE INDEX IF NOT EXISTS idx_call_feedback_call ON call_feedback (call_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_call_feedback_ts ON call_feedback (slack_ts, source)`,
 ];
 
 const createSchema = (): void => {
@@ -1487,6 +1511,9 @@ export const setCallContext = (callId: number, context: unknown): void => {
 // 며칠 뒤에 다시 열어 보는 일도 없다. 메타는 가벼워서 계속 둔다.
 export const LLM_CALL_RETENTION_DAYS = 90;
 
+// 슬랙 채널에서 표시를 받은 호출은 기간이 지나도 본문을 비우지 않는다. 답장이 왜 그렇게
+// 나왔는지 사람이 판단한 기록이라, 프롬프트와 출력이 함께 있어야 나중에 채점표의 정답지로 쓸 수
+// 있다. 표시를 뗀 것(removed_at)은 다시 정리 대상이 된다.
 export const pruneLlmCalls = (
   days: number = LLM_CALL_RETENTION_DAYS,
 ): { calls: number; blobs: number } => {
@@ -1499,7 +1526,9 @@ export const pruneLlmCalls = (
           SET system_hashes = NULL, turns_hash = NULL, output_hash = NULL, context_json = NULL
         WHERE created_at < ?
           AND (system_hashes IS NOT NULL OR turns_hash IS NOT NULL
-               OR output_hash IS NOT NULL OR context_json IS NOT NULL)`,
+               OR output_hash IS NOT NULL OR context_json IS NOT NULL)
+          AND id NOT IN (SELECT call_id FROM call_feedback
+                          WHERE call_id IS NOT NULL AND removed_at IS NULL)`,
     )
     .run(cutoff).changes;
   // 아무 호출도 가리키지 않게 된 본문을 지운다. 같은 본문을 여러 호출이 가리키므로
