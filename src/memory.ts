@@ -282,13 +282,21 @@ const matchesAsEojeol = (tag: string, words: string[]): boolean =>
  * 것이라 추가 모델 호출이 없다 — 답장 경로에서 검색어를 만드는 유일한 방법.
  * 한 글자 태그("일"·"돈"·"집")는 문자열 포함으로 보면 "일요일"·"생일"·"수집" 같은
  * 다른 낱말에도 걸려 관련 없는 기억이 검색되므로, 어절 단위 매치만 허용한다.
+ * 대조한 태그 수(pool)도 함께 준다 — 걸린 태그가 없을 때 검색이 돌긴 했는지 가른다.
  */
-export const tagsInText = (characterId: number, text: string): string[] => {
-  if (!text.trim()) return [];
+export const tagSearch = (
+  characterId: number,
+  text: string,
+): { tags: string[]; pool: number } => {
+  const names = listTagNames(characterId);
+  if (!text.trim()) return { tags: [], pool: names.length };
   const words = eojeolsOf(text);
-  return listTagNames(characterId).filter((t) =>
-    t.length >= 2 ? text.includes(t) : matchesAsEojeol(t, words),
-  );
+  return {
+    tags: names.filter((t) =>
+      t.length >= 2 ? text.includes(t) : matchesAsEojeol(t, words),
+    ),
+    pool: names.length,
+  };
 };
 
 /** 일기·일정도 같은 태그로 찾는다. 행을 읽는 건 그 데이터를 가진 쪽 몫이라 id만 준다. */

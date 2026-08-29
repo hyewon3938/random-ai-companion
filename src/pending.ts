@@ -122,7 +122,11 @@ const fire = async (row: PendingReplyRow): Promise<void> => {
     bumpPendingAttempt(row.id, msg);
     if (row.attempts + 1 >= MAX_ATTEMPTS) {
       markPendingReply(row.id, "failed", null, msg);
-      traceReplyOutcome({ callId: row.call_id, outcome: "failed", detail: msg });
+      traceReplyOutcome({
+        callId: row.call_id,
+        outcome: "failed",
+        detail: msg,
+      });
       console.error(`[pending] 발송 포기 #${row.id}: ${msg}`);
       return;
     }
@@ -163,7 +167,7 @@ export const schedulePendingReply = (p: {
   kind: string;
   /** 이 답장을 만든 모델 호출 번호. 발송·폐기 결과를 그 호출의 트레이스에 잇는다. */
   callId?: number | null;
-}): number => {
+}): { id: number; sendAt: string } => {
   const sendAt = stampAfter(p.waitMs);
   const createdAt = stamp();
   const id = insertPendingReply({
@@ -194,7 +198,7 @@ export const schedulePendingReply = (p: {
   console.log(
     `[pending] #${id} ${p.chatId} → ${sendAt} (${Math.round(p.waitMs / 1000)}초 뒤)`,
   );
-  return id;
+  return { id, sendAt };
 };
 
 /** 불가 구간이 끝나는 시각에 울릴 깨우기 표시를 건다. 답장은 그때 만든다. */
