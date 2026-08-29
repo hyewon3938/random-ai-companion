@@ -33,7 +33,7 @@ const TABLES: Record<string, string> = {
   genesis_json TEXT NOT NULL,
   created_at TEXT NOT NULL`,
 
-  // 캐릭터와 유저의 관계. 여덟 항목을 컬럼으로 나눠 두고 프롬프트에 항상 넣는다.
+  // 캐릭터와 유저의 관계. 일곱 항목을 컬럼으로 나눠 두고 프롬프트에 항상 넣는다.
   // 말투 값과 last_contact_at은 답장 경로가, 나머지는 새벽 정리가 갱신한다.
   // 새 컬럼은 전부 NULL을 허용한다 — 초기값을 채우는 것은 데이터 이관 회차 몫이고,
   // legacy_state_json을 지울 때 같이 NOT NULL로 조인다.
@@ -45,7 +45,6 @@ const TABLES: Record<string, string> = {
   speech_level TEXT CHECK (speech_level IN ('polite','casual')),
   speech_note TEXT,
   address_terms TEXT,
-  texture TEXT,
   rapport TEXT,
   cautions TEXT,
   history TEXT,
@@ -660,7 +659,6 @@ const migrateToV4 = (): void => {
         `ALTER TABLE relationships ADD COLUMN speech_level TEXT CHECK (speech_level IN ('polite','casual'))`,
         `ALTER TABLE relationships ADD COLUMN speech_note TEXT`,
         `ALTER TABLE relationships ADD COLUMN address_terms TEXT`,
-        `ALTER TABLE relationships ADD COLUMN texture TEXT`,
         `ALTER TABLE relationships ADD COLUMN rapport TEXT`,
         `ALTER TABLE relationships ADD COLUMN cautions TEXT`,
         `ALTER TABLE relationships ADD COLUMN history TEXT`,
@@ -772,6 +770,27 @@ const migratePendingWake = (): void => {
   console.log(`[db] pending_replies에 wake·meta_json을 더했다`);
 };
 migratePendingWake();
+
+// 관계 표에서 관계의 결(texture)을 지우고 그 내용을 지나온 이야기(history)에 합친다. 두 항목이
+// 같은 이야기를 나눠 적고 있었고, 캐릭터가 유저를 대하는 방식은 생성 때 정하는 정체성으로
+// 옮겼다. 위 wake 이관과 같은 이유로 버전 번호 대신 컬럼 유무를 보고 판단한다.
+const migrateRelationshipTexture = (): void => {
+  const cols = db.prepare(`PRAGMA table_info(relationships)`).all() as {
+    name: string;
+  }[];
+  if (!cols.some((c) => c.name === "texture")) return;
+
+  db.transaction(() => {
+    // 둘 다 값이 있으면 이어 붙인다. 다음 새벽 정리가 이 항목을 다시 쓰면서 겹친 말을 정리한다.
+    db.exec(`
+      UPDATE relationships
+         SET history = TRIM(COALESCE(history, '') || ' ' || COALESCE(texture, ''))
+       WHERE COALESCE(TRIM(texture), '') <> ''`);
+    db.exec(`ALTER TABLE relationships DROP COLUMN texture`);
+  })();
+  console.log(`[db] 관계의 결을 지나온 이야기에 합치고 컬럼을 지웠다`);
+};
+migrateRelationshipTexture();
 
 // 컬럼만 늘리는 변경. 위 wake 이관과 같은 이유로 버전을 올리지 않고 컬럼 유무를 보고 붙인다.
 const addColumn = (
@@ -903,14 +922,13 @@ export const getMetAt = (characterId: number): string | undefined => {
   return row?.met_at;
 };
 
-/** 생성 배치가 채우는 관계 첫 값. 여덟 항목 중 여섯 — 잘 통하는 것(rapport)과
+/** 생성 배치가 채우는 관계 첫 값. 일곱 항목 중 다섯 — 잘 통하는 것(rapport)과
  * 조심할 것(cautions)은 대화가 쌓여야 알 수 있어 비운 채 시작한다. */
 export interface RelationshipFirstValues {
   stage: string;
   speechLevel: SpeechLevel;
   speechNote: string;
   addressTerms: string;
-  texture: string;
   history: string;
   feelings: string;
 }
@@ -923,14 +941,13 @@ export const saveRelationshipFirstValues = (
   db.prepare(
     `UPDATE relationships SET
        stage = ?, speech_level = ?, speech_note = ?, address_terms = ?,
-       texture = ?, history = ?, feelings = ?, updated_at = ?
+       history = ?, feelings = ?, updated_at = ?
      WHERE character_id = ?`,
   ).run(
     v.stage,
     v.speechLevel,
     v.speechNote,
     v.addressTerms,
-    v.texture,
     v.history,
     v.feelings,
     now,
@@ -938,13 +955,12 @@ export const saveRelationshipFirstValues = (
   );
 };
 
-/** 관계 여덟 항목 컬럼을 그대로 읽는 행. 프롬프트 조립이 쓴다. */
+/** 관계 일곱 항목 컬럼을 그대로 읽는 행. 프롬프트 조립이 쓴다. */
 export interface RelationshipRow {
   stage: string | null;
   speech_level: SpeechLevel | null;
   speech_note: string | null;
   address_terms: string | null;
-  texture: string | null;
   rapport: string | null;
   cautions: string | null;
   history: string | null;
@@ -959,7 +975,7 @@ export const getRelationship = (
 ): RelationshipRow | undefined =>
   db
     .prepare(
-      `SELECT stage, speech_level, speech_note, address_terms, texture,
+      `SELECT stage, speech_level, speech_note, address_terms,
               rapport, cautions, history, feelings,
               met_at, last_contact_at, updated_at
          FROM relationships WHERE character_id = ?`,
@@ -982,7 +998,6 @@ export interface RelationshipNotes {
   stage?: string;
   speechNote?: string;
   addressTerms?: string;
-  texture?: string;
   rapport?: string;
   cautions?: string;
   history?: string;
@@ -993,7 +1008,6 @@ const NOTE_COLUMNS: Record<keyof RelationshipNotes, string> = {
   stage: "stage",
   speechNote: "speech_note",
   addressTerms: "address_terms",
-  texture: "texture",
   rapport: "rapport",
   cautions: "cautions",
   history: "history",

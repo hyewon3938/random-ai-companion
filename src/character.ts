@@ -281,6 +281,18 @@ export const IDENTITY_KEYS: readonly {
     guide: "말하는 결·유머·대화 태도. 유저가 적은 성격이 여기 반영된다",
   },
   { area: "기본", subject: "형편", guide: "돈 사정 한 줄" },
+  {
+    area: "태도",
+    subject: "상대를 대하는 방식",
+    guide:
+      "유저를 어떻게 대하는지. 유저가 적은 관계 설정을 그대로 반영한다 — 얼마나 챙기는지, 어디까지 맞춰 주는지, 어떤 거리를 두는지",
+  },
+  {
+    area: "태도",
+    subject: "애착 성향",
+    guide:
+      "가까운 사람에게 마음을 두는 방식. 유형 이름 대신 행동으로 적는다 — 답이 늦을 때, 서운할 때, 상대가 멀어질 때 어떻게 하는지",
+  },
   { area: "가족", subject: "구성", guide: "가족 구성과 사는 곳, 오가는 정도" },
   { area: "직업", subject: "소속", guide: "다니는 곳, 또는 일하는 터전" },
   { area: "직업", subject: "직무", guide: "무슨 일을 하는지" },
@@ -340,13 +352,12 @@ export interface GenesisOngoingRow {
   tags?: string[];
 }
 
-/** 관계 여덟 항목 중 생성이 채우는 여섯. 말투 값(존댓말)은 코드가 정하고,
+/** 관계 일곱 항목 중 생성이 채우는 다섯. 말투 값(존댓말)은 코드가 정하고,
  * 잘 통하는 것과 조심할 것은 대화가 쌓여야 알 수 있어 비운 채 시작한다. */
 export interface GenesisRelationshipFirst {
   stage: string;
   addressTerms: string;
   speechNote: string;
-  texture: string;
   history: string;
   feelings: string;
 }
@@ -418,11 +429,10 @@ ${IDENTITY_KEYS.map((k) => `- ${k.area}/${k.subject}: ${k.guide}`).join("\n")}
 - endCondition: 이 일이 끝났다고 볼 조건 한 줄
 
 [유저와의 관계 첫 값]
-유저가 적은 관계 설정으로 여섯 값을 채운다. 말은 존댓말에서 시작한다.
+유저가 적은 관계 설정으로 다섯 값을 채운다. 말은 존댓말에서 시작한다.
 - stage: 사이 정의 한 줄
 - addressTerms: 서로 부르는 말. 유저의 부르는 이름을 반영한다
-- speechNote: 말투의 결. 존댓말로 시작한다는 전제 아래 어떤 결의 존댓말인지, 앞으로 어떻게 편해질지
-- texture: 관계의 결 짧은 서술
+- speechNote: 상대에게 쓰는 말투. 존댓말로 시작한다는 전제 아래 어떤 결의 존댓말인지, 앞으로 어떻게 편해질지
 - history: 어떻게 만나 지금에 왔는지. 관계 설정에 과거가 있으면 그 이야기를
 - feelings: 캐릭터가 유저에게 품은 마음 상태
 
@@ -430,7 +440,7 @@ ${IDENTITY_KEYS.map((k) => `- ${k.area}/${k.subject}: ${k.guide}`).join("\n")}
 firstGreeting: 이 관계 설정에서 캐릭터가 처음 보내는 메신저 인사 1~3문장. 존댓말.
 
 [출력 JSON]
-{"identity":[{"area":"","subject":"","value":"","userKnows":"known|unknown","tags":[]}],"cast":[{"name":"","area":"","relation":"","contactMode":"","region":"","value":"","userKnows":"known|unknown","tags":[]}],"ongoing":[{"area":"","subject":"","value":"","endCondition":"","tags":[]}],"relationship":{"stage":"","addressTerms":"","speechNote":"","texture":"","history":"","feelings":""},"firstGreeting":""}
+{"identity":[{"area":"","subject":"","value":"","userKnows":"known|unknown","tags":[]}],"cast":[{"name":"","area":"","relation":"","contactMode":"","region":"","value":"","userKnows":"known|unknown","tags":[]}],"ongoing":[{"area":"","subject":"","value":"","endCondition":"","tags":[]}],"relationship":{"stage":"","addressTerms":"","speechNote":"","history":"","feelings":""},"firstGreeting":""}
 키 규칙: 영역 12자 이내, 무엇 20자 이내, 한 자리에 / | , · 같은 구분 문자를 넣지 않는다.
 tags: 항목마다 관련 주제어 0~3개. 키의 두 낱말은 코드가 태그로 붙이니 다시 적지 않는다.`;
 
@@ -506,7 +516,6 @@ export const genesisProblem = (out: GenesisOutput): string | null => {
     stage: rel.stage,
     addressTerms: rel.addressTerms,
     speechNote: rel.speechNote,
-    texture: rel.texture,
     history: rel.history,
     feelings: rel.feelings,
   }))
@@ -603,7 +612,6 @@ export const persistGenesis = (
         speechLevel: "polite",
         speechNote: out.relationship.speechNote,
         addressTerms: out.relationship.addressTerms,
-        texture: out.relationship.texture,
         history: out.relationship.history,
         feelings: out.relationship.feelings,
       },
@@ -632,7 +640,7 @@ export const arcMaterial = (out: GenesisOutput): string =>
     ),
     "",
     "[유저와의 관계]",
-    `- ${out.relationship.stage} / ${out.relationship.texture}`,
+    `- ${out.relationship.stage} / ${out.relationship.history}`,
   ].join("\n");
 
 /** 유저 입력으로 캐릭터를 만든다 — 첫 호출(사람 전부) → 저장 → 두 번째 호출(삶의 흐름).

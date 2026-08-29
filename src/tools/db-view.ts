@@ -134,7 +134,7 @@ const build = (db: Database.Database, file: string): string => {
       cols: {
         legacy_state_json: {
           mark: "old",
-          note: "관계 여덟 항목 컬럼(stage부터 feelings까지)이 대신한다. 읽는 코드가 없다.",
+          note: "관계 일곱 항목 컬럼(stage부터 feelings까지)이 대신한다. 읽는 코드가 없다.",
         },
       },
     },
