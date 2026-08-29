@@ -1642,24 +1642,38 @@ export const saveUserPreferences = (
   ).run(chatId, JSON.stringify(prefs));
 };
 
-// 유저 프로필(성별·나이대). user_preferences(매칭 전용·비주입)와 달리 이건
-// 캐릭터가 상대를 대하는 데 쓰는 공개 정보다. env로 지정하지 않았으면 밤 정리가 대화로 채운다.
+// 캐릭터 프롬프트에 들어가는 유저 프로필. user_preferences(매칭 전용·비주입)와 달리 이건
+// 캐릭터가 상대를 대하는 데 쓰는 공개 정보다. 값이 들어오는 길은 둘로 갈린다 —
+// 성별·나이대는 env(USER_GENDER/USER_AGE_BAND)나 가입 때 받고, 하는 일·사는 지역은
+// 대화에서 분명히 드러나면 새벽 정리가 채운다(nightly.ts 추출 출력의 user_profile).
 // chat_id 기준(교체돼도 유지) — 유저의 정체는 어떤 캐릭터를 만나든 그대로다.
 // 이름은 다루지 않는다 — 호칭을 시스템이 강제하면 자리 잡은 반말을 격식체로 되돌리는 회귀가 났다(2026-07-12).
 export interface StoredUserProfile {
   gender?: string;
   ageBand?: string;
+  job?: string;
+  region?: string;
 }
 
 export const getUserProfile = (chatId: string): StoredUserProfile => {
   const row = db
-    .prepare(`SELECT gender, age_band FROM user_profile WHERE chat_id = ?`)
+    .prepare(
+      `SELECT gender, age_band, job, region FROM user_profile WHERE chat_id = ?`,
+    )
     .get(chatId) as
-    { gender: string | null; age_band: string | null } | undefined;
+    | {
+        gender: string | null;
+        age_band: string | null;
+        job: string | null;
+        region: string | null;
+      }
+    | undefined;
   if (!row) return {};
   return {
     gender: row.gender ?? undefined,
     ageBand: row.age_band ?? undefined,
+    job: row.job ?? undefined,
+    region: row.region ?? undefined,
   };
 };
 
@@ -1706,15 +1720,27 @@ export const saveUserProfile = (
   const cur = getUserProfile(chatId);
   const gender = p.gender?.trim() || cur.gender;
   const ageBand = p.ageBand?.trim() || cur.ageBand;
+  const job = p.job?.trim() || cur.job;
+  const region = p.region?.trim() || cur.region;
   db.prepare(
-    // 이 함수가 맡은 컬럼만 고친다 — REPLACE로 행을 다시 넣으면 온보딩이 채우는
-    // 이름·생년·직업·사는 곳이 같이 지워진다.
-    `INSERT INTO user_profile (chat_id, gender, age_band, updated_at) VALUES (?, ?, ?, ?)
+    // 이 함수가 맡은 컬럼만 고친다 — REPLACE로 행을 다시 넣으면 가입 때 받는
+    // 이름·생년이 같이 지워진다.
+    `INSERT INTO user_profile (chat_id, gender, age_band, job, region, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(chat_id) DO UPDATE SET
        gender = excluded.gender,
        age_band = excluded.age_band,
+       job = excluded.job,
+       region = excluded.region,
        updated_at = excluded.updated_at`,
-  ).run(chatId, gender ?? null, ageBand ?? null, at);
+  ).run(
+    chatId,
+    gender ?? null,
+    ageBand ?? null,
+    job ?? null,
+    region ?? null,
+    at,
+  );
 };
 
 // 마지막 유저 메시지 이후 캐릭터가 먼저 보낸(proactive) 수 — '연속 무응답'을 세어 매달림을 막는다.

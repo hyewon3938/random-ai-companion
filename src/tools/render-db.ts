@@ -104,10 +104,6 @@ interface TableNote {
 const SIGNUP =
   "가입할 때 받기로 한 값. 가입 절차가 아직 없어서 넣는 코드도 없고, 지금 값은 손으로 넣은 것이다.";
 
-/** 대화로 채우기로 한 두 컬럼. 채우는 코드가 빠져 있다. */
-const FROM_TALK =
-  "대화에서 알게 되면 새벽 정리가 채우기로 한 값인데, 채우는 코드가 없어 비어 있다.";
-
 const NOTES: Record<string, TableNote> = {
   cast_members: {
     mark: "old",
@@ -142,8 +138,6 @@ const NOTES: Record<string, TableNote> = {
       preferred_name: { mark: "idle", note: SIGNUP },
       gender: { mark: "idle", note: SIGNUP },
       birth_year: { mark: "idle", note: SIGNUP },
-      job: { mark: "idle", note: FROM_TALK },
-      region: { mark: "idle", note: FROM_TALK },
     },
   },
 };
