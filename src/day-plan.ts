@@ -8,7 +8,9 @@ import {
   getArcs,
   getRecentDiaries,
   getDaySeed,
+  listMemoryItems,
   type DaySeed,
+  type MemoryRow,
 } from "./db.js";
 import {
   alwaysIncluded,
@@ -18,7 +20,11 @@ import {
 } from "./memory.js";
 import { ensureRhythmRunway } from "./life-plan.js";
 import { kstDateString, todayLabel } from "./kst.js";
-import { AWAY_DAILY_MAX, AWAY_MIN_BLOCK_MIN } from "./thresholds.js";
+import {
+  AWAY_DAILY_MAX,
+  AWAY_MIN_BLOCK_MIN,
+  PLAN_ONGOING_MAX,
+} from "./thresholds.js";
 import {
   toResponsiveness,
   toActivityCategory,
@@ -77,6 +83,19 @@ export const isAwayUnavail = (b: PlanBlock): boolean =>
 // trace.ts가 슬랙에 각본 생성 프롬프트를 올릴 때도 이 시스템 문장을 함께 보여준다.
 export const PLAN_SYSTEM = `너는 한 인물의 하루 흐름을 짜는 작가다. 과장 없이, 실제 그 직업과 성격의 사람이 보낼 법한 평범한 하루를 시간 블록으로 만든다. 루틴이 기본이고 변화는 잔잔하게 준다.`;
 
+// 며칠에 걸쳐 하는 일 한 줄. 새벽 정리가 같은 항목을 프롬프트에 넣는 방식(nightly.ts)을 따르되,
+// 각본에는 캐릭터 쪽 항목만 들어가서 누구 일인지 적을 자리가 없다.
+// 끝나는 조건을 값과 함께 적는다 — 조건이 이미 채워진 일을 오늘 또 하는 각본이 나오지 않게.
+const ongoingLine = (r: MemoryRow): string =>
+  `- ${r.area}/${r.subject}: ${r.value}${r.end_condition ? ` (끝나는 조건: ${r.end_condition})` : ""}`;
+
+// 진행 중인 일 절. 없는 날에는 머리말째로 빠진다 — 다른 절처럼 "(없음)"을 적어 두면
+// 며칠에 한 번 손대는 일이 오늘은 없다는 것과 아예 없다는 것이 같은 글자로 보인다.
+const ongoingSection = (ongoing: string): string =>
+  ongoing
+    ? `\n[진행 중인 일 — 며칠에 걸쳐 이어 하는 일. 오늘 손댈 만한 것이 있으면 그 다음 한 걸음을 블록으로 넣는다. 끝나는 조건이 이미 채워진 일은 넣지 않는다. 매일 손대는 일은 아니니 오늘 몫이 없으면 넣지 않아도 된다]\n${ongoing}\n`
+    : "";
+
 const seedLine = (seed: DaySeed | undefined): string => {
   if (!seed) return "(없음 — 평범한 컨디션으로)";
   return `기력=${seed.energy}, 기상 성향=${seed.wake_hint}, 기분=${seed.mood}${seed.reason ? ` (이유: ${seed.reason})` : ""}`;
@@ -89,6 +108,7 @@ const planPrompt = (
   date: string,
   label: string,
   schedules: string,
+  ongoing: string,
   arcs: string,
   diary: string,
   seed: DaySeed | undefined,
@@ -106,7 +126,7 @@ ${seedLine(seed)}
 
 [이 날의 확정 일정 — 있으면 반드시 하루에 자연스럽게 반영 (advance_known=true)]
 ${schedules || "(없음)"}
-
+${ongoingSection(ongoing)}
 [삶의 큰 흐름 — 하루의 결에 은은하게 반영]
 ${arcs || "(없음)"}
 
@@ -167,6 +187,13 @@ export const buildPlanPrompt = (characterId: number, date: string): string => {
     .filter((s) => s.date === date && s.owner === "char")
     .map((s) => `${s.time_hint ? `${s.time_hint} ` : ""}${s.content}`)
     .join(" / ");
+  // 며칠에 걸쳐 이어 하는 일. 이걸 각본이 모르면 캐릭터가 여러 날에 나눠 하는 일이 하루
+  // 흐름에 한 번도 드러나지 않는다. 캐릭터 쪽 항목만, 최근에 손댄 것부터 상한까지.
+  const ongoing = listMemoryItems(characterId, "ongoing")
+    .filter((r) => r.owner === "char")
+    .slice(0, PLAN_ONGOING_MAX)
+    .map(ongoingLine)
+    .join("\n");
   const arcs = Object.entries(getArcs(characterId))
     .map(([h, c]) => `${h}: ${c}`)
     .join(" / ");
@@ -186,6 +213,7 @@ export const buildPlanPrompt = (characterId: number, date: string): string => {
     date,
     todayLabel(),
     todays,
+    ongoing,
     arcs,
     lastDiary,
     seed,
