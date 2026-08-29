@@ -168,9 +168,8 @@ export const beforeNightlyTrace = (
 const REL_FIELDS: [keyof RelationshipRow, string][] = [
   ["stage", "지금 어떤 사이"],
   ["speech_level", "말투"],
-  ["speech_note", "말투의 결"],
+  ["speech_note", "상대에게 쓰는 말투"],
   ["address_terms", "서로 부르는 말"],
-  ["texture", "관계의 결"],
   ["rapport", "잘 통하는 것"],
   ["cautions", "조심할 것"],
   ["history", "지나온 이야기"],

@@ -98,7 +98,6 @@ export interface RelationshipExtract {
   stage?: string;
   speech_note?: string;
   address_terms?: string;
-  texture?: string;
   rapport?: string;
   cautions?: string;
   history?: string;
@@ -162,7 +161,7 @@ export interface NightlyGathered {
   identity: string; // 정체성 사실 줄들 (creation + conversation, 같은 키는 최신이 이김)
   people: string; // 주변 인물 줄들 (캐릭터 쪽·유저 쪽 모두)
   ongoing: string; // 진행 중인 일 줄들
-  relationship: string; // 관계 여덟 항목의 지금 값
+  relationship: string; // 관계 일곱 항목의 지금 값
   userProfile: string; // 대화로 채우는 상대 프로필 두 값(하는 일·사는 지역)의 지금 상태
   todayNotes: string[]; // 그 하루 동안 대화하며 적어 둔 오늘 메모
   dayActuals: string[]; // 각본과 달라진 블록 기록
@@ -221,9 +220,8 @@ const relationshipLines = (r: RelationshipRow | undefined): string => {
   const items: [string, string | null][] = [
     ["지금 어떤 사이", r.stage],
     ["말투", r.speech_level ? SPEECH_LEVEL_NAME[r.speech_level] : null],
-    ["말투의 결", r.speech_note],
+    ["상대에게 쓰는 말투", r.speech_note],
     ["서로 부르는 말", r.address_terms],
-    ["관계의 결", r.texture],
     ["잘 통하는 것", r.rapport],
     ["조심할 것", r.cautions],
     ["지나온 이야기", r.history],
@@ -429,7 +427,6 @@ const applyNightlyTxn = db.transaction(
             stage: clean(r.stage),
             speechNote: clean(r.speech_note),
             addressTerms: clean(r.address_terms),
-            texture: clean(r.texture),
             rapport: clean(r.rapport),
             cautions: clean(r.cautions),
             history: clean(r.history),
@@ -654,7 +651,7 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"stage":"지금 어떤 사이","speech_note":"말투의 결","address_terms":"서로 부르는 말","texture":"관계의 결","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지"}]}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"stage":"지금 어떤 사이","speech_note":"상대에게 쓰는 말투","address_terms":"서로 부르는 말","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지"}]}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.

@@ -275,15 +275,14 @@ const basicFacts = (name: string): string =>
     .filter(Boolean)
     .join("\n");
 
-// 관계 여덟 항목 — 전부 항상 주입, 빈 값은 줄 생략. last_contact_at은 넣지 않는다:
+// 관계 일곱 항목 — 전부 항상 주입, 빈 값은 줄 생략. last_contact_at은 넣지 않는다:
 // 매 답장마다 갱신되는 값이라 이 층의 캐시를 죽인다. speech_level은 꼬리의 말투 판정이 쓴다.
 const relationshipSection = (rel: RelationshipRow | undefined): string => {
   if (!rel) return "";
   const items: [string, string | null][] = [
     ["지금 어떤 사이", rel.stage],
-    ["말투의 결", rel.speech_note],
+    ["상대에게 쓰는 말투", rel.speech_note],
     ["서로 부르는 말", rel.address_terms],
-    ["관계의 결", rel.texture],
     ["잘 통하는 것", rel.rapport],
     ["조심할 것", rel.cautions],
     ["지나온 이야기", rel.history],

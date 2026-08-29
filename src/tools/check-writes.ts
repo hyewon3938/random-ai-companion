@@ -152,7 +152,6 @@ const relationships = all<{
      (CASE WHEN stage IS NOT NULL THEN '사이 ' ELSE '' END) ||
      (CASE WHEN speech_note IS NOT NULL THEN '말투 ' ELSE '' END) ||
      (CASE WHEN address_terms IS NOT NULL THEN '호칭 ' ELSE '' END) ||
-     (CASE WHEN texture IS NOT NULL THEN '결 ' ELSE '' END) ||
      (CASE WHEN rapport IS NOT NULL THEN '잘통함 ' ELSE '' END) ||
      (CASE WHEN cautions IS NOT NULL THEN '조심 ' ELSE '' END) ||
      (CASE WHEN history IS NOT NULL THEN '지나온 ' ELSE '' END) ||

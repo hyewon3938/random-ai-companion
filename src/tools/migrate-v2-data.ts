@@ -49,7 +49,6 @@ interface RelationshipCandidate {
   speechLevel: "polite" | "casual";
   speechNote: string;
   addressTerms: string;
-  texture: string;
   rapport: string | null;
   cautions: string | null;
   history: string;
@@ -152,13 +151,12 @@ for (const p of cand.persons) {
     );
 }
 
-// 3) 관계 초기값: 아홉 칸 검사 + 아직 비어 있어야 함
+// 3) 관계 초기값: 여덟 칸 검사 + 아직 비어 있어야 함
 const rel = cand.relationship;
 for (const k of [
   "stage",
   "speechNote",
   "addressTerms",
-  "texture",
   "history",
   "feelings",
 ] as const)
@@ -269,14 +267,13 @@ const applyAll = db.transaction(() => {
     });
   db.prepare(
     `UPDATE relationships SET stage = ?, speech_level = ?, speech_note = ?, address_terms = ?,
-       texture = ?, rapport = ?, cautions = ?, history = ?, feelings = ?, updated_at = ?
+       rapport = ?, cautions = ?, history = ?, feelings = ?, updated_at = ?
      WHERE character_id = ?`,
   ).run(
     rel.stage,
     rel.speechLevel,
     rel.speechNote,
     rel.addressTerms,
-    rel.texture,
     rel.rapport,
     rel.cautions,
     rel.history,
@@ -307,7 +304,7 @@ for (const r of byType)
 
 const relAfter = db
   .prepare(
-    `SELECT stage, speech_level, speech_note, address_terms, texture, rapport, cautions,
+    `SELECT stage, speech_level, speech_note, address_terms, rapport, cautions,
             history, feelings, legacy_state_json IS NOT NULL AS legacy_kept
      FROM relationships WHERE character_id = ?`,
   )
