@@ -40,7 +40,7 @@ flowchart LR
 | bot.ts | 텔레그램 수신과 발송, 나눠 온 유저 말 모으기, 말풍선 나눠 보내기, 답장 불가 구간이 끝날 때 몰아 답장과 복귀 인사 | 몰아 답장 · 복귀 인사 각 1번 |
 | reply-timing.ts | 각본 블록의 두 태그로 답장 텀 계산, 붙잡는 말인지 판정, 답장 불가 구간이면 몰아 답장으로 넘기기 | 붙잡기 판정 1번 |
 | memory.ts | 기억 저장과 태그 검색 | 없음 |
-| context.ts | 프롬프트 네 묶음 조립, 캐시 경계 표시 | 없음 |
+| context.ts | 프롬프트 네 묶음 조립, 캐시 경계 두 곳 표시 | 없음 |
 | llm.ts | 모델 호출, 프롬프트 캐시 적용, 사용량과 호출 원문 기록 | 있음 |
 | bubble-polish.ts | 말풍선 다듬기 | 없음 |
 | pending.ts | 만들어 둔 답장 보관, 정한 시각에 발송, 구간 끝 깨우기 표시 보관, 재시작 복구 | 없음 |
@@ -78,7 +78,7 @@ flowchart LR
 | user-profile.ts | 부르는 이름 · 성별 · 출생연도를 받고, 하는 일과 사는 지역은 비워 둔 채 시작 | 없음 |
 | character.ts | 유저가 적은 선택지와 서술형 입력을 받아 캐릭터를 생성, 정체성 · 주변 인물 · 진행 중인 일 · 관계 첫 값을 만드는 호출과 삶의 흐름을 쓰는 호출로 나눔 | 2번 |
 
-공통으로 쓰는 모듈은 둘이다. db.ts에 스키마와 쿼리가 모여 있고, kst.ts가 한국 시각과 논리일을 계산한다.
+공통으로 쓰는 모듈은 넷이다. db.ts에 스키마와 쿼리가 모여 있고, kst.ts가 한국 시각과 논리일을 계산한다. labels.ts는 닫힌 목록 값의 영어 식별자와 한국어 이름을 한곳에 모으고, thresholds.ts는 선톡 창 · 답장 텀 범위 · 검색 개수 상한처럼 숫자로 관리하는 값을 「고정된 기준값」 표와 1:1로 모은다.
 
 ## 새벽 배치
 
@@ -118,6 +118,8 @@ flowchart LR
 | --- | --- | --- | --- |
 | llm.ts | 호출한 프롬프트와 출력, 토큰 사용량, 걸린 시간을 기록 | 호출할 때마다 | 해당 없음 |
 | db.ts | 본문을 내용 해시로 저장, 90일 지난 본문과 아무도 가리키지 않는 본문 삭제 | 새벽 5시 50분 | 없음 |
+| reply-trace.ts | 호출 기록을 읽어 답장 한 건의 근거(답한 유저 발화 · 답장 텀이 나온 길 · 검색한 태그와 기억 · 다듬기 전후)를 게시함에 기록 | 1분 간격 | 없음 |
+| nightly-trace.ts | 새벽 정리가 반영하기 전후의 값을 읽어 그 밤의 결과(기억 · 관계 · 일정 · 일기 · 선톡 문안)를 게시함에 기록 | 새벽 정리가 반영할 때 | 없음 |
 | trace.ts | 파이프라인이 게시함에 적어 둔 내용을 슬랙 채널에 게시 | 1분 간격 | 없음 |
 | tools/check-writes.ts | 쌓인 기록을 한 번에 읽는 점검 스크립트 | 운영자가 실행할 때 | 없음 |
 
@@ -146,7 +148,5 @@ flowchart LR
 
 | 구분 | 대상 |
 | --- | --- |
-| 바뀌는 모듈 | character.ts(코드가 정하던 성별 · 나이 · MBTI · 애착유형 대신 유저 입력으로 생성), memory.ts(저장 항목 셋으로 정리, origin=creation 행 수정 거부, 주변 인물 저장과 검색), nightly.ts(기억 정리 호출의 출력에 관계 항목 갱신 포함), context.ts(관계 항목을 relationships에서 읽어 항상 주입) |
-| 삭제 | cast_members를 읽고 쓰는 코드 — 주변 인물은 memory.ts가 담당한다 |
-| 새 모듈 | thresholds.ts — 선톡 창 · 답장 텀 범위 · 검색 개수 상한처럼 숫자로 관리하는 값을 「고정된 기준값」 표와 1:1로 모은 상수 모듈. labels.ts가 닫힌 목록의 이름을 모은 것과 같은 방식 |
-| 그대로 | bot.ts, llm.ts, trace.ts, bubble-polish.ts, reply-timing.ts, pending.ts, labels.ts, proactive-policy.ts, dispatch.ts, presence.ts, followup.ts, life-plan.ts, day-plan.ts, user-profile.ts, kst.ts, config.ts. db.ts는 스키마 정의 변경만 |
+| 삭제 | cast_members를 읽고 쓰는 코드 — 주변 인물은 memory.ts가 담당한다. relationships의 legacy_state_json을 읽고 쓰는 자리도 함께 지운다 |
+| 그대로 | 나머지 모듈 전부 |
