@@ -1254,6 +1254,25 @@ export const getUpcomingSchedules = (
     )
     .all(characterId, fromDate, limit) as ScheduleRow[];
 
+// 각본 블록이 가리키는 원본 일정 한 건. 붙잡기 판정이 '유저가 아는가'를 원본에서 읽는다 —
+// 각본에는 이 값이 없고, 블록의 출처(source_id)를 따라와야 나온다.
+// character_id를 함께 걸어 각본에 엉뚱한 번호가 적혀도 다른 캐릭터의 일정에 닿지 않게 한다.
+// status는 걸지 않는다 — 취소·미룸으로 표시된 일정이라도 유저가 아는지는 그대로다.
+export interface ScheduleDetailRow extends ScheduleRow {
+  user_knows: UserKnows;
+}
+
+export const getScheduleById = (
+  characterId: number,
+  id: number,
+): ScheduleDetailRow | null =>
+  (db
+    .prepare(
+      `SELECT id, owner, date, time_hint, content, user_knows FROM schedules
+       WHERE character_id = ? AND id = ?`,
+    )
+    .get(characterId, id) as ScheduleDetailRow | undefined) ?? null;
+
 // 그날 유저에게 있는 일정 — 오래 답이 없는 동안에도 이 일정만은 챙겨 아침에 한 통 보낸다.
 export const hasUserScheduleOn = (characterId: number, date: string): boolean =>
   !!db
