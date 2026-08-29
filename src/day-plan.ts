@@ -18,6 +18,7 @@ import {
 } from "./memory.js";
 import { ensureRhythmRunway } from "./life-plan.js";
 import { kstDateString, todayLabel } from "./kst.js";
+import { AWAY_DAILY_MAX, AWAY_MIN_BLOCK_MIN } from "./thresholds.js";
 import {
   toResponsiveness,
   toActivityCategory,
@@ -124,6 +125,7 @@ ${diary || "(없음)"}
   - 닥쳐야 아는 일 (advance_known=false): 오후에 갑자기 바빠짐, 급한 업무, 예정에 없던 호출, 갑자기 마트에 감, 친구의 급한 전화 같은 그때 가서야 겪는 일 — 이런 갑작스러운 일을 하루 한둘은 자연스럽게 껴 넣는다.
   - 그래도 아무 이벤트 없는 평범한 날도 가끔은 자연스럽다.
 - 하루 곳곳에 '자리를 비우는' 불가 구간을 자연스럽게 넣는다: 운동(한 시간쯤), 씻기, 저녁 준비·식사, 장보기/마트, 집중 업무, 통화. 사람은 늘 답할 수 있는 게 아니다 — 특히 저녁 시간이 즉답으로만 쭉 이어지지 않게 unavailable·intermittent를 섞는다. 이 중 일부는 미리 아는 일(advance_known=true, 예: 정해둔 운동)이고 일부는 갑작스러운 것(false, 예: 급하게 마트 감·집안일)이다.
+- **${AWAY_MIN_BLOCK_MIN}분 넘게 자리를 비우는 불가 구간(잠 제외)은 하루 ${AWAY_DAILY_MAX}개까지.** 나가기 전에 상대에게 알리고 가는 자리라, 이보다 많으면 하루 종일 자리를 비운다는 말만 주고받게 된다. 더 넣고 싶으면 짧게(${AWAY_MIN_BLOCK_MIN}분 미만) 두거나 틈틈이 폰을 볼 수 있는 일로 바꾼다.
 - 각 블록의 responsiveness = 그 시간에 메신저 답장을 얼마나 할 수 있는가. 값은 셋 중 하나:
   - "instant"(즉답 — 쉬는 중·대화 시간) / "intermittent"(틈틈이 — 근무·이동·집안일·장보기처럼 틈틈이 볼 수 있음) / "unavailable"(불가 — 손이나 정신이 묶여 못 봄).
   - "unavailable"은 손이나 정신이 진짜로 묶인 때만: 통화(전화 받는 중)·운전·공식 회의·운동·씻기·영화관·잠.

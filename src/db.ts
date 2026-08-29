@@ -1230,6 +1230,14 @@ export const getUpcomingSchedules = (
     )
     .all(characterId, fromDate, limit) as ScheduleRow[];
 
+// 그날 유저에게 있는 일정 — 오래 답이 없는 동안에도 이 일정만은 챙겨 아침에 한 통 보낸다.
+export const hasUserScheduleOn = (characterId: number, date: string): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM schedules WHERE character_id = ? AND owner = 'user' AND status = 'active' AND date = ? LIMIT 1`,
+    )
+    .get(characterId, date);
+
 export const addSchedule = (
   characterId: number,
   owner: "char" | "user",
@@ -1499,6 +1507,16 @@ export const hasUserMessageSince = (chatId: string, since: string): boolean =>
     )
     .get(chatId, since);
 
+// 유저가 마지막으로 말한 시각 — 선톡 셋(근황·밤 인사·자리비움)이 무응답 시간을 재는 기준.
+export const lastUserTs = (chatId: string): string | undefined =>
+  (
+    db
+      .prepare(
+        `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(chatId) as { sent_at: string } | undefined
+  )?.sent_at;
+
 // 마지막 메시지(유저·캐릭 무관)의 시각·역할 — 침묵 팔로업 판단용
 export const lastMessage = (
   chatId: string,
@@ -1509,16 +1527,44 @@ export const lastMessage = (
     )
     .get(chatId) as { sent_at: string; role: string } | undefined;
 
-// 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸(proactive) 발송 수 — 팔로업 총량 제한용
-// 하루 선제 발송 총량 상한(아침 안부·팔로업·자리비움 예고 합산). followup·presence가 공유한다 —
-// 채널별 상한만 있으면 합이 통제되지 않는다(각자 자기 몫을 다 쓰면 하루 ~10통까지 가능했다).
-export const PROACTIVE_DAILY_MAX = 6;
-
+// 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸 선톡 수 — 하루 총량 상한을 지키는 데 쓴다.
+// followup·dispatch가 공유한다. 채널별 상한만 있으면 합이 통제되지 않아서, 각자 자기 몫을
+// 다 쓰면 하루 10통까지 나갈 수 있었다.
+//
+// 자리비움 선톡은 여기서 뺀다 — 캐릭터가 나갔다 오는 일정 수만큼 나가는 말이라 성격이
+// 다르고, 그쪽은 AWAY_DAILY_MAX가 따로 막는다.
 export const proactiveCountToday = (chatId: string, since: string): number =>
   (
     db
       .prepare(
-        `SELECT count(*) c FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at >= ? AND meta_json LIKE '%proactive%'`,
+        `SELECT count(*) c FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at >= ?
+           AND meta_json LIKE '%proactive%' AND meta_json NOT LIKE '%"kind":"away"%'`,
+      )
+      .get(chatId, since) as { c: number }
+  ).c;
+
+// 오늘 보낸 선톡을 종류별로 센다.
+export const proactiveKindCountToday = (
+  chatId: string,
+  since: string,
+  kind: string,
+): number =>
+  (
+    db
+      .prepare(
+        `SELECT count(*) c FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at >= ? AND meta_json LIKE ?`,
+      )
+      .get(chatId, since, `%"kind":"${kind}"%`) as { c: number }
+  ).c;
+
+// 오늘 알리고 나간 자리비움 선톡 수. 돌아와서 하는 인사는 이미 알린 구간을 마무리하는
+// 말이라 빼고 센다.
+export const awayNoticeCountToday = (chatId: string, since: string): number =>
+  (
+    db
+      .prepare(
+        `SELECT count(*) c FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at >= ?
+           AND meta_json LIKE '%"kind":"away"%' AND meta_json NOT LIKE '%"return"%'`,
       )
       .get(chatId, since) as { c: number }
   ).c;

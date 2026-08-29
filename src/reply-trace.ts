@@ -46,6 +46,7 @@ const POST_PURPOSES = [
   "reply",
   "hold",
   "morning",
+  "lunch",
   "reconnect",
   "catchup",
   "goodnight",

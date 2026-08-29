@@ -2,12 +2,12 @@ import { chatJson } from "./llm.js";
 import { config } from "./config.js";
 import { isHeldNow } from "./reply-timing.js";
 import {
+  awayNoticeCountToday,
   db,
   getDayPlan,
   lastMessage,
-  proactiveCountToday,
+  lastUserTs,
   recordSendFailure,
-  PROACTIVE_DAILY_MAX,
   type CharacterRow,
 } from "./db.js";
 import { buildSystemBlocks } from "./context.js";
@@ -26,6 +26,8 @@ import {
   AWAY_SUDDEN_AFTER_MIN,
   AWAY_BACK_TO_BACK_BEFORE_MIN,
   AWAY_BACK_TO_BACK_AFTER_MIN,
+  AWAY_DAILY_MAX,
+  RECENT_USER_MS,
 } from "./thresholds.js";
 import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
 
@@ -52,15 +54,6 @@ const lastCharTs = (chatId: string): string | undefined =>
     db
       .prepare(
         `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`,
-      )
-      .get(chatId) as { sent_at: string } | undefined
-  )?.sent_at;
-
-const lastUserTs = (chatId: string): string | undefined =>
-  (
-    db
-      .prepare(
-        `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
       )
       .get(chatId) as { sent_at: string } | undefined
   )?.sent_at;
@@ -137,11 +130,11 @@ const presenceTickBody = async (): Promise<void> => {
     }
     const nowMin = toMin(kstClock());
 
-    // '유저의' 발화가 최근(≤4h)일 때만 — 하루 종일 조용한 상대에게 뜬금없이 알리지 않는다.
-    // 캐릭터 자기 발화까지 세면 아침 안부가 '최근 대화'가 되어 예고가 예고를 부르는 체인이 생겼다
-    // (실측: 침묵일에도 하루 최대 5통). 유저 기준 4시간은 침묵 백오프(3일)를 자연히 포함한다.
+    // 유저가 방금까지 대화 중이었을 때만 — 하루 종일 조용한 상대에게 뜬금없이 알리지 않는다.
+    // 캐릭터 자기 발화까지 세면 아침 선톡이 '최근 대화'가 되어 예고가 예고를 부르는 체인이 생겼다
+    // (실측: 침묵일에도 하루 최대 5통). 유저 기준 네 시간은 침묵 백오프(3일)를 자연히 포함한다.
     const lu = lastUserTs(c.chat_id);
-    if (!lu || ageMin(lu) > 240) continue;
+    if (!lu || ageMin(lu) > RECENT_USER_MS / 60_000) continue;
     const last = lastMessage(c.chat_id);
     if (!last) continue;
     // 유저가 붙잡아 지금 일정을 접고 곁에 있는 중이면 자리 비움 예고를 하지 않는다.
@@ -150,20 +143,11 @@ const presenceTickBody = async (): Promise<void> => {
     const lc = lastCharTs(c.chat_id);
     if (lc && ageMin(lc) < 5) continue;
 
-    // 하루 예고 상한(안전장치) — 자리 비움이 많은 날도 과하지 않게.
+    // 하루 예고 상한 — 나갔다 오는 일정이 많은 날도 알리는 말이 과해지지 않게 막는다.
+    // 하루 각본을 만들 때부터 같은 상한을 지키므로 여기서 걸리는 날은 드물다.
     // dayStart는 논리일(새벽 5시 컷오프) 기준 — 달력일 기준이면 자정~새벽에 카운트가 리셋된다.
     const dayStart = logicalDayStartTs();
-    const cnt = (
-      db
-        .prepare(
-          `SELECT count(*) c FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ?`,
-        )
-        .get(c.chat_id, dayStart, '%"kind":"away"%') as { c: number }
-    ).c;
-    if (cnt >= 4) continue;
-    // 하루 선제 발송 총량(전 채널 합산)도 확인 — 자기 몫만 세면 followup과 합이 통제되지 않는다.
-    if (proactiveCountToday(c.chat_id, dayStart) >= PROACTIVE_DAILY_MAX)
-      continue;
+    if (awayNoticeCountToday(c.chat_id, dayStart) >= AWAY_DAILY_MAX) continue;
 
     // 예고할 불가 블록 찾기: 미리 아는 일정은 시작 직전, 닥친 일은 시작 시점,
     // 연속 불가 사이는 경계(직후)에 알린다.

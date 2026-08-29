@@ -4,12 +4,13 @@
 // 닫힌 목록의 이름을 한곳에 모은 것과 같은 방식으로, 같은 성격의 값이 코드 여러 곳에 흩어져
 // 하나만 고쳐지는 일을 막는다. 표의 값을 조정할 때 고칠 자리도 여기 한곳이 된다.
 //
-// 지금 이 모듈을 참조하는 곳은 memory.ts · context.ts · life-plan.ts다. 나머지 모듈은
-// 각자 다시 쓰는 세션에서 리터럴을 이 모듈 참조로 바꾼다 — 스키마만 배포하는 회차에
-// 실행 중인 모듈 여럿을 함께 건드리면 배포 위험만 커진다.
+// 지금 이 모듈을 참조하는 곳은 memory.ts · context.ts · life-plan.ts · day-plan.ts와 선톡을
+// 다루는 네 모듈(proactive-policy.ts · dispatch.ts · presence.ts · followup.ts)이다. 아직 옮기지 않은
+// 모듈은 각자 다시 쓰는 세션에서 리터럴을 이 모듈 참조로 바꾼다. 스키마만 배포하는
+// 회차에 실행 중인 모듈 여럿을 함께 건드리면 배포 위험만 커진다.
 //
 // 표에서 폐기·완료로 표시된 값(붙잡기 10분·12분, 답장 불가 대기 상한 35분, 밤 대화 판정
-// 45분, 자리비움 하루 4회, 낮 근황 100~139분·2회)은 여기 두지 않는다.
+// 45분, 낮 근황 100~139분·2회)은 여기 두지 않는다.
 
 // ── 답장 텀 ─────────────────────────────────────────────────────────────
 // 지금 값은 reply-timing.ts가 자기 파일 안에 두고 있다. 그 모듈을 다시 쓸 때 이쪽으로 옮긴다.
@@ -31,7 +32,6 @@ export const INTERMITTENT_OFFICIAL_MIN_MS = 60_000;
 export const INTERMITTENT_OFFICIAL_MAX_MS = 480_000;
 
 // ── 선톡 ────────────────────────────────────────────────────────────────
-// 지금 값은 proactive-policy.ts · dispatch.ts · presence.ts · followup.ts에 흩어져 있다.
 
 /** 침묵 백오프 — 무응답 이 일수부터 조용, 이 일수째에 안부 선톡 한 통. */
 export const QUIET_AFTER_DAYS = 3;
@@ -40,12 +40,17 @@ export const RECONNECT_AT_DAYS = 14;
 /** 안부 선톡을 보내는 시각 범위. */
 export const RECONNECT_WINDOW = { start: "17:00", end: "19:59" } as const;
 
+/** 무응답 2일째에 아침 대신 보내는 점심 시각 범위. */
+export const LUNCH_WINDOW = { start: "12:05", end: "12:50" } as const;
+
 /** 전송에 실패해 시간대를 놓쳤을 때 늦게라도 보내는 유예와 시간대별 상한. */
 export const SEND_GRACE_MIN = 90;
 export const SEND_GRACE_CAPS = ["11:00", "14:00", "22:00"] as const;
 
-/** 근황 선톡을 보내는 무응답 임계이자, 자리비움 선톡을 보낼 수 있는 마지막 경계. */
-export const CATCHUP_SILENCE_MS = 4 * 60 * 60 * 1000;
+/** 유저가 방금까지 대화 중이었다고 보는 창. 세 자리가 같은 값을 쓴다 — 근황 선톡을 보내는
+ * 무응답 임계, 자리비움 선톡을 보낼 수 있는 마지막 경계, 아침 선톡이 유저가 먼저 연락했는지
+ * 재는 창이다. */
+export const RECENT_USER_MS = 4 * 60 * 60 * 1000;
 
 /** 밤 인사 선톡 — 이만큼 답이 없고 이 시간대에 들어와 있으면 보낸다. */
 export const GOODNIGHT_SILENCE_MS = 60 * 60 * 1000;
@@ -61,10 +66,12 @@ export const AWAY_SUDDEN_AFTER_MIN = 12;
 export const AWAY_BACK_TO_BACK_BEFORE_MIN = 2;
 export const AWAY_BACK_TO_BACK_AFTER_MIN = 12;
 
-/** 선톡 전체의 하루 상한. 자리비움은 이 상한에서 뺀다. */
-export const PROACTIVE_DAILY_MAX = 6;
+/** 자리비움 선톡의 하루 상한. 나갈 때 알리는 것만 세고, 돌아와서 하는 인사는 빼고 센다.
+ * 하루 각본을 만들 때도 이 값을 넘기지 않도록 알리고 나갈 만한 일정 수를 제한한다. */
+export const AWAY_DAILY_MAX = 3;
 
-// 무응답 2일째에 아침 대신 보내는 점심 시간대는 아직 정하지 않았다(표에 미정으로 올라 있다).
+/** 선톡 전체의 하루 상한. 자리비움은 이 상한에서 빼고 위 상한으로만 관리한다. */
+export const PROACTIVE_DAILY_MAX = 6;
 
 // ── 하루와 기록 ─────────────────────────────────────────────────────────
 

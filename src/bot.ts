@@ -46,12 +46,10 @@ import {
   hasWaitingWakeRow,
   lastMessage,
   logMessage,
-  proactiveCountToday,
   recentUserGaps,
   setCallContext,
   setRecoveryMark,
   setSpeechLevel,
-  PROACTIVE_DAILY_MAX,
   type CharacterRow,
   type MessageRow,
   type PendingReplyRow,
@@ -1009,8 +1007,6 @@ setWakeHandler(async (row: PendingReplyRow) => {
         `%"block":"${meta.blockStart}"%`,
       );
   if (!announced || !last || last.role !== "assistant") return;
-  // 복귀 인사도 선톡이다 — 하루 총량을 넘기지 않는다.
-  if (proactiveCountToday(chatId, dayStart) >= PROACTIVE_DAILY_MAX) return;
   const draft = await chatJson<{ send: boolean; text?: string }>(
     buildSystemBlocks(row.character_id, chatId, {
       situation: returnSituation(activity),
