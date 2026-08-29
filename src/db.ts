@@ -11,6 +11,7 @@ import {
   type MemoryOwner,
   type MemoryOrigin,
   type UserKnows,
+  type ScheduleStatus,
   type Interest,
   type SpeechLevel,
 } from "./labels.js";
@@ -1276,6 +1277,10 @@ export interface ScheduleDetailRow extends ScheduleRow {
   user_knows: UserKnows;
 }
 
+export interface ScheduleStateRow extends ScheduleRow {
+  status: ScheduleStatus;
+}
+
 export const getScheduleById = (
   characterId: number,
   id: number,
@@ -1295,6 +1300,7 @@ export const hasUserScheduleOn = (characterId: number, date: string): boolean =>
     )
     .get(characterId, date);
 
+// 넣은 행 번호를 돌려준다 — 저장 직후 이 일정에 주제 태그를 붙이려면 번호가 있어야 한다.
 export const addSchedule = (
   characterId: number,
   owner: "char" | "user",
@@ -1302,10 +1308,31 @@ export const addSchedule = (
   timeHint: string | null,
   content: string,
   now: string,
-): void => {
-  db.prepare(
-    `INSERT INTO schedules (character_id, owner, date, time_hint, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(characterId, owner, date, timeHint, content, now);
+): number =>
+  Number(
+    db
+      .prepare(
+        `INSERT INTO schedules (character_id, owner, date, time_hint, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(characterId, owner, date, timeHint, content, now).lastInsertRowid,
+  );
+
+// 태그로 찾은 일정 여러 건. 날짜 조건을 걸지 않는다 — 이 경로가 꺼내는 것은 주로 지난 일정이고,
+// 가까운 앞일은 이미 [다가오는 일정]이 싣는다(겹치는 행은 읽는 쪽이 뺀다).
+// status도 걸지 않는다: 취소·미룸으로 표시된 일정도 대화에 나오면 그대로 답해야 하고,
+// 예정처럼 말하지 않도록 상태를 프롬프트에 함께 적는다.
+export const getSchedulesByIds = (
+  characterId: number,
+  ids: number[],
+): ScheduleStateRow[] => {
+  if (!ids.length) return [];
+  const holes = ids.map(() => "?").join(",");
+  return db
+    .prepare(
+      `SELECT id, owner, date, time_hint, content, status FROM schedules
+       WHERE character_id = ? AND id IN (${holes})`,
+    )
+    .all(characterId, ...ids) as ScheduleStateRow[];
 };
 
 export const getSchedulesInMonth = (

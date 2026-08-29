@@ -125,6 +125,9 @@ export interface ExtractOutput {
     date: string;
     time_hint: string | null;
     content: string;
+    // 이 일정을 나중에 주제로 다시 꺼낼 태그. 기억과 같은 어휘를 써야 함께 찾아진다.
+    // 옵셔널인 이유는 이미 저장된 일정과 아직 이 항목을 안 만드는 생성 경로가 있어서다.
+    tags?: string[];
   }[];
 }
 
@@ -190,19 +193,24 @@ export interface NightlyGathered {
 const nowStamp = (): string =>
   `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
 
-// 일기에 붙일 태그를 다듬는다. 모델이 준 값이라 배열이 아닐 수도, 빈 문자열이나 같은 말이
-// 두 번 올 수도 있다. 상한을 두는 이유는 thresholds.ts DIARY_TAG_MAX 주석에 적었다.
-const diaryTags = (entry: DiaryOutput): string[] => {
-  const raw = Array.isArray(entry.tags) ? entry.tags : [];
+// 모델이 준 태그를 다듬는다. 배열이 아닐 수도, 빈 문자열이나 같은 말이 두 번 올 수도 있다.
+const cleanTags = (raw: unknown, max?: number): string[] => {
+  const list = Array.isArray(raw) ? raw : [];
   const out: string[] = [];
-  for (const t of raw) {
+  for (const t of list) {
     const v = typeof t === "string" ? t.trim() : "";
     if (!v || out.includes(v)) continue;
     out.push(v);
-    if (out.length >= DIARY_TAG_MAX) break;
+    if (max && out.length >= max) break;
   }
   return out;
 };
+
+// 일기에 붙일 태그. 상한을 두는 이유는 thresholds.ts DIARY_TAG_MAX 주석에 적었다.
+// 일정 태그에는 상한을 두지 않는다 — 일정은 대화에서 잡힌 것만 드문드문 쌓여서, 같은 호출의
+// 기억 태그와 사정이 같다.
+const diaryTags = (entry: DiaryOutput): string[] =>
+  cleanTags(entry.tags, DIARY_TAG_MAX);
 
 const planBrief = (raw: string | undefined): string => {
   if (!raw) return "";
@@ -399,6 +407,7 @@ const applyNightlyTxn = db.transaction(
 
     const ex = out.extract;
     let memCount = 0;
+    let schedTagCount = 0;
     let profileFilled: string[] = [];
     const skippedKeys: string[] = [];
     if (ex) {
@@ -484,9 +493,11 @@ const applyNightlyTxn = db.transaction(
         ].filter(Boolean);
       }
 
+      // 일정도 기억·일기와 같은 태그로 찾는다 — 이 줄이 없으면 지난 일정을 주제로 꺼내는
+      // 경로(context.ts)가 늘 빈손으로 돌아온다.
       for (const s of ex.schedules ?? [])
-        if (s.date && s.content)
-          addSchedule(
+        if (s.date && s.content) {
+          const schedId = addSchedule(
             g.characterId,
             s.who === "user" ? "user" : "char",
             s.date,
@@ -494,6 +505,11 @@ const applyNightlyTxn = db.transaction(
             s.content,
             ts,
           );
+          const schedTagList = cleanTags(s.tags);
+          if (schedTagList.length)
+            setTags(g.characterId, "schedule", schedId, schedTagList);
+          schedTagCount += schedTagList.length;
+        }
     }
 
     // 그날 각본: 없으면 저장하고, 있어도 새벽 대화가 만든 lazy 각본이면 정식 각본으로 교체한다.
@@ -547,7 +563,7 @@ const applyNightlyTxn = db.transaction(
       }
     }
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
@@ -658,6 +674,10 @@ JSON으로:
 
 tags 규칙: 한 일·간 곳·만난 사람 이름을 낱말로 적는다. [이미 쓰는 태그]에 같은 뜻이 있으면 그 표기를 그대로 쓰고, 명사 한 덩어리로 짧게 쓴다.`;
 
+// 기억과 일정이 같은 어휘로 묶이도록 태그 규칙은 한 문장을 두 자리에 쓴다 — 규칙이 갈라지면
+// 같은 주제가 다른 낱말로 적혀 함께 찾아지지 않는다.
+const TAG_RULE = `내용과 관련된 말을 넉넉히 붙인다. 사람 이름은 반드시 태그로. [이미 쓰는 태그]에 같은 뜻이 있으면 그 표기를 재사용한다.`;
+
 const EXTRACT_SYSTEM = `너는 캐릭터의 하루에서 다음 대화에 필요한 기억을 정리하는 정리자다. 대화에 나온 확실한 사실만 담고, 남길 것이 없으면 빈 배열을 준다.`;
 
 const extractPrompt = (g: NightlyGathered): string => {
@@ -700,7 +720,7 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"stage":"지금 어떤 사이","speech_note":"상대에게 쓰는 말투","address_terms":"서로 부르는 말","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지"}]}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"stage":"지금 어떤 사이","speech_note":"상대에게 쓰는 말투","address_terms":"서로 부르는 말","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"]}]}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.
@@ -709,7 +729,7 @@ memories 규칙:
 - 같은 주제가 [이미 있는 키]에 있으면 반드시 그 키를 그대로 쓴다 — 같은 키에 쓰면 내용이 새 사실로 갈아 끼워진다. 이미 아는 내용과 같은 것은 다시 넣지 않는다.
 - person: 영역=갈래(가족·직장·친구 등), 무엇=이름(모르면 호칭 그대로). 상대가 흘리듯 언급한 상대 쪽 사람도 빠뜨리지 않는다. 이미 아는 인물은 내용이 달라졌을 때만 같은 키로 다시 쓴다.
 - "~라고 불러줘" 같은 지시·부탁은 사실 문장으로 바꿔 저장한다 (예: 상대는 OO라고 불리는 걸 좋아한다).
-- tags: 내용과 관련된 말을 넉넉히 붙인다. 사람 이름은 반드시 태그로. [이미 쓰는 태그]에 같은 뜻이 있으면 그 표기를 재사용한다.
+- tags: ${TAG_RULE}
 - user_knows: '나'(char) 쪽 기억에만 — 이 사실을 상대가 아는가.
 
 relationship 규칙: 이 하루로 실제 달라진 항목만 넣는다 (넣은 항목만 갱신되고, 나머지는 그대로 남는다). 각 항목은 짧은 서술로. 존댓말·반말 같은 말투 값은 여기서 바꾸지 않는다. 달라진 게 없으면 relationship은 null.
@@ -718,7 +738,9 @@ user_profile 규칙:
 - 위 [상대 프로필 — 지금 값]에 이미 있는 값과 같으면 넣지 않는다. 두 값 다 그대로면 user_profile은 null.
 - 값은 짧게 — 하는 일은 직업 한 덩어리(예: 중학교 교사), 사는 지역은 시·구 정도(예: 서울 마포구). 문장으로 쓰지 않는다.
 - 여기 넣은 값은 프롬프트에 늘 들어간다. 같은 내용을 memories에 또 넣지 않고, 이야기가 붙는 것(회사를 옮긴 사정, 동네에서 자주 가는 곳 같은)만 memories로 남긴다.
-schedules 규칙: 기준 날짜로 환산 가능한 날짜만. 위 정체성의 직업·생활과 어긋나는 날짜면 제외한다.`;
+schedules 규칙:
+- 기준 날짜로 환산 가능한 날짜만. 위 정체성의 직업·생활과 어긋나는 날짜면 제외한다.
+- tags: ${TAG_RULE}`;
 };
 
 // ── 선톡 문안 — 대화와 같은 3층 프롬프트(buildSystemBlocks)에 상황 문단만 얹는다 ──

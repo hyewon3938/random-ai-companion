@@ -134,6 +134,8 @@ interface CallContext {
     tagCallId?: number | null;
     memories?: string[];
     oldDiaries?: string[];
+    /** 주제로 찾아 넣은 일정 — 날짜와 내용. */
+    schedules?: string[];
     dropped?: string[];
   };
   turns?: number;
@@ -403,6 +405,7 @@ const searchLines = (ctx: CallContext): string[] => {
     found ? `기억 ${found}건 — ${s.memories?.join(" / ")}` : "기억 0건",
   );
   if (s.oldDiaries?.length) bits.push(`옛 일기 ${s.oldDiaries.join("·")}`);
+  if (s.schedules?.length) bits.push(`일정 ${s.schedules.join(" / ")}`);
   if (s.dropped?.length)
     bits.push(
       `개수 상한에 걸려 빠짐 ${s.dropped.length}건 — ${s.dropped.join(" / ")}`,

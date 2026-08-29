@@ -718,6 +718,7 @@ const respond = async (
       tagPool: 0,
       memories: [],
       oldDiaries: [],
+      schedules: [],
       dropped: [],
     };
     const pick = await pickTags(character.id, turn.text);
@@ -913,6 +914,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
       tagPool: 0,
       memories: [],
       oldDiaries: [],
+      schedules: [],
       dropped: [],
     };
     const system = buildSystemBlocks(row.character_id, chatId, {
