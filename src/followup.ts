@@ -24,6 +24,7 @@ import {
   GOODNIGHT_SILENCE_MS,
   GOODNIGHT_WINDOW,
   PROACTIVE_DAILY_MAX,
+  PROACTIVE_RECENT_LINES,
   RECENT_USER_MS,
 } from "./thresholds.js";
 
@@ -55,11 +56,10 @@ const goodnightSituation = (): string =>
     `JSON으로만 답한다: {"text":"..."}`,
   ].join("\n");
 
-const catchupSituation = (lastLine: string): string =>
+const catchupSituation = (): string =>
   [
     `[문안 — 지금 보낼 근황 한 통]`,
     `상대가 네 시간 넘게 조용하다. 재촉하지 않고 위 [지금]에서 네가 하는 일만 가볍게 한 마디 전한다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,
-    `마지막으로 오간 말: ${lastLine || "(없음)"}`,
     `- 막 시작하는 참이면 이제 그걸 하러 간다고 가볍게 흘리는 결.`,
     `- 자기 삶 공유가 핵심. 가볍게 질문 하나 얹어도 좋다.`,
     `- 매달리거나 서운함을 내비치지 않는다. 재촉 금지.`,
@@ -132,6 +132,7 @@ const followupTickBody = async (): Promise<void> => {
       try {
         const g = await chatJson<{ text: string }>(
           buildSystemBlocks(c.id, c.chat_id, {
+            recent: PROACTIVE_RECENT_LINES,
             situation: goodnightSituation(),
           }),
           "위 상황 문단대로 문안을 만들어.",
@@ -175,20 +176,13 @@ const followupTickBody = async (): Promise<void> => {
     const block = currentBlock(c.id);
     if (!block || block.responsiveness === "unavailable") continue; // 운전·잠 등엔 못 보냄
 
-    const lastLine = (
-      db
-        .prepare(
-          `SELECT text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
-        )
-        .get(c.chat_id) as { text: string } | undefined
-    )?.text;
-
     // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
     if (!acquireProactive(c.chat_id)) continue;
     try {
       const draft = await chatJson<{ send: boolean; text?: string }>(
         buildSystemBlocks(c.id, c.chat_id, {
-          situation: catchupSituation((lastLine ?? "").replace(/\n/g, " ")),
+          recent: PROACTIVE_RECENT_LINES,
+          situation: catchupSituation(),
         }),
         "위 상황 문단대로 문안을 만들어.",
         500,

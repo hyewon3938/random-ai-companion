@@ -21,6 +21,8 @@ import {
 } from "./bot.js";
 import {
   AWAY_MIN_BLOCK_MIN,
+  AWAY_QUIET_MIN,
+  PROACTIVE_RECENT_LINES,
   AWAY_BEFORE_MIN,
   AWAY_AFTER_MIN,
   AWAY_SUDDEN_AFTER_MIN,
@@ -58,22 +60,12 @@ const lastCharTs = (chatId: string): string | undefined =>
       .get(chatId) as { sent_at: string } | undefined
   )?.sent_at;
 
-const lastLineOf = (chatId: string): string =>
-  (
-    db
-      .prepare(
-        `SELECT text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
-      )
-      .get(chatId) as { text: string } | undefined
-  )?.text ?? "";
-
 const presenceSituation = (
   activity: string,
   between: boolean,
   prevAct: string,
   sudden: boolean,
   pending: boolean,
-  lastLine: string,
   fixed: boolean,
 ): string =>
   [
@@ -88,7 +80,7 @@ const presenceSituation = (
       : `이건 급하면 미루거나 조정할 수도 있는 일이다. 가볍게 잠깐 다녀오겠다, 급하면 말하라는 결로.`,
     ...(pending
       ? [
-          `상대가 방금 남긴 말이 있다: "${lastLine.replace(/\n/g, " ")}". 지금 제대로 답하긴 어려우니 짧게 아는 척만 하고, 다녀와서/이따 얘기하자는 정도로 미뤄도 된다.`,
+          `상대가 방금 남긴 말이 있다(위 [방금까지 오간 말]의 마지막 줄). 지금 제대로 답하긴 어려우니 짧게 아는 척만 하고, 다녀와서/이따 얘기하자는 정도로 미뤄도 된다.`,
         ]
       : []),
     ``,
@@ -139,10 +131,6 @@ const presenceTickBody = async (): Promise<void> => {
     if (!last) continue;
     // 유저가 붙잡아 지금 일정을 접고 곁에 있는 중이면 자리 비움 예고를 하지 않는다.
     if (isHeldNow(c.id)) continue;
-    // 방금(≤5분) 캐릭터가 발화했으면 스킵 — 답장/예고가 겹쳐 쌓이지 않게.
-    const lc = lastCharTs(c.chat_id);
-    if (lc && ageMin(lc) < 5) continue;
-
     // 하루 예고 상한 — 나갔다 오는 일정이 많은 날도 알리는 말이 과해지지 않게 막는다.
     // 하루 각본을 만들 때부터 같은 상한을 지키므로 여기서 걸리는 날은 드물다.
     // dayStart는 논리일(새벽 5시 컷오프) 기준 — 달력일 기준이면 자정~새벽에 카운트가 리셋된다.
@@ -186,18 +174,31 @@ const presenceTickBody = async (): Promise<void> => {
     }
     if (!target) continue;
 
+    // 캐릭터가 방금 말했으면 예고를 접는다 — 답장과 예고가 겹쳐 쌓이지 않게.
+    // 기준은 최소 AWAY_QUIET_MIN분이되, 알릴 일정이 이미 시작했으면 그 시작 시각까지 넓힌다.
+    // 불가 구간이 끝나는 자리에서 몰아 답장이 나가고 그 시각이 곧 다음 일정의 시작이라,
+    // 시간만 재면 그 답장이 이미 말한 전환("방금 끝났고 이제 ~하러 간다")을 또 말하게 된다.
+    const lc = lastCharTs(c.chat_id);
+    const quietMin = Math.max(AWAY_QUIET_MIN, nowMin - toMin(target.start));
+    if (lc && ageMin(lc) < quietMin) {
+      console.log(
+        `[presence] ${c.chat_id} @ ${target.activity} 접음 — ${Math.round(ageMin(lc))}분 전에 이미 말했다(기준 ${Math.round(quietMin)}분)`,
+      );
+      continue;
+    }
+
     // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
     if (!acquireProactive(c.chat_id)) continue;
     try {
       const draft = await chatJson<{ send: boolean; text?: string }>(
         buildSystemBlocks(c.id, c.chat_id, {
+          recent: PROACTIVE_RECENT_LINES,
           situation: presenceSituation(
             target.activity,
             between,
             prevAct,
             !between && !target.advance_known,
             last.role === "user",
-            lastLineOf(c.chat_id),
             blockCategory(target) === "official",
           ),
         }),

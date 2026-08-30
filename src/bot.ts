@@ -40,6 +40,7 @@ import {
   parseReplyOutput,
 } from "./reply-signal.js";
 import { saveTodayNote } from "./memory.js";
+import { PROACTIVE_RECENT_LINES } from "./thresholds.js";
 import { pickTags } from "./tag-pick.js";
 import {
   applyReplySignals,
@@ -602,6 +603,8 @@ const gatherSituation = (activity: string): string =>
     `[몰아 답장 — 방금 자리에서 돌아왔다]`,
     `너는 방금 "${activity}"을(를) 끝냈다. 대화 기록 끝의 상대 메시지들은 그 동안 온 것이라 이제야 본다.`,
     `이제 끝나고 봤다는 결로, 쌓인 말을 한 번에 자연스럽게 받는다. 메시지가 여러 개면 억지로 하나하나 다 짚지 말고 흐름으로 답한다.`,
+    `[지금] 절의 "지금 하는 일"은 방금 시작한 다음 일정이다 — 아직 하지 않았으니 끝냈다고 말하지 않는다.`,
+    `그 다음 일정의 답장 여건이 불가면, 이제 그리로 간다는 것까지 이 답장에서 함께 알린다. 같은 말을 하는 예고가 따로 나가지 않는다.`,
   ].join("\n");
 
 // 복귀 인사 — 예고하고 나간 사이 상대가 답이 없었을 때, 돌아왔음을 먼저 알리는 상황 문단.
@@ -1052,6 +1055,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
   if (!announced || !last || last.role !== "assistant") return;
   const draft = await chatJson<{ send: boolean; text?: string }>(
     buildSystemBlocks(row.character_id, chatId, {
+      recent: PROACTIVE_RECENT_LINES,
       situation: returnSituation(activity),
     }),
     "위 상황 문단대로 문안을 만들어.",

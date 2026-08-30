@@ -74,6 +74,12 @@ export const AWAY_SUDDEN_AFTER_MIN = 12;
 export const AWAY_BACK_TO_BACK_BEFORE_MIN = 2;
 export const AWAY_BACK_TO_BACK_AFTER_MIN = 12;
 
+/** 자리비움 선톡을 접는 침묵 길이(분). 캐릭터가 이만큼 안에 이미 말했으면 예고를 보내지 않는다.
+ * 알릴 일정이 이미 시작했으면 그 시작 시각까지 거슬러 본다 — 불가 구간이 끝나는 자리에서
+ * 몰아 답장이 나가는데(그 시각이 곧 다음 일정의 시작이다), 그 답장이 이미 방금 끝났다고
+ * 말한 뒤라 같은 전환을 예고가 또 말하게 된다. */
+export const AWAY_QUIET_MIN = 5;
+
 /** 자리비움 선톡의 하루 상한. 나갈 때 알리는 것만 세고, 돌아와서 하는 인사는 빼고 센다.
  * 하루 각본을 만들 때도 이 값을 넘기지 않도록 알리고 나갈 만한 일정 수를 제한한다. */
 export const AWAY_DAILY_MAX = 3;
@@ -100,6 +106,10 @@ export const RECENT_DIARY_DAYS = 3;
 
 /** 프롬프트에 원문 그대로 넣는 최근 메시지 수. */
 export const RECENT_MESSAGE_COUNT = 40;
+
+/** 선톡 문안 프롬프트에 넣는 최근 대화 줄 수. 답장 경로는 위 값으로 대화 기록을 통째로
+ * 넘기지만, 선톡은 대화를 잇는 자리가 아니라 방금 한 말을 다시 하지 않을 만큼만 본다. */
+export const PROACTIVE_RECENT_LINES = 6;
 
 /** 대화 기록에 시간 표시를 붙이는 간격. */
 export const TIME_MARKER_GAP_MS = 60 * 60 * 1000;

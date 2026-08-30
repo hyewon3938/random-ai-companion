@@ -14,6 +14,7 @@ import {
   type ScheduleStateRow,
   currentSpeechLevel,
   lastMessageBefore,
+  getRecentMessages,
   listMemoryItems,
   type MemoryRow,
   type RelationshipRow,
@@ -361,6 +362,21 @@ const RESPONSIVENESS_NOTE: Partial<Record<Responsiveness, string>> = {
   intermittent: `- 답장 여건 '${RESPONSIVENESS_NAME.intermittent}'는 하던 일을 하면서 사이사이 답할 수 있다는 뜻이다 — 답이 조금 늦어질 뿐 대화는 그대로 이어간다. 지금은 어렵다거나 끝나고 연락하겠다는 말로 대화를 닫지 않고, 이 일이 끝나야 제대로 얘기할 수 있는 것처럼 굴지도 않는다. 상대가 물으면 지금 답한다.`,
 };
 
+// 방금까지 오간 말 — 선톡 문안이 자기가 한 말을 다시 하지 않도록 넣는 절.
+// 답장 경로는 대화 기록을 통째로 넘기므로 켜지 않는다(같은 말이 두 번 들어간다).
+const recentSection = (chatId: string, lines: number): string => {
+  const rows = getRecentMessages(chatId, lines);
+  if (!rows.length) return "";
+  return [
+    `[방금까지 오간 말]`,
+    ...rows.map(
+      (m) =>
+        `${m.sent_at.slice(11, 16)} ${m.role === "user" ? "상대" : "너"}: ${m.text.replace(/\n/g, " ")}`,
+    ),
+    `- 네가 여기서 이미 알린 것(자리를 비운다·다녀왔다 같은 상태 전환)을 다시 처음처럼 꺼내지 않는다. 지금 보내려는 말이 위에서 한 말과 같은 내용이면 send=false로 접는다.`,
+  ].join("\n");
+};
+
 const nowSection = (
   chatId: string,
   characterId: number,
@@ -381,7 +397,7 @@ const nowSection = (
     nowLine,
     cur ? (RESPONSIVENESS_NOTE[cur.responsiveness] ?? "") : "",
     cur
-      ? `- 이 일을 이미 한참 하고 있었으면(위 '분째' 참고) 방금 시작한 것처럼 말하지 않는다 — 39분째면 "이제 씻어야겠다"가 아니라 "씻고 나왔다/거의 끝나간다"에 가깝다.`
+      ? `- 위 '분째'에 맞게 말한다. 이제 막 시작한 참(0~5분째)이면 아직 그 일을 하지 않은 것이니 끝냈다고 말하지 않고, 한참 지났으면(30분째 이상) 이제 시작하는 것처럼 말하지 않는다.`
       : "",
     `- 최근 대화에서 이미 알린 자리 비움·상태 전환("방금 뛰고 왔다", "씻고 올게요")을 다시 처음처럼 새로 반복하지 않는다. 이미 말했으면 그 다음 상태로 자연스럽게 이어간다.`,
     `- 말투: ${speechLine(storedLevel, chatId)}`,
@@ -414,6 +430,11 @@ export interface BuildOptions {
   pick?: TagPick;
   /** 상황 문단 — 선톡 문안, 불가 구간 끝 몰아 답장, 배웅 답이 쓴다. 프롬프트 맨 끝에 붙는다. */
   situation?: string;
+  /**
+   * 방금까지 오간 말을 이만큼 꼬리에 넣는다 — 선톡 문안 경로에서만 켠다.
+   * 답장 경로는 대화 기록을 turns로 넘기므로 켜면 같은 말이 두 번 들어간다.
+   */
+  recent?: number;
   /** 넘겨 주면 검색 결과를 여기에 적어 돌려준다(호출 기록용). */
   trace?: BuildTrace;
   /**
@@ -565,6 +586,7 @@ export const buildSystemBlocks = (
     lastTalkSection,
     nowSection(chatId, characterId, rel?.speech_level ?? null),
     FINAL_CHECK,
+    opts.recent ? recentSection(chatId, opts.recent) : "",
     opts.situation?.trim() ?? "",
     // 맨 끝 — 형식은 마지막으로 읽은 것이 지켜진다. 상황 문단보다도 뒤에 둔다.
     opts.signals ? REPLY_ENVELOPE : "",
