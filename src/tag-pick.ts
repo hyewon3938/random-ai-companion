@@ -75,7 +75,17 @@ export const pickTags = async (
       128,
       config.model,
       meta,
+      // 생각 과정을 켜면 상한 128토큰을 거기서 다 쓰고 답이 비어 돌아온다.
+      { think: false },
     );
+    // 빈 답은 고른 것이 없는 게 아니라 못 고른 것이다 — 글자 일치만으로 이어 간다.
+    if (!out.trim())
+      return {
+        tags: matched.tags.slice(0, TAG_PICK_MAX),
+        pool: names.length,
+        by: "match",
+        callId: meta.callId ?? null,
+      };
     return {
       tags: mergeTags(out, names, matched.tags),
       pool: names.length,

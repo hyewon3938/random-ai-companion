@@ -146,7 +146,7 @@ const askHold = async (
   characterId: number,
   block: TimingTrace["block"],
   userText: string,
-): Promise<{ held: boolean; callId: number | null }> => {
+): Promise<{ held: boolean; failed: boolean; callId: number | null }> => {
   const activity = block?.activity ?? "하던 일";
   const prompt = [
     `내가 지금 하는 일: ${activity}`,
@@ -163,20 +163,27 @@ const askHold = async (
       16,
       config.model,
       meta,
+      // 생각 과정을 켜면 상한 16토큰을 거기서 다 쓰고 답이 비어 돌아온다.
+      { think: false },
     );
+    // 빈 답은 "안 붙잡음"이 아니라 판정을 못 받은 것이다. 일정을 그대로 두는 결과는 같아도
+    // 갈라 적어야 판정이 조용히 한쪽으로 기우는 것을 트레이스에서 볼 수 있다.
+    const failed = !out.trim();
+    if (failed) console.warn("[timing] 붙잡기 판정 빈 답 — 일정을 그대로 둔다");
     const held = out.includes("붙잡");
     // 이 판정이 어떤 일정을 두고 나온 것인지 판정 호출 기록에도 남긴다 — 트레이스가
     // 판정만 따로 올릴 때 무엇을 보고 판정했는지 알 수 있게. 기록 실패는 판정을 막지 않는다.
     if (meta.callId)
       try {
-        setCallContext(meta.callId, { hold: { block, held } });
+        setCallContext(meta.callId, { hold: { block, held, failed } });
       } catch {
         /* 판정은 그대로 쓴다 */
       }
-    return { held, callId: meta.callId ?? null };
-  } catch {
+    return { held, failed, callId: meta.callId ?? null };
+  } catch (e) {
     // 판정이 실패하면 일정을 그대로 둔다 — 없던 취소를 만들지 않는 쪽이 안전하다.
-    return { held: false, callId: meta.callId ?? null };
+    console.warn("[timing] 붙잡기 판정 호출 실패 — 일정을 그대로 둔다:", e);
+    return { held: false, failed: true, callId: meta.callId ?? null };
   }
 };
 
@@ -208,6 +215,8 @@ export interface TimingTrace {
   /** 붙잡기 판정을 물었는가, 물었다면 붙잡혔는가. */
   asked: boolean;
   heldJudged?: boolean;
+  /** 물었는데 답을 못 받았는가 — 빈 답이거나 호출이 실패한 경우다. 일정은 그대로 둔다. */
+  holdFailed?: boolean;
   /** 판정을 물었으면 그 모델 호출 번호 — 답장 기록에서 판정 호출로 건너갈 수 있게. */
   holdCallId?: number | null;
 }
@@ -328,6 +337,7 @@ export const decideReplyTiming = async (
         block: seen,
         asked: true,
         heldJudged: false,
+        holdFailed: judged.failed,
         holdCallId: judged.callId,
       },
     };

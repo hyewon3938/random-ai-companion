@@ -116,6 +116,8 @@ interface CallContext {
     justWoke?: boolean;
     asked?: boolean;
     heldJudged?: boolean;
+    /** 판정을 물었는데 답을 못 받았는가. */
+    holdFailed?: boolean;
     held?: { outcome: string; activity: string } | null;
     /** 붙잡기 판정을 물었으면 그 호출 번호. */
     holdCallId?: number | null;
@@ -184,6 +186,8 @@ interface CallContext {
       category: string;
     } | null;
     held?: boolean;
+    /** 답이 비어 판정을 못 받았는가. */
+    failed?: boolean;
   };
 }
 
@@ -383,7 +387,12 @@ const timingLines = (ctx: CallContext): string[] => {
   );
   if (t.asked) {
     const ref = callBrief(t.holdCallId);
-    const verdict = t.heldJudged ? "붙잡음" : "아님";
+    // 판정 실패를 "아님"으로 적으면 모델이 실제로 아니라고 답한 것과 구분되지 않는다.
+    const verdict = t.holdFailed
+      ? ":warning: 판정 실패 — 답을 못 받아 일정을 그대로 뒀다"
+      : t.heldJudged
+        ? "붙잡음"
+        : "아님";
     const tail = t.held ? ` → 일정 ${t.held.outcome}` : "";
     out.push(
       `*붙잡기 판정* 물었다 · ${verdict}${esc(tail)}${ref ? ` (호출 ${ref})` : ""}`,
@@ -525,8 +534,9 @@ const renderHold = (row: CallRow, ctx: CallContext | null): string => {
   const out = row.output_hash ? getBlob(row.output_hash) : null;
   const held = ctx?.hold?.held;
   const cat = block ? toActivityCategory(block.category) : null;
-  const meant =
-    held === undefined
+  const meant = ctx?.hold?.failed
+    ? " — 답이 비어 판정을 못 받았다. 일정을 그대로 두고 구간이 끝날 때 몰아 답한다"
+    : held === undefined
       ? ""
       : held
         ? cat === "personal"

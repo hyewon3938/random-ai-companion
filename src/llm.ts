@@ -34,6 +34,16 @@ export interface CallMeta {
   callId?: number;
 }
 
+// 호출 하나에만 거는 선택지. 모델 기본값을 바꾸는 자리라, 넘기지 않으면 지금까지와 같다.
+export interface ChatOptions {
+  /**
+   * 생각 과정을 쓸 것인가. sonnet은 이 값을 넘기지 않으면 상황에 따라 생각을 켜고 그 몫이
+   * 출력 토큰으로 나가서, 상한이 낮은 호출은 상한을 생각에 다 쓰고 답이 통째로 빌 수 있다.
+   * 붙잡기 판정(16토큰)·태그 고르기(128토큰)처럼 한 줄만 받는 호출에서 false로 끈다.
+   */
+  think?: boolean;
+}
+
 // 지금 도는 코드가 어느 판인지. 컨테이너에는 .git이 없고 src만 들어오므로(Dockerfile),
 // 커밋 해시 대신 src 파일 내용으로 만든 지문을 적는다. 배포 전후를 가르는 데 쓴다.
 let codeFingerprint: string | null = null;
@@ -76,6 +86,7 @@ export const chat = async (
   maxTokens = 1024,
   model = config.model,
   meta?: CallMeta,
+  opts?: ChatOptions,
 ): Promise<string> => {
   // TTL 1시간: 대화는 답장 텀이 10~30분씩 벌어지는 게 보통이라 5분 캐시는 그 사이 증발한다.
   // 1시간 쓰기는 2배지만 저녁 대화 내내 읽기(0.1배)로 회수 — 3회 이상 재사용이면 이득.
@@ -130,6 +141,10 @@ export const chat = async (
     }
   };
 
+  // 생각 과정은 끄는 호출만 값을 싣는다 — 값이 없으면 모델 기본값 그대로다.
+  const thinking: Anthropic.ThinkingConfigParam | undefined =
+    opts?.think === false ? { type: "disabled" } : undefined;
+
   let response: Anthropic.Message;
   try {
     response = await client.messages.create({
@@ -137,6 +152,7 @@ export const chat = async (
       max_tokens: maxTokens,
       system: sys,
       messages: turns,
+      thinking,
     });
   } catch (e) {
     keep({ error: e instanceof Error ? e.message : String(e) });
