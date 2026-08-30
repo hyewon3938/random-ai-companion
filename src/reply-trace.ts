@@ -439,11 +439,17 @@ const outcomeLines = (ctx: CallContext): string[] => {
   // 붙였는지 안 붙였는지를 늘 적는다 — 없을 때 줄이 사라지면 모델이 안 붙인 건지
   // 기록이 안 된 건지 구별되지 않는다.
   out.push(
-    `*답장 신호* 남음 ${ctx.stay ? "붙임" : "없음"} · 메모 ${ctx.note ? "붙임" : "없음"}${
+    `*답장 신호* 남음 ${ctx.stay ? "붙임" : "없음"}${
       ctx.outputParse ? ` · 형식 ${parseName(ctx.outputParse)}` : ""
     }`,
   );
-  if (ctx.note) out.push(`*오늘 메모* ${esc(clip(ctx.note, 200))}`);
+  // 메모는 붙었는지와 무엇을 적었는지를 같은 줄에서 본다 — 다른 신호와 묶어 두면
+  // '메모 없음' 세 글자가 줄 안에 묻혀 저장 여부를 확인하러 스레드를 뒤지게 된다.
+  out.push(
+    ctx.note
+      ? `*오늘 메모* ${esc(clip(ctx.note, 200))}`
+      : "*오늘 메모* 추가 없음",
+  );
   if (ctx.dayActual) {
     const d = ctx.dayActual;
     const by = d.by === "judge" ? "붙잡기 판정" : "답장의 남음 신호";
