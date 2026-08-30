@@ -14,6 +14,7 @@ import {
   saveDayPlan,
   setTags,
   getUpcomingSchedules,
+  getSchedulesFrom,
   insertScheduledSend,
   getTodayNotes,
   getDayActuals,
@@ -52,12 +53,14 @@ import {
 import { afterNightlyTrace, beforeNightlyTrace } from "./nightly-trace.js";
 import {
   DIARY_TAG_MAX,
+  EXTRACT_SCHEDULE_MAX,
   LUNCH_WINDOW,
   RECONNECT_WINDOW,
   RECENT_DIARY_DAYS,
 } from "./thresholds.js";
 import {
   SPEECH_LEVEL_NAME,
+  SCHEDULE_STATUS_NAME,
   type MemoryItemType,
   type MemoryOwner,
   type UserKnows,
@@ -176,6 +179,9 @@ export interface NightlyGathered {
   areas: string[]; // 쓰고 있는 영역 이름들
   tagNames: string[]; // 이미 쓰는 태그 표기들
   userSchedulesUpcoming: string; // 상대의 다가오는 일정 (선톡 근거)
+  // 이미 저장된 일정 줄들(행 번호 포함) — 추출이 같은 일을 다시 적지 않게 하는 목록.
+  // 선톡 근거로 쓰는 위 값과 달리 양쪽 주인을 다 담고 취소·미룸도 감추지 않는다.
+  existingSchedules: string[];
   arcs: Record<string, string>;
   todaySeed: DaySeed | null; // 오늘의 컨디션 시드(있으면)
   rhythmNeeded: { ym: string; days: { date: string; label: string }[] }[]; // 이번 새벽에 생성해야 할 월 리듬
@@ -360,6 +366,20 @@ export const gatherNightlyInput = (
         (s) => `${s.date}${s.time_hint ? ` ${s.time_hint}` : ""} ${s.content}`,
       )
       .join(" / "),
+    // 기준일(어제)부터 앞으로. 하루를 되돌아보는 대화라 어제 일도 다시 언급되고,
+    // 그때 이미 저장된 줄이 안 보이면 같은 일이 한 줄 더 쌓인다.
+    existingSchedules: getSchedulesFrom(
+      character.id,
+      diaryDate,
+      EXTRACT_SCHEDULE_MAX,
+    ).map(
+      (s) =>
+        `- [${s.id}] ${s.date}${s.time_hint ? ` ${s.time_hint}` : ""} ${
+          s.owner === "user" ? "상대" : "나"
+        }: ${s.content}${
+          s.status === "active" ? "" : ` (${SCHEDULE_STATUS_NAME[s.status]})`
+        }`,
+    ),
     arcs: getArcs(character.id),
     todaySeed: getDaySeed(character.id, today) ?? null,
     rhythmNeeded: monthsNeedingRhythm(character.id, today).map((ym) => ({
@@ -501,6 +521,7 @@ const applyNightlyTxn = db.transaction(
             s.time_hint ?? null,
             s.content,
             ts,
+            "conversation",
           );
           const schedTagList = cleanTags(s.tags);
           if (schedTagList.length)
@@ -707,6 +728,9 @@ ${g.areas.join(", ") || "(없음)"}
 [이미 쓰는 태그]
 ${g.tagNames.join(", ") || "(없음)"}
 
+[이미 저장된 일정 — 같은 일이면 다시 적지 않는다]
+${g.existingSchedules.join("\n") || "(없음)"}
+
 [오늘의 대화]
 ${g.convo}
 
@@ -737,6 +761,10 @@ user_profile 규칙:
 - 여기 넣은 값은 프롬프트에 늘 들어간다. 같은 내용을 memories에 또 넣지 않고, 이야기가 붙는 것(회사를 옮긴 사정, 동네에서 자주 가는 곳 같은)만 memories로 남긴다.
 schedules 규칙:
 - 기준 날짜로 환산 가능한 날짜만. 위 정체성의 직업·생활과 어긋나는 날짜면 제외한다.
+- 위 [이미 저장된 일정]에 같은 일이 있으면 넣지 않는다. 말이 조금 다르게 적혀 있어도
+  같은 날 같은 약속을 가리키면 같은 일이다 — 시간이나 사람 이름이 이번에 더 나왔다고
+  해서 새로 적지 않는다. 그 줄은 이미 있는 것으로 두고 넘어간다.
+- 새 일정으로 넣는 것은 [이미 저장된 일정]에 없는 일만이다.
 - tags: ${TAG_RULE}`;
 };
 

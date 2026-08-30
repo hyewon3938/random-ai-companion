@@ -11,6 +11,7 @@ import {
   type MemoryOwner,
   type MemoryOrigin,
   type UserKnows,
+  type ScheduleOrigin,
   type ScheduleStatus,
   type Interest,
   type SpeechLevel,
@@ -1301,6 +1302,15 @@ export const hasUserScheduleOn = (characterId: number, date: string): boolean =>
     .get(characterId, date);
 
 // 넣은 행 번호를 돌려준다 — 저장 직후 이 일정에 주제 태그를 붙이려면 번호가 있어야 한다.
+//
+// 같은 캐릭터·주인·날짜에 내용이 글자까지 같은 행이 있으면 넣지 않고 그 번호를 돌려준다.
+// 이건 마지막 방어선일 뿐이다: 실제로 겹치는 일정은 표현이 조금씩 달라서 글자 일치로는
+// 안 걸린다(운영 데이터에서 확인한 세 쌍 가운데 걸리는 것은 0쌍). 같은 일을 두 번 적지
+// 않게 하는 주된 장치는 저장 전에 이미 있는 일정을 모델에게 보여주는 쪽이다
+// (nightly.ts 추출 프롬프트의 [이미 저장된 일정], life-plan.ts 월 프롬프트의 [이미 잡힌 일정]).
+//
+// origin은 이 행을 만든 경로다. 기본값에 기대지 말고 부르는 쪽이 넣는다 — 안 넣으면 전부
+// conversation으로 들어가 나중에 중복이 생겼을 때 어느 경로가 넣었는지 가릴 수 없다.
 export const addSchedule = (
   characterId: number,
   owner: "char" | "user",
@@ -1308,14 +1318,41 @@ export const addSchedule = (
   timeHint: string | null,
   content: string,
   now: string,
-): number =>
-  Number(
+  origin: ScheduleOrigin,
+): number => {
+  const dup = db
+    .prepare(
+      `SELECT id FROM schedules
+       WHERE character_id = ? AND owner = ? AND date = ? AND content = ? LIMIT 1`,
+    )
+    .get(characterId, owner, date, content) as { id: number } | undefined;
+  if (dup) return dup.id;
+  return Number(
     db
       .prepare(
-        `INSERT INTO schedules (character_id, owner, date, time_hint, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO schedules (character_id, owner, date, time_hint, content, origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(characterId, owner, date, timeHint, content, now).lastInsertRowid,
+      .run(characterId, owner, date, timeHint, content, origin, now)
+      .lastInsertRowid,
   );
+};
+
+// 새벽 정리 추출에 '이미 저장된 일정'으로 보여줄 행들.
+// getUpcomingSchedules와 두 가지가 다르다. status를 거르지 않는다 — 취소·미룸으로 표시된
+// 일정을 감추면 모델이 그것을 못 보고 새 일정으로 다시 적는다. 그리고 상한이 훨씬 크다 —
+// 이 목록의 목적이 '겹치는지 보여주기'라 가려진 행이 곧 중복이 된다.
+export const getSchedulesFrom = (
+  characterId: number,
+  fromDate: string,
+  limit: number,
+): ScheduleStateRow[] =>
+  db
+    .prepare(
+      `SELECT id, owner, date, time_hint, content, status FROM schedules
+       WHERE character_id = ? AND date >= ?
+       ORDER BY date, id LIMIT ?`,
+    )
+    .all(characterId, fromDate, limit) as ScheduleStateRow[];
 
 // 태그로 찾은 일정 여러 건. 날짜 조건을 걸지 않는다 — 이 경로가 꺼내는 것은 주로 지난 일정이고,
 // 가까운 앞일은 이미 [다가오는 일정]이 싣는다(겹치는 행은 읽는 쪽이 뺀다).
