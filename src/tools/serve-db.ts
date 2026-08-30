@@ -8,6 +8,7 @@
 //    컨테이너 안에서 띄울 때만 쓴다. 밖에서 닿는 길은 호스트 루프백 공개 하나뿐이다.
 //  - Host 헤더를 검사해 브라우저를 거친 다른 출처의 요청을 받지 않는다.
 //  - GET 하나만 받고 DB는 읽기 전용으로 연다. 쓰는 길은 두지 않는다.
+//  - 주소는 화면 하나와 태그 검색 하나뿐이다. 검색이 받은 말은 로그에 적지 않는다.
 //
 // 원격 DB는 봇과 같은 컨테이너 안에서 띄우고 포트는 호스트 루프백에만 공개한다.
 // 의존성과 DB 접근 권한이 컨테이너 쪽에 있어서 호스트에서는 그대로 뜨지 않는다.
@@ -24,6 +25,7 @@
 
 import { createServer } from "node:http";
 import { renderDbHtml } from "./db-view.js";
+import { tagSearchOn } from "./db-tag-search.js";
 
 /**
  * 기본은 루프백이라 바깥에서 오는 연결을 커널이 아예 받지 않는다. 컨테이너 안에서
@@ -84,6 +86,37 @@ const server = createServer((req, res) => {
     res.end();
     return;
   }
+
+  // 화면 오른쪽 태그 검색 서랍이 부르는 자리. 답장을 만들 때 도는 검색을 한 번 돌려
+  // 결과를 그대로 넘긴다 — 화면에서 다시 계산하면 프롬프트에 들어가는 것과 어긋난다.
+  if (path === "/tag-search") {
+    const params = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
+    try {
+      const result = tagSearchOn(file, {
+        characterId: Number(params.get("c") ?? 0),
+        tags: (params.get("t") ?? "").split(",").filter(Boolean),
+        text: params.get("q") ?? "",
+      });
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+      });
+      res.end(JSON.stringify(result));
+      // 유저가 보낸 말과 걸린 값은 적지 않는다 — 몇 건이 걸렸는지만 남긴다.
+      console.log(
+        `태그 검색 — 태그 ${result.tags.length}개 · 기억 ${result.memories.length} · ` +
+          `일기 ${result.diaries.length} · 일정 ${result.schedules.length}`,
+      );
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      console.error(`검색하지 못함 — ${why}`);
+      plain(res, 500, `검색하지 못했다: ${why}`);
+    }
+    return;
+  }
+
   if (path !== "/") {
     plain(res, 404, "없는 주소");
     return;
