@@ -17,6 +17,7 @@ import {
   getSchedulesFrom,
   insertScheduledSend,
   getTodayNotes,
+  clearTodayNotes,
   getDayActuals,
   listMemoryItems,
   listTagNames,
@@ -198,6 +199,12 @@ export interface NightlyGathered {
 const nowStamp = (): string =>
   `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
 
+// 하루 창의 끝을 만드는 다음 날짜. 대화·오늘 메모를 05:00~다음날 05:00로 끊는 데 쓴다.
+const nextDate = (date: string): string =>
+  kstDateString(
+    new Date(new Date(`${date}T00:00:00Z`).getTime() + 24 * 3600_000),
+  );
+
 // 모델이 준 태그를 다듬는다. 배열이 아닐 수도, 빈 문자열이나 같은 말이 두 번 올 수도 있다.
 const cleanTags = (raw: unknown, max?: number): string[] => {
   const list = Array.isArray(raw) ? raw : [];
@@ -304,9 +311,7 @@ export const gatherNightlyInput = (
 
   // 대화 창은 그 하루(diaryDate 05:00 ~ 다음날 05:00)로 한정 — 백필로 과거 날짜를 잡아도
   // 오늘까지의 대화가 통째로 섞이지 않게.
-  const diaryNext = kstDateString(
-    new Date(new Date(`${diaryDate}T00:00:00Z`).getTime() + 24 * 3600_000),
-  );
+  const diaryNext = nextDate(diaryDate);
   const msgs = db
     .prepare(
       `SELECT role, sent_at, text FROM messages WHERE chat_id = ? AND sent_at >= ? AND sent_at < ? ORDER BY id`,
@@ -581,7 +586,17 @@ const applyNightlyTxn = db.transaction(
       }
     }
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    // 오늘 메모는 수명이 하루다 — 이 배치가 그 하루를 읽어 기억·일정으로 옮겼으니 비운다.
+    // 창은 gather가 읽은 것과 같은 05:00~다음날 05:00다. 추출이 아무것도 안 만든 날도 비운다:
+    // 원문 대화가 messages에 그대로 남아 있어 되짚을 수 있고, 남겨 두면 지우는 자리가 없어
+    // 그 하루치가 표에 영영 남는다.
+    const notesCleared = clearTodayNotes(
+      g.characterId,
+      `${g.diaryDate} 05:00:00`,
+      `${nextDate(g.diaryDate)} 05:00:00`,
+    );
+
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 

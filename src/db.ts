@@ -2277,6 +2277,21 @@ export const getTodayNotes = (
     )
     .all(characterId, since) as { created_at: string; note: string }[];
 
+// 하루치를 지운다 — 새벽 정리가 그 하루의 메모를 기억으로 옮긴 뒤에 부른다.
+// 창을 양쪽으로 닫는 것이 중요하다: 위를 열어 두면 경계(05:00) 뒤에 적힌 오늘 메모까지
+// 지워져, 새벽 정리가 도는 사이에 나눈 대화의 메모가 프롬프트에서 사라진다.
+export const clearTodayNotes = (
+  characterId: number,
+  since: string,
+  until: string,
+): number =>
+  db
+    .prepare(
+      `DELETE FROM today_notes
+        WHERE character_id = ? AND created_at >= ? AND created_at < ?`,
+    )
+    .run(characterId, since, until).changes;
+
 // ── 오늘 실제 ─────────────────────────────────────────────────────────────
 // 각본과 달라진 블록만 남긴다: 하려던 것 · 어떻게 됐나 · 왜.
 
