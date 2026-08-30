@@ -32,7 +32,8 @@ import {
   setWakeHandler,
 } from "./pending.js";
 import { traceProactiveSend } from "./reply-trace.js";
-import { chat, chatJson, type CallMeta, type ChatTurn } from "./llm.js";
+import { chat, chatJson, type CallMeta } from "./llm.js";
+import { toTurns } from "./turns.js";
 import {
   REPLY_MAX_TOKENS,
   capBubbles,
@@ -69,7 +70,6 @@ import {
   kstLogicalDate,
   clockLabel,
   logicalDayStartTs,
-  timeMarkerFor,
 } from "./kst.js";
 
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
@@ -283,26 +283,6 @@ export const sendProactive = async (
     total,
   });
   return { delivered: sent.length, total };
-};
-
-// 연속 동일 role 메시지 병합 + 시간이 벌어진 지점에 시간 마커.
-// 기록 자체에 시간이 없으면 모델이 며칠 전 대화를 방금 일로 읽는다(프롬프트가 전부 '지금' 기준이라
-// 날짜 없는 기록은 오늘로 수렴한다). 마커는 병합된 본문 안에 넣어 role 교대 규약을 건드리지 않는다.
-const toTurns = (rows: MessageRow[]): ChatTurn[] => {
-  const turns: ChatTurn[] = [];
-  let prevTs: string | null = null;
-  for (const row of rows) {
-    const role = row.role === "user" ? "user" : "assistant";
-    const marker = timeMarkerFor(row.sent_at, prevTs);
-    const text = marker ? `[${marker}] ${row.text}` : row.text;
-    prevTs = row.sent_at;
-    const last = turns[turns.length - 1];
-    if (last && last.role === role) last.content += `\n${text}`;
-    else turns.push({ role, content: text });
-  }
-  if (turns[0]?.role === "assistant")
-    turns.unshift({ role: "user", content: "(대화 시작)" });
-  return turns;
 };
 
 // ── /start 온보딩 — 유저 입력 다섯으로 캐릭터를 만든다 ──────────────────────
