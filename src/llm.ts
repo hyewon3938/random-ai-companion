@@ -61,6 +61,15 @@ const textOf = (blocks: Anthropic.ContentBlock[]): string =>
     .map((b) => b.text)
     .join("");
 
+// 응답이 어떤 블록으로 왔는지 종류별 개수(예: `text:1` · `thinking:1,text:1`).
+// 저장하는 본문은 textOf가 고른 텍스트 블록뿐이라, 다른 종류로 나간 몫은 출력 토큰에만 남고
+// 글자 수에는 잡히지 않는다. 그 차이가 어디서 오는지 보려고 로그에 함께 적는다(이슈 #165).
+const blockTypes = (blocks: Anthropic.ContentBlock[]): string => {
+  const count = new Map<string, number>();
+  for (const b of blocks) count.set(b.type, (count.get(b.type) ?? 0) + 1);
+  return [...count].map(([type, n]) => `${type}:${n}`).join(",") || "none";
+};
+
 export const chat = async (
   system: string | SystemBlock[],
   turns: ChatTurn[],
@@ -136,8 +145,12 @@ export const chat = async (
   // 캐시 효과 관측: cw=캐시 쓰기(1회성), cr=캐시 읽기(절감분), in=전액 과금분.
   // 로그와 별개로 논리일 단위 DB 누적(llm_usage) — 사람이 로그를 뒤지지 않아도 확인 가능하게.
   const u = response.usage;
+  const out = textOf(response.content).trim();
+  // 출력 토큰이 저장된 글자 수보다 훨씬 크게 잡히는 호출이 있어(08-30 관측: 답장 1,200토큰에
+  // 144자, 판정 16토큰에 0자) 그 몫이 어디로 갔는지 같은 줄에서 보이게 한다 — 블록 종류와
+  // 멈춘 이유, 저장되는 글자 수. purpose를 앞에 적어 어느 호출인지 바로 찾게 한다.
   console.log(
-    `[llm] ${model} in=${u.input_tokens} cw=${u.cache_creation_input_tokens ?? 0} cr=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`,
+    `[llm] ${meta?.purpose ?? "unknown"} ${model} in=${u.input_tokens} cw=${u.cache_creation_input_tokens ?? 0} cr=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens} chars=${[...out].length} blocks=${blockTypes(response.content)} stop=${response.stop_reason ?? "none"}`,
   );
   try {
     recordLlmUsage(
@@ -150,7 +163,6 @@ export const chat = async (
   } catch {
     /* 사용량 기록 실패가 대화를 막지 않는다 */
   }
-  const out = textOf(response.content).trim();
   keep({
     output: out,
     usage: {
