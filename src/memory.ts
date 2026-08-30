@@ -17,15 +17,23 @@ import {
   type TagKind,
 } from "./db.js";
 import {
-  MEMORY_ITEM_TYPE_NAME,
-  MEMORY_OWNER_IN_PROMPT,
   type MemoryItemType,
   type MemoryOwner,
   type UserKnows,
   type Interest,
 } from "./labels.js";
-import { SEARCH_LIMIT } from "./thresholds.js";
+import { matchTagNames, memoryLine, pickMemories } from "./recall.js";
 import { getKstNow, kstDateString, logicalDayStartTs } from "./kst.js";
+
+// 고르는 규칙과 프롬프트 줄은 recall.ts가 갖는다 — DB를 열지 않는 자리라 관리 대시보드의
+// 태그 검색 화면도 같은 함수를 부른다. 여기서 다시 내보내 부르던 곳은 그대로 둔다.
+export {
+  SEARCH_LIMITS,
+  TYPE_ORDER,
+  memoryKeyOf,
+  memoryLine,
+  memoryBlock,
+} from "./recall.js";
 
 // 기억 저장과 태그 검색.
 //
@@ -47,27 +55,6 @@ export const CORE_AREAS = [
   "음식",
   "여행",
 ] as const;
-
-/**
- * 저장 항목별로 프롬프트에 넣을 개수 상한.
- * 한 항목이 자리를 다 차지하지 않게 두는 장치다. 숫자는 thresholds.ts가 갖고 있고,
- * 실제 프롬프트 길이를 보면서 조절한다.
- */
-export const SEARCH_LIMITS: Record<MemoryItemType, number> = {
-  ongoing: SEARCH_LIMIT.ongoing,
-  person: SEARCH_LIMIT.person,
-  fact: SEARCH_LIMIT.fact,
-};
-
-/**
- * 태그로 찾아 넣을 수 있는 기억인지 본다.
- * 캐릭터 쪽 사실은 정체성이라 늘 프롬프트에 들어간다 — 검색까지 걸리면 같은 줄이 두 번 들어간다.
- */
-const searchable = (r: MemoryRow): boolean =>
-  !(r.item_type === "fact" && r.owner === "char");
-
-/** 꺼내는 순서 — 지금 진행 중인 것부터. */
-const TYPE_ORDER: MemoryItemType[] = ["ongoing", "person", "fact"];
 
 const stamp = (): string =>
   `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
@@ -170,10 +157,6 @@ export const moveMemory = (id: number, to: MemoryItemType): number =>
 
 export const memoryTags = (id: number): string[] => getTags("memory", id);
 
-/** 기억 한 건을 한 줄로 가리키는 키 — 호출 기록에 무엇을 넣고 무엇을 뺐는지 적을 때 쓴다. */
-export const memoryKeyOf = (r: MemoryRow): string =>
-  `${r.item_type}/${r.owner} ${r.area}/${r.subject}`;
-
 export interface SearchOptions {
   /** 어떤 저장 항목에서 찾을지. 안 주면 검색으로 골라 넣는 것 전부. */
   itemTypes?: MemoryItemType[];
@@ -199,25 +182,10 @@ export const searchMemories = (
 ): MemoryRow[] => {
   const hits = findRefsByTags(characterId, "memory", tags);
   if (!hits.length) return [];
-  const types = opts.itemTypes;
-  const rows = hits
+  const candidates = hits
     .map((h) => getMemoryItemById(h.ref_id))
-    .filter(
-      (r): r is MemoryRow =>
-        !!r && searchable(r) && (!types || types.includes(r.item_type)),
-    );
-
-  const picked: MemoryRow[] = [];
-  for (const t of TYPE_ORDER) {
-    if (types && !types.includes(t)) continue;
-    const cap = opts.limits?.[t] ?? SEARCH_LIMITS[t];
-    const ranked = rows
-      .filter((r) => r.item_type === t)
-      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
-    picked.push(...ranked.slice(0, cap));
-    if (opts.dropped)
-      opts.dropped.push(...ranked.slice(cap).map((r) => memoryKeyOf(r)));
-  }
+    .filter((r): r is MemoryRow => !!r);
+  const picked = pickMemories(candidates, opts);
   if (opts.track !== false)
     markMemoriesRetrieved(
       picked.map((r) => r.id),
@@ -227,62 +195,8 @@ export const searchMemories = (
 };
 
 /**
- * 한 글자 태그 뒤에 붙어 있어도 그 어절이 태그 자체를 가리키는 것으로 보는 조사.
- * 이 목록 밖 글자가 이어지면 다른 낱말("일요일"의 "요일")로 보고 매치하지 않는다.
- */
-const TAG_PARTICLES = new Set([
-  "이",
-  "가",
-  "은",
-  "는",
-  "을",
-  "를",
-  "도",
-  "만",
-  "에",
-  "의",
-  "와",
-  "과",
-  "로",
-  "으로",
-  "랑",
-  "이랑",
-  "이나",
-  "이야",
-  "이지",
-  "에서",
-  "에는",
-  "에도",
-  "에만",
-  "까지",
-  "부터",
-  "조차",
-  "마저",
-  "보다",
-  "처럼",
-  "밖에",
-]);
-
-/** 발화를 어절로 나눈다. 앞뒤에 붙은 문장부호는 떼어 낸다. */
-const eojeolsOf = (text: string): string[] =>
-  text
-    .split(/\s+/)
-    .map((w) => w.replace(/^[^0-9A-Za-z가-힣]+|[^0-9A-Za-z가-힣]+$/g, ""))
-    .filter(Boolean);
-
-/** 한 글자 태그의 어절 단위 매치 — 어절이 태그와 같거나, 태그 뒤가 조사뿐일 때. */
-const matchesAsEojeol = (tag: string, words: string[]): boolean =>
-  words.some(
-    (w) =>
-      w === tag ||
-      (w.startsWith(tag) && TAG_PARTICLES.has(w.slice(tag.length))),
-  );
-
-/**
- * 유저 발화에 들어 있는 태그를 골라낸다. 붙어 있는 태그 이름을 문자열 포함으로 맞춰 보는
- * 것이라 추가 모델 호출이 없다 — 답장 경로에서 검색어를 만드는 유일한 방법.
- * 한 글자 태그("일"·"돈"·"집")는 문자열 포함으로 보면 "일요일"·"생일"·"수집" 같은
- * 다른 낱말에도 걸려 관련 없는 기억이 검색되므로, 어절 단위 매치만 허용한다.
+ * 유저 발화에 들어 있는 태그를 골라낸다. 붙어 있는 태그 이름을 맞춰 보는 것이라 추가 모델
+ * 호출이 없다 — 답장 경로에서 검색어를 만드는 값싼 쪽이고, 맞춰 보는 규칙은 recall.ts가 갖는다.
  * 대조한 태그 수(pool)도 함께 준다 — 걸린 태그가 없을 때 검색이 돌긴 했는지 가른다.
  */
 export const tagSearch = (
@@ -290,14 +204,7 @@ export const tagSearch = (
   text: string,
 ): { tags: string[]; pool: number } => {
   const names = listTagNames(characterId);
-  if (!text.trim()) return { tags: [], pool: names.length };
-  const words = eojeolsOf(text);
-  return {
-    tags: names.filter((t) =>
-      t.length >= 2 ? text.includes(t) : matchesAsEojeol(t, words),
-    ),
-    pool: names.length,
-  };
+  return { tags: matchTagNames(names, text), pool: names.length };
 };
 
 /** 일기·일정도 같은 태그로 찾는다. 행을 읽는 건 그 데이터를 가진 쪽 몫이라 id만 준다. */
@@ -349,36 +256,6 @@ export const identityValue = (
     if (r.area === area && r.subject === subject) return r.value;
   }
   return null;
-};
-
-// 갱신 날짜를 함께 적는다 — 오늘 일인지 지난달 일인지를 모델이 지금 시각과 견줘 판단한다.
-const dayLabel = (updatedAt: string): string => {
-  const [y, m, d] = updatedAt.slice(0, 10).split("-");
-  return y && m && d ? `${Number(m)}/${Number(d)}` : updatedAt.slice(0, 10);
-};
-
-// 주인 표시는 검색 기억에만 붙인다 — 정체성 층은 전부 캐릭터 쪽 사실이라 줄마다 '너'가
-// 붙으면 같은 말이 반복될 뿐이고, 검색 기억은 진행 중인 일과 주변 인물에서 양쪽이 섞인다.
-const renderLine = (r: MemoryRow, owner: boolean): string =>
-  `- ${owner ? `${MEMORY_OWNER_IN_PROMPT[r.owner]} · ` : ""}${r.area} · ${r.subject}: ${r.value} (${dayLabel(r.updated_at)} 갱신)`;
-
-export const memoryLine = (r: MemoryRow): string => renderLine(r, false);
-
-export const memoryBlock = (rows: MemoryRow[]): string => {
-  const byType = new Map<MemoryItemType, MemoryRow[]>();
-  for (const r of rows) {
-    const list = byType.get(r.item_type) ?? [];
-    list.push(r);
-    byType.set(r.item_type, list);
-  }
-  return TYPE_ORDER.filter((t) => byType.get(t)?.length)
-    .map(
-      (t) =>
-        `[${MEMORY_ITEM_TYPE_NAME[t]}]\n${(byType.get(t) ?? [])
-          .map((r) => renderLine(r, true))
-          .join("\n")}`,
-    )
-    .join("\n\n");
 };
 
 /**

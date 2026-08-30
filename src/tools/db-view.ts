@@ -4,7 +4,9 @@
 // 컬럼은 PRAGMA table_info가 알려주는 그대로, 행은 전부 싣고, 빈 표도 감추지 않는다 —
 // 비어 있다는 사실 자체가 정보다.
 //
-// 검색·정렬·펼치기는 만들어진 화면 안에서 돌아간다.
+// 검색·정렬·펼치기는 만들어진 화면 안에서 돌아간다. 오른쪽 태그 검색 서랍만 서버에
+// 물어본다 — 답장을 만들 때 도는 검색을 그대로 한 번 돌려야 해서, 화면 안에서 흉내 내지
+// 않고 src/tools/db-tag-search.ts에 맡긴다(파일로 뽑은 화면에서는 그래서 돌지 않는다).
 // DB는 읽기 전용으로 열고 마이그레이션을 타지 않으려고 src/db.ts를 거치지 않는다.
 //
 // 부르는 곳 둘이 같은 화면을 쓴다 — 파일로 뽑는 src/tools/render-db.ts와
@@ -13,6 +15,7 @@
 
 import Database from "better-sqlite3";
 import { basename } from "node:path";
+import { listCharacters } from "./db-tag-search.js";
 
 /** DB 하나를 읽어 화면 한 장을 만든다. 여닫는 것은 이 함수 안에서 끝낸다. */
 export const renderDbHtml = (file: string): string => {
@@ -44,7 +47,8 @@ const build = (db: Database.Database, file: string): string => {
       .all() as { name: string }[]
   ).map((r) => r.name);
 
-  // 태그는 별도 표에 있어서 기억 행 옆에 조인해 붙인다. 지금 tags.kind는 memory 하나뿐이다.
+  // 태그는 별도 표에 있어서 기억 행 옆에 조인해 붙인다. 일기·일정에 붙은 태그는 그 표에
+  // 조인하지 않고 오른쪽 태그 검색 서랍에서 본다.
   const tagsOfMemory = new Map<number, string[]>();
   for (const t of db
     .prepare(`SELECT ref_id, tag FROM tags WHERE kind = 'memory' ORDER BY tag`)
@@ -203,11 +207,18 @@ const build = (db: Database.Database, file: string): string => {
     return `<td>${esc(s)}</td>`;
   };
 
-  const tagCell = (id: unknown): string => {
+  // 태그를 누르면 오른쪽 서랍이 그 태그로 검색한다 — 캐릭터마다 태그 어휘가 다르므로
+  // 누른 행이 누구 것인지도 함께 넘긴다.
+  const tagCell = (row: Record<string, unknown>): string => {
+    const id = row.id;
     const list = typeof id === "number" ? (tagsOfMemory.get(id) ?? []) : [];
     if (!list.length) return `<td class="nul">없음</td>`;
+    const owner = typeof row.character_id === "number" ? row.character_id : "";
     return `<td class="tgc">${list
-      .map((t) => `<button class="tag" data-t="${esc(t)}">${esc(t)}</button>`)
+      .map(
+        (t) =>
+          `<button class="tag" data-t="${esc(t)}" data-c="${owner}">${esc(t)}</button>`,
+      )
       .join("")}</td>`;
   };
 
@@ -258,7 +269,7 @@ const build = (db: Database.Database, file: string): string => {
           .map(
             (r) =>
               `<tr>${t.cols.map((c) => cell(c.name, r[c.name])).join("")}${
-                joined ? tagCell(r.id) : ""
+                joined ? tagCell(r) : ""
               }</tr>`,
           )
           .join("\n")
@@ -294,6 +305,20 @@ const build = (db: Database.Database, file: string): string => {
       )}</span>${dot}<b data-for="${t.name}">${num(t.rows.length)}</b></a>`;
     })
     .join("\n");
+
+  // ── 태그 검색 서랍에 실을 목록 ────────────────────────────────────────────
+  //
+  // 검색은 서버가 돌리고(GET /tag-search) 화면에는 고를 수 있는 태그만 미리 싣는다.
+  // 태그 이름과 붙어 있는 행 수뿐이라 화면 크기에 거의 얹히지 않는다.
+
+  const tagIndex = listCharacters(db);
+  const tagJson = JSON.stringify(tagIndex).replace(/</g, "\\u003c");
+  const charOptions = tagIndex
+    .map(
+      (c) =>
+        `<option value="${c.id}">캐릭터 ${c.id} · 태그 ${num(c.tags.length)}종</option>`,
+    )
+    .join("");
 
   const now = new Intl.DateTimeFormat("ko-KR", {
     timeZone: "Asia/Seoul",
@@ -461,10 +486,73 @@ const build = (db: Database.Database, file: string): string => {
   .nores { display:none; padding:40px 0; text-align:center; color:var(--t3); font-size:13px; }
   .nores.on { display:block; }
 
+  /* 태그 검색 서랍 */
+  .drawer { position:fixed; top:0; right:0; z-index:80; width:min(520px,100vw); height:100vh;
+            display:flex; flex-direction:column; background:var(--card);
+            border-left:1px solid var(--line2); box-shadow:-18px 0 44px -26px rgba(15,15,20,.4); }
+  .drawer[hidden] { display:none; }
+  .dw-head { display:flex; align-items:baseline; gap:9px; padding:13px 16px;
+             border-bottom:1px solid var(--line); background:var(--surf); }
+  .dw-head h2 { margin:0; font-size:14px; color:var(--t1); letter-spacing:-.01em; }
+  .dw-head em { font-style:normal; font-size:11.5px; color:var(--t4); }
+  .dw-x { margin-left:auto; border:0; background:transparent; color:var(--t3); cursor:pointer;
+          font-size:19px; line-height:1; padding:0 2px; }
+  .dw-x:hover { color:var(--t1); }
+  .dw-body { flex:1; overflow:auto; padding:14px 16px 60px; }
+  .dw-note { margin:0 0 14px; padding:9px 11px; font-size:11.5px; color:var(--t3); line-height:1.7;
+             background:var(--nu-soft); border:1px solid var(--line); border-radius:8px; }
+  .fl { display:block; margin:0 0 6px; font-size:11px; font-weight:700; color:var(--t4);
+        letter-spacing:.03em; }
+  .fl em { font-style:normal; color:var(--ac-ink); font-weight:700; margin-left:6px; }
+  .dw-body select, .dw-body textarea { width:100%; margin-bottom:14px; padding:7px 9px;
+        font:inherit; font-size:12.5px; color:var(--t1); background:var(--surf);
+        border:1px solid var(--line2); border-radius:8px; outline:0; }
+  .dw-body textarea { resize:vertical; line-height:1.65; }
+  .dw-body select:focus, .dw-body textarea:focus { border-color:var(--ac-line); }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; max-height:184px; overflow:auto;
+           margin-bottom:14px; padding:9px; border:1px solid var(--line); border-radius:8px; }
+  .chip { border:1px solid var(--line2); background:var(--surf); color:var(--t2); cursor:pointer;
+          border-radius:20px; padding:2px 9px; font:inherit; font-size:11.5px; }
+  .chip i { font-style:normal; font-size:10px; color:var(--t4); margin-left:5px; }
+  .chip:hover { border-color:var(--ac-line); color:var(--t1); }
+  .chip.on { background:var(--ac); border-color:var(--ac); color:#fff; }
+  .chip.on i { color:rgba(255,255,255,.7); }
+  .dw-act { display:flex; gap:8px; margin-bottom:18px; }
+  .btn { border:1px solid var(--ac); background:var(--ac); color:#fff; cursor:pointer;
+         border-radius:8px; padding:8px 17px; font:inherit; font-size:12.5px; font-weight:700; }
+  .btn[disabled] { opacity:.45; cursor:default; }
+  .btn2 { border:1px solid var(--line2); background:var(--card); color:var(--t3); cursor:pointer;
+          border-radius:8px; padding:8px 12px; font:inherit; font-size:12.5px; }
+  .btn2:hover { color:var(--t1); }
+  .rs { border-top:1px solid var(--line); padding-top:14px; }
+  .rs h3 { margin:18px 0 8px; font-size:12px; color:var(--t1); }
+  .rs > h3:first-child { margin-top:0; }
+  .rs > .tl { margin-bottom:14px; }
+  .rs h3 em { font-style:normal; font-size:11px; font-weight:500; color:var(--t4); margin-left:6px; }
+  .rs pre { margin:0 0 16px; padding:11px 12px; background:var(--surf); border:1px solid var(--line);
+            border-radius:8px; font-size:11.5px; color:var(--t2); line-height:1.75;
+            white-space:pre-wrap; word-break:break-word; }
+  .tl { display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+  .tl span { font-size:10.5px; color:var(--cy-ink); background:var(--cy-soft);
+             border:1px solid var(--cy-line); border-radius:20px; padding:0 7px; }
+  .tl span.m { color:var(--ac-ink); background:var(--ac-soft); border-color:var(--ac-line); }
+  .tl b { font-size:10.5px; font-weight:600; color:var(--t4); }
+  .hit { margin-bottom:7px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; }
+  .hit .hl { font-size:12px; font-weight:600; color:var(--t1); line-height:1.5; }
+  .hit .hd { margin-top:3px; font-size:11.5px; color:var(--t3); line-height:1.65; }
+  .hit .tl { margin-top:6px; }
+  .out { margin:0 0 14px; padding-left:1px; font-size:11.5px; color:var(--t3); line-height:1.8; }
+  .out b { display:block; margin-bottom:2px; font-size:11.5px; font-weight:700; color:var(--t2); }
+  .warn { margin:0 0 14px; padding:9px 11px; font-size:11.5px; line-height:1.7;
+          color:var(--wn-ink); background:var(--wn-soft); border:1px solid var(--wn-line);
+          border-radius:8px; }
+  .none2 { padding:13px 0 3px; font-size:12px; color:var(--t3); line-height:1.7; }
+
   @media (max-width:960px) {
     .layout { grid-template-columns:minmax(0,1fr); }
     aside { position:static; max-height:none; }
     .bar-in { flex-wrap:wrap; }
+    .drawer { width:100vw; }
   }
 </style>
 </head>
@@ -478,6 +566,7 @@ const build = (db: Database.Database, file: string): string => {
     <button class="clr" id="clr" title="지우기">&times;</button>
   </div>
   <div class="sum" id="sum">표 <b>${num(tables.length)}</b>개 · 행 <b>${num(totalRows)}</b>건</div>
+  <button class="theme" id="dwo">태그 검색</button>
   <button class="theme" id="tg">테마</button>
 </div></div>
 
@@ -500,7 +589,7 @@ ${rail}
         <div><dt>만든 시각</dt><dd>${esc(now)}</dd></div>
         <div><dt>표시</dt><dd>옛 자리 ${oldCount}곳 · 안 쓰는 자리 ${idleCount}곳</dd></div>
       </dl>
-      <p>표 하나가 한 구획이고, 컬럼은 저장된 그대로입니다. 컬럼 머리글을 누르면 그 열로 정렬하고, 접힌 칸을 누르면 전체 값이 펼쳐집니다. 기억 표는 태그가 따로 저장되어 있어서 마지막 열에 조인해 붙였고, 태그를 누르면 그 태그로 검색합니다.
+      <p>표 하나가 한 구획이고, 컬럼은 저장된 그대로입니다. 컬럼 머리글을 누르면 그 열로 정렬하고, 접힌 칸을 누르면 전체 값이 펼쳐집니다. 기억 표는 태그가 따로 저장되어 있어서 마지막 열에 조인해 붙였고, 태그를 누르면 오른쪽에서 태그 검색이 열립니다.
       대신할 자리가 생겨 지울 표와 컬럼은 옛 자리로, 값을 넣는 코드가 없어 비어 있는 자리는 안 쓰는 자리로 표시했습니다.</p>
     </div>
 
@@ -512,6 +601,30 @@ ${tables.map(section).join("\n\n")}
     실제 대화에서 나온 값이 담겨 있으므로 저장소나 공개 영역에 올리지 않습니다.</p>
   </main>
 </div>
+
+<div class="drawer" id="dw" hidden>
+  <div class="dw-head">
+    <h2>태그 검색</h2><em>답장을 만들 때 도는 검색 그대로</em>
+    <button class="dw-x" id="dwx" title="닫기">&times;</button>
+  </div>
+  <div class="dw-body">
+    <p class="dw-note">답장을 만들기 전에 캐릭터는 태그로 기억·지난 일기·일정을 찾아 프롬프트에 넣습니다. 여기서 그 검색을 그대로 한 번 돌려, 무엇이 걸리고 무엇이 개수 상한에 밀렸는지 봅니다.<br>
+    어떤 태그로 찾을지 모델이 고르는 단계는 API를 부르는 자리라 이 화면에서는 돌리지 않습니다. 태그를 직접 고르거나, 유저가 보낸 말을 넣어 글자가 일치하는 태그를 찾습니다.</p>
+    <label class="fl" for="dwc">캐릭터</label>
+    <select id="dwc">${charOptions}</select>
+    <label class="fl" for="dwq">유저가 보낸 말<em>여기 적은 말과 글자가 일치하는 태그를 함께 찾습니다</em></label>
+    <textarea id="dwq" rows="3" placeholder="예: 오늘 회사 어땠어? 밥은 먹었고?"></textarea>
+    <label class="fl">고른 태그<em id="dwn">0개</em></label>
+    <div class="chips" id="dwt"></div>
+    <div class="dw-act">
+      <button class="btn" id="dwgo">검색</button>
+      <button class="btn2" id="dwclr">고른 태그 비우기</button>
+    </div>
+    <div id="dwr"><p class="none2">태그를 고르거나 유저가 보낸 말을 넣고 검색을 누릅니다.</p></div>
+  </div>
+</div>
+
+<script type="application/json" id="tagdata">${tagJson}</script>
 
 <script>
 (function(){
@@ -586,7 +699,7 @@ ${tables.map(section).join("\n\n")}
 
   document.addEventListener('click', function(e){
     var tag = e.target.closest('.tag');
-    if (tag) { q.value = tag.dataset.t; apply(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    if (tag) { openDrawer(tag.dataset.t, tag.dataset.c); return; }
     var box = e.target.closest('.lg');
     if (box) box.classList.toggle('open');
   });
@@ -609,6 +722,157 @@ ${tables.map(section).join("\n\n")}
       rows.forEach(function(r){ tb.appendChild(r); });
     });
   });
+
+  // ── 태그 검색 서랍 ────────────────────────────────────────────────────────
+  // 고르는 규칙은 서버에 있다(GET /tag-search). 화면은 태그를 고르고 결과를 그리기만 한다.
+
+  var TAGS = JSON.parse(document.getElementById('tagdata').textContent);
+  var dw = document.getElementById('dw');
+  var dwc = document.getElementById('dwc');
+  var dwq = document.getElementById('dwq');
+  var dwt = document.getElementById('dwt');
+  var dwn = document.getElementById('dwn');
+  var dwr = document.getElementById('dwr');
+  var dwgo = document.getElementById('dwgo');
+  var picked = [];
+  var served = location.protocol === 'http:' || location.protocol === 'https:';
+  var NEEDS_SERVER = '<p class="warn">파일로 뽑은 화면에서는 태그 검색이 돌지 않습니다. '
+    + 'serve-db.ts로 띄운 화면에서 씁니다.</p>';
+
+  function esc(s){
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function tagsOfChar(){
+    for (var i = 0; i < TAGS.length; i++)
+      if (String(TAGS[i].id) === dwc.value) return TAGS[i].tags;
+    return [];
+  }
+
+  function paintChips(){
+    var list = tagsOfChar();
+    dwt.innerHTML = list.length
+      ? list.map(function(t){
+          var n = t.memory + t.diary + t.schedule;
+          var on = picked.indexOf(t.tag) >= 0 ? ' on' : '';
+          return '<button class="chip' + on + '" data-t="' + esc(t.tag) + '">'
+            + esc(t.tag) + '<i>' + n + '</i></button>';
+        }).join('')
+      : '<span class="none2">이 캐릭터에 저장된 태그가 없습니다.</span>';
+    dwn.textContent = picked.length + '개';
+  }
+
+  function openDrawer(tag, charId){
+    if (charId && dwc.value !== charId) dwc.value = charId;
+    // 표에서 누른 태그는 그 하나로 바꿔 본다. 여러 개를 겹쳐 보는 것은 서랍의 태그 목록에서.
+    if (tag) picked = [tag];
+    dw.hidden = false;
+    paintChips();
+    if (tag) run();
+  }
+
+  function tagList(list, matched){
+    return '<div class="tl">' + list.map(function(t){
+      var m = matched && matched.indexOf(t) >= 0;
+      return '<span class="' + (m ? 'm' : '') + '">' + esc(t) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function hitBox(h){
+    return '<div class="hit"><div class="hl">' + esc(h.label) + '</div>'
+      + '<div class="hd">' + esc(h.detail) + '</div>'
+      + '<div class="tl"><b>겹친 태그 ' + h.hits + '개</b>'
+      + h.tags.map(function(t){ return '<span>' + esc(t) + '</span>'; }).join('')
+      + '</div></div>';
+  }
+
+  function group(title, rows){
+    return '<h3>' + title + '<em>' + rows.length + '건</em></h3>'
+      + (rows.length
+          ? rows.map(hitBox).join('')
+          : '<p class="none2">걸린 것이 없습니다.</p>');
+  }
+
+  function lines(rows){ return rows.map(esc).join('<br>'); }
+
+  function render(r){
+    if (!r.tags.length) {
+      dwr.innerHTML = '<p class="none2">고른 태그가 없습니다. 이 캐릭터에 저장된 태그는 '
+        + r.pool + '종입니다.</p>';
+      return;
+    }
+    var out = ['<div class="rs">'];
+    out.push('<h3>검색한 태그<em>' + r.tags.length + '개 · 저장된 태그 ' + r.pool
+      + '종 · 오늘 ' + esc(r.today) + '</em></h3>');
+    out.push(tagList(r.tags, r.matched));
+    if (r.matched.length)
+      out.push('<p class="out">보라색은 보낸 말에서 글자가 일치해 찾은 태그입니다.</p>');
+    if (r.tags.length > r.pickMax)
+      out.push('<p class="warn">답장을 만들 때는 모델이 태그를 ' + r.pickMax
+        + '개까지만 고릅니다. 이 화면에서는 고른 것을 다 넣고 검색했습니다.</p>');
+    out.push('<h3>프롬프트에 들어간 문안<em>'
+      + (r.prompt ? r.prompt.length + '자' : '없음') + '</em></h3>');
+    out.push(r.prompt
+      ? '<pre>' + esc(r.prompt) + '</pre>'
+      : '<p class="none2">걸린 것이 없어 프롬프트에 붙는 절도 없습니다.</p>');
+    out.push(group('기억', r.memories));
+    out.push(group('지난 일기', r.diaries));
+    out.push(group('일정', r.schedules));
+    if (r.dropped.length)
+      out.push('<p class="out"><b>개수 상한에 밀린 후보 ' + r.dropped.length + '건</b>'
+        + lines(r.dropped) + '</p>');
+    r.excluded.forEach(function(e){
+      out.push('<p class="out"><b>제외 ' + e.rows.length + '건 · ' + esc(e.reason) + '</b>'
+        + lines(e.rows) + '</p>');
+    });
+    out.push('</div>');
+    dwr.innerHTML = out.join('');
+  }
+
+  function run(){
+    if (!served) { dwr.innerHTML = NEEDS_SERVER; return; }
+    dwgo.disabled = true;
+    dwr.innerHTML = '<p class="none2">검색하는 중입니다.</p>';
+    var url = '/tag-search?c=' + encodeURIComponent(dwc.value)
+      + '&t=' + encodeURIComponent(picked.join(','))
+      + '&q=' + encodeURIComponent(dwq.value);
+    fetch(url, { headers: { accept: 'application/json' } })
+      .then(function(res){
+        if (!res.ok) throw new Error('서버가 ' + res.status + '로 답했습니다');
+        return res.json();
+      })
+      .then(render)
+      .catch(function(err){
+        dwr.innerHTML = '<p class="warn">검색하지 못했습니다 — ' + esc(err.message) + '</p>';
+      })
+      .then(function(){ dwgo.disabled = false; });
+  }
+
+  document.getElementById('dwo').addEventListener('click', function(){
+    dw.hidden = !dw.hidden;
+    if (!dw.hidden) paintChips();
+  });
+  document.getElementById('dwx').addEventListener('click', function(){ dw.hidden = true; });
+  document.getElementById('dwclr').addEventListener('click', function(){
+    picked = [];
+    paintChips();
+  });
+  dwc.addEventListener('change', function(){ picked = []; paintChips(); });
+  dwt.addEventListener('click', function(e){
+    var chip = e.target.closest('.chip');
+    if (!chip) return;
+    var i = picked.indexOf(chip.dataset.t);
+    if (i >= 0) picked.splice(i, 1);
+    else picked.push(chip.dataset.t);
+    paintChips();
+  });
+  dwgo.addEventListener('click', run);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && !dw.hidden) dw.hidden = true;
+  });
+  paintChips();
+  if (!served) dwr.innerHTML = NEEDS_SERVER;
 
   apply();
 })();

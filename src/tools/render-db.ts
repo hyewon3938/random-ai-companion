@@ -3,6 +3,9 @@
 // 사본을 보거나 지금 화면을 남겨 둘 때 쓴다. 운영 DB를 그대로 보려면
 // src/tools/serve-db.ts를 띄우는 쪽이 사본을 뜨는 단계가 없어 짧다.
 //
+// 파일로 뽑은 화면에서는 오른쪽 태그 검색이 돌지 않는다 — 검색을 서버에 물어보기 때문이다.
+// 그 화면은 검색 자리에 서버로 띄우라는 안내를 대신 보여준다.
+//
 // 사용: DB_PATH=data/prod-snapshot.db npx tsx src/tools/render-db.ts > docs/dashboard.html
 //       DB_PATH=data/prod-snapshot.db npx tsx src/tools/render-db.ts docs/dashboard.html
 // 주의: 출력물에 실제 대화가 담기므로 저장소·공개 영역에 커밋하지 않는다.
