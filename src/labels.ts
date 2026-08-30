@@ -61,6 +61,22 @@ export const MEMORY_ORIGIN_NAME: Record<MemoryOrigin, string> = {
 export type UserKnows = "unknown" | "known" | "waiting";
 
 /**
+ * 일정 한 건을 만든 경로. memory_items.origin과 이름은 같지만 값이 다른 별개 컬럼이다
+ * (기억은 creation·conversation 둘, 일정은 셋).
+ *
+ * 08-27 이관 전까지는 저장 코드가 이 값을 안 넣어 전부 기본값 conversation으로 들어갔고,
+ * 지금 DB에 있는 rhythm 행은 그때 손으로 분류해 UPDATE한 것이다. 그래서 같은 일정이 두 줄로
+ * 쌓였을 때 어느 경로가 넣었는지 가릴 수 없었다 — 넣는 자리에서 채우는 것이 이 타입의 목적.
+ */
+export type ScheduleOrigin = "conversation" | "rhythm" | "ongoing";
+
+export const SCHEDULE_ORIGIN_NAME: Record<ScheduleOrigin, string> = {
+  conversation: "대화",
+  rhythm: "월 리듬",
+  ongoing: "진행 중인 일",
+};
+
+/**
  * 일정 한 건의 상태. 지금 이 값을 바꿔 쓰는 코드는 없지만(붙잡혀 접은 일정은 day_actuals에
  * 남는다), 프롬프트에 일정을 실을 때 상태를 함께 적어 이미 없어진 일을 예정처럼 말하지 않게
  * 한다 — 나중에 status를 쓰는 코드가 생겨도 프롬프트 쪽은 그대로 맞는다.

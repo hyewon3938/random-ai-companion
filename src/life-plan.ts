@@ -158,6 +158,7 @@ export const applyMonthPlan = (
         e.time_hint ?? null,
         e.content,
         ts,
+        "rhythm",
       );
   for (const s of plan.days ?? [])
     if (s.date)
