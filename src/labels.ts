@@ -49,6 +49,13 @@ export const MEMORY_OWNER_NAME: Record<MemoryOwner, string> = {
   user: "유저",
 };
 
+// 프롬프트에서 쓰는 이름은 따로 둔다 — 위 이름은 대시보드·트레이스가 읽고,
+// 캐릭터가 읽는 글에서는 자기를 '너', 유저를 '상대'로 부른다.
+export const MEMORY_OWNER_IN_PROMPT: Record<MemoryOwner, string> = {
+  char: "너",
+  user: "상대",
+};
+
 /** 캐릭터를 만들 때 정한 값인가, 대화로 쌓인 값인가. creation 행은 저장 함수가 고치지 않는다. */
 export type MemoryOrigin = "creation" | "conversation";
 

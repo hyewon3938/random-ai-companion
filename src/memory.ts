@@ -18,6 +18,7 @@ import {
 } from "./db.js";
 import {
   MEMORY_ITEM_TYPE_NAME,
+  MEMORY_OWNER_IN_PROMPT,
   type MemoryItemType,
   type MemoryOwner,
   type UserKnows,
@@ -356,8 +357,12 @@ const dayLabel = (updatedAt: string): string => {
   return y && m && d ? `${Number(m)}/${Number(d)}` : updatedAt.slice(0, 10);
 };
 
-export const memoryLine = (r: MemoryRow): string =>
-  `- ${r.area} · ${r.subject}: ${r.value} (${dayLabel(r.updated_at)} 갱신)`;
+// 주인 표시는 검색 기억에만 붙인다 — 정체성 층은 전부 캐릭터 쪽 사실이라 줄마다 '너'가
+// 붙으면 같은 말이 반복될 뿐이고, 검색 기억은 진행 중인 일과 주변 인물에서 양쪽이 섞인다.
+const renderLine = (r: MemoryRow, owner: boolean): string =>
+  `- ${owner ? `${MEMORY_OWNER_IN_PROMPT[r.owner]} · ` : ""}${r.area} · ${r.subject}: ${r.value} (${dayLabel(r.updated_at)} 갱신)`;
+
+export const memoryLine = (r: MemoryRow): string => renderLine(r, false);
 
 export const memoryBlock = (rows: MemoryRow[]): string => {
   const byType = new Map<MemoryItemType, MemoryRow[]>();
@@ -370,7 +375,7 @@ export const memoryBlock = (rows: MemoryRow[]): string => {
     .map(
       (t) =>
         `[${MEMORY_ITEM_TYPE_NAME[t]}]\n${(byType.get(t) ?? [])
-          .map(memoryLine)
+          .map((r) => renderLine(r, true))
           .join("\n")}`,
     )
     .join("\n\n");
