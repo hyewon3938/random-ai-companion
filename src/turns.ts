@@ -3,7 +3,7 @@
 // 두 가지를 한다. ① 연속된 같은 역할 메시지를 하나로 합치고, 시간이 벌어진 자리에 시간
 // 마커를 넣는다 — 기록에 시간이 없으면 모델이 며칠 전 대화를 방금 일로 읽는다(프롬프트가
 // 전부 '지금' 기준이라 날짜 없는 기록은 오늘로 수렴한다). ② 캐릭터 발화를 답장과 같은
-// 봉투(JSON)로 적는다.
+// 객체(JSON)로 적는다.
 //
 // ②가 필요한 이유는 형식이 지시 한 문단만으로는 지켜지지 않기 때문이다(이슈 #190). 답장은
 // {"reply": [...]}로 받기로 해 놓고 기록에는 줄바꿈으로 나눈 평문 답장이 20턴씩 붙어 있어서,
@@ -30,7 +30,7 @@ const bubblesOf = (lines: string[]): string[] =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-// 마커는 봉투 밖 앞자리에 둔다. 안에 넣으면 모델이 그 칸을 흉내 내 말풍선에 시각을 찍고,
+// 마커는 객체 밖 앞자리에 둔다. 안에 넣으면 모델이 그 칸을 흉내 내 말풍선에 시각을 찍고,
 // 그 말은 그대로 상대에게 간다(reply-signal.ts의 stripLeadTag가 뒤늦게 지우는 자국이 이것이다).
 const chunkText = (role: Role, c: Chunk): string => {
   const head = c.marker ? `[${c.marker}] ` : "";
@@ -55,7 +55,7 @@ export const toTurns = (rows: MessageRow[]): ChatTurn[] => {
       groups.push(group);
     }
     const last = group.chunks[group.chunks.length - 1];
-    // 마커가 붙는 자리마다 봉투를 나눈다 — 캐릭터가 몇 시간 뒤에 먼저 말을 건 자리가 여기다.
+    // 마커가 붙는 자리마다 객체를 나눈다 — 캐릭터가 몇 시간 뒤에 먼저 말을 건 자리가 여기다.
     if (!last || marker) group.chunks.push({ marker, lines: [row.text] });
     else last.lines.push(row.text);
   }
