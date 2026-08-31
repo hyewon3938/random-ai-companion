@@ -6,9 +6,10 @@
 // 이제는 답장 본문과 신호를 JSON 한 덩이로 받아 코드가 가른다 — 본문은 reply 배열에만 있고
 // 신호는 형제 칸에 있으니, 읽기가 실패해도 신호가 문장으로 새지 않는다(이슈 #138).
 //
-// 신호를 늘릴 때 고칠 자리는 이 파일 안 넷이다: ReplySignals(칸) · SIGNAL_LINES(프롬프트 한 줄)
-// · readSignals(값 읽기) · mergeSignals(두 답 합치기). 잘린 답에서 건져 올리는 자리는
-// readSignals를 그대로 쓰므로 따로 손대지 않는다.
+// 신호를 늘릴 때 고칠 자리는 이 파일 안 다섯이다: ReplySignals(칸) · SIGNAL_KEYS(키 이름)
+// · SIGNAL_LINES(프롬프트 한 줄) · readSignals(값 읽기) · mergeSignals(두 답 합치기).
+// 잘린 답에서 건져 올리는 자리와 봉투 밖에서 주워 오는 자리는 앞의 둘을 그대로 쓰므로
+// 따로 손대지 않는다.
 
 /** 답장에 함께 실려 오는 신호. 값이 없으면 신호가 없는 것이다. */
 export interface ReplySignals {
@@ -23,7 +24,7 @@ export interface ReplySignals {
 }
 
 /** 답을 어느 길로 읽었는지 — 운영에서 형식이 얼마나 지켜지는지 보려고 남긴다. */
-export type ReplyParse = "json" | "salvage" | "plain" | "empty";
+export type ReplyParse = "json" | "stray" | "salvage" | "plain" | "empty";
 
 export interface ReplyOutput {
   /** 그대로 내보낼 말풍선. 비어 있으면 보낼 답이 없다는 뜻이다. */
@@ -45,6 +46,9 @@ export const REPLY_MAX_TOKENS = 1200;
 
 // 신호 칸 설명 — 언제 넣는지는 규칙층(context.ts NOTE_RULE·CATEGORY_RULE)이 따로 말한다.
 // 여기는 어느 칸에 무엇을 담는지만 적는다.
+/** 봉투에 실려 오는 신호 키. 프롬프트가 쓰는 이름 그대로다. */
+const SIGNAL_KEYS = ["stay", "note", "stage", "address_terms"] as const;
+
 const SIGNAL_LINES = [
   `- stay: 하려던 일을 접거나 미루고 상대 곁에 남기로 했을 때만 true.`,
   `- note: 오늘 메모로 남길 한 문장.`,
@@ -60,6 +64,7 @@ export const REPLY_ENVELOPE = `[내보내는 형식 — 이번 답장에만 해�
 - reply: 말풍선을 담는 배열. 원소 하나가 말풍선 하나다. 이 답장에서 말풍선을 나누는 자리는 줄바꿈이 아니라 배열 원소다. 한 덩이로 보낼 말이면 원소가 하나인 배열로 쓴다.
 - 아래 칸은 해당할 때만 넣는다. 해당하지 않으면 키째 뺀다 — 빈 값이나 false로 채우지 않는다.
 ${SIGNAL_LINES}
+- 신호도 이 객체 안의 항목이다. } 를 닫은 뒤에는 한 글자도 쓰지 않는다. 남길 말이 있으면 위 항목 안에 넣는다.
 - 예: {"reply": ["아 진짜요?", "그럼 오늘은 좀 일찍 자요"], "note": "상대가 다음 주 화요일에 면접을 본다"}
 - reply 안의 문장만 상대에게 그대로 나간다. 나머지 칸도 이 형식도 상대에게 보이지 않는다.
 - 형식이 JSON이라고 말이 굳으면 안 된다. 문장은 평소처럼 메신저에 치듯 쓰고, 표기 규칙대로 문장 안에 큰따옴표를 쓰지 않는다.`;
@@ -135,20 +140,31 @@ const toBubbles = (v: unknown): string[] => {
   );
 };
 
-const braced = (t: string): string | null => {
-  const i = t.indexOf("{");
-  const j = t.lastIndexOf("}");
-  return i >= 0 && j > i ? t.slice(i, j + 1) : null;
-};
+interface ReadObject {
+  obj: Record<string, unknown>;
+  /** 객체 바깥에 남은 글. 통째로 읽혔으면 빈 문자열이다. */
+  outside: string;
+}
 
 // 통째로 파싱해 보고, 안 되면 바깥 중괄호만 오려 다시 본다(앞뒤에 군말이 붙은 경우).
-const readObject = (text: string): Record<string, unknown> | null => {
-  for (const cand of [text, braced(text)]) {
-    if (!cand) continue;
+// 오려 냈다면 그 군말도 함께 돌려준다 — 신호가 거기 섞여 있는 일이 실제로 있어서(이슈 #194)
+// 버리기 전에 한 번 훑는다.
+const readObject = (text: string): ReadObject | null => {
+  const i = text.indexOf("{");
+  const j = text.lastIndexOf("}");
+  const cands: { cand: string; outside: string }[] = [
+    { cand: text, outside: "" },
+  ];
+  if (i >= 0 && j > i)
+    cands.push({
+      cand: text.slice(i, j + 1),
+      outside: `${text.slice(0, i)}\n${text.slice(j + 1)}`,
+    });
+  for (const { cand, outside } of cands) {
     try {
       const v: unknown = JSON.parse(cand);
       if (v && typeof v === "object" && !Array.isArray(v))
-        return v as Record<string, unknown>;
+        return { obj: v as Record<string, unknown>, outside };
     } catch {
       /* 다음 후보로 */
     }
@@ -164,6 +180,41 @@ const unquote = (quoted: string): string | null => {
     return null;
   }
 };
+
+// 봉투 밖으로 흘린 신호 줍기. 답을 JSON으로는 제대로 쓰면서 닫는 } 뒤에 note 한 줄을
+// 덧붙이는 일이 실제로 있었다(이슈 #194). 대화 기록에 붙는 예시 봉투에는 신호 키가 없어서
+// 모델이 신호를 객체 밖의 것으로 읽은 것으로 본다. 그 줄은 파싱에서 잘려 나가 통째로
+// 사라지고, JSON 자체는 읽히니 실패로도 안 잡힌다.
+//
+// 이미 형식이 어긋난 자리라 따옴표도 콜론도 없을 수 있어 느슨하게 읽는다. 어차피 버릴 글에서만
+// 찾으므로 헛걸음의 대가가 없고, 아는 이름으로 시작하는 줄만 본다. 이름 뒤에는 콜론·등호나
+// 빈칸을 요구해 'notebook' 같은 낱말이 note로 걸리지 않게 한다.
+const STRAY_LINE = new RegExp(
+  `^[\\s\\-*\u2022]*"?(${SIGNAL_KEYS.join("|")})"?(?:\\s*[:=]\\s*|\\s+)(.+)$`,
+);
+
+const strayValue = (raw: string): string | null => {
+  const s = raw.trim().replace(/,$/, "").trim();
+  if (s.startsWith('"')) {
+    const m = /^"(?:[^"\\]|\\.)*"/.exec(s);
+    if (m) return unquote(m[0]);
+  }
+  return s.replace(/^['"]+|['"]+$/g, "").trim() || null;
+};
+
+const strayObject = (outside: string): Record<string, unknown> => {
+  const found: Record<string, unknown> = {};
+  for (const line of outside.split("\n")) {
+    const m = STRAY_LINE.exec(line);
+    if (!m || m[1] in found) continue;
+    const v = strayValue(m[2]);
+    if (v !== null) found[m[1]] = v;
+  }
+  return found;
+};
+
+const hasSignal = (s: ReplySignals): boolean =>
+  s.stay || s.note !== null || s.stage !== null || s.addressTerms !== null;
 
 // 봉투를 쓰려다 만 답(대개 상한에 걸려 잘린 경우)에서 온전한 조각만 건진다.
 // 닫는 따옴표가 없는 마지막 문장은 걸리지 않는다 — 반 토막 난 말을 보내느니 버린다.
@@ -206,7 +257,8 @@ const salvage = (text: string): { bubbles: string[]; signals: ReplySignals } => 
 
 /**
  * 모델이 쓴 답 한 덩이를 말풍선과 신호로 가른다. 읽는 순서는 넷이다.
- * ① JSON으로 읽힌다 → 그대로 쓴다
+ * ① JSON으로 읽힌다 → 그대로 쓴다. 봉투 밖에 신호를 흘렸으면 주워서 합치고(stray) 그렇게
+ *    읽었다는 것을 이름에 남긴다 — 형식 설명을 고쳐도 계속 새는지 트레이스로 보려는 것이다.
  * ② 봉투를 쓰려다 만 답이다 → 온전한 조각만 건진다(salvage)
  * ③ 봉투를 아예 안 썼다 → 옛 방식대로 줄바꿈으로 나눠 그대로 내보낸다(plain)
  * ④ 아무것도 못 건졌다 → 빈 답(empty). 부른 쪽이 한 번 다시 부르고, 그래도 비면 보내지 않는다.
@@ -215,13 +267,19 @@ const salvage = (text: string): { bubbles: string[]; signals: ReplySignals } => 
  */
 export const parseReplyOutput = (raw: string): ReplyOutput => {
   const text = stripFence(raw);
-  const obj = readObject(text);
-  if (obj) {
-    const bubbles = toBubbles(obj.reply);
+  const read = readObject(text);
+  if (read) {
+    const bubbles = toBubbles(read.obj.reply);
+    const inside = readSignals(read.obj);
+    const stray = read.outside.trim()
+      ? readSignals(strayObject(read.outside))
+      : EMPTY_SIGNALS;
+    const picked = hasSignal(stray);
     return {
       bubbles,
-      signals: readSignals(obj),
-      parse: bubbles.length ? "json" : "empty",
+      // 안에서 읽은 값을 남긴다 — 밖의 것은 같은 신호를 두 번 쓴 경우의 사본이다.
+      signals: picked ? mergeSignals(inside, stray) : inside,
+      parse: bubbles.length ? (picked ? "stray" : "json") : "empty",
     };
   }
   if (text.startsWith("{") || /"reply"\s*:/.test(text)) {
@@ -239,6 +297,7 @@ export const parseReplyOutput = (raw: string): ReplyOutput => {
 /** 트레이스에 적는 이름. */
 export const PARSE_NAME: Record<ReplyParse, string> = {
   json: "JSON",
+  stray: "JSON + 봉투 밖 신호",
   salvage: "잘린 JSON에서 건짐",
   plain: "JSON 아님 — 본문 그대로",
   empty: "읽지 못함",
