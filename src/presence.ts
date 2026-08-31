@@ -3,13 +3,16 @@ import { config } from "./config.js";
 import { isHeldNow } from "./reply-timing.js";
 import {
   awayNoticeCountToday,
+  awayNoticeSent,
   db,
   getDayPlan,
+  hasWaitingWakeRow,
   lastMessage,
   lastUserTs,
   recordSendFailure,
   type CharacterRow,
 } from "./db.js";
+import { scheduleWakeRow } from "./pending.js";
 import { buildSystemBlocks } from "./context.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory, isAwayUnavail } from "./day-plan.js";
@@ -21,6 +24,7 @@ import {
 } from "./bot.js";
 import {
   AWAY_MIN_BLOCK_MIN,
+  BLOCK_END_JITTER_MS,
   AWAY_QUIET_MIN,
   PROACTIVE_RECENT_LINES,
   AWAY_BEFORE_MIN,
@@ -43,8 +47,11 @@ import {
 // 예고하고, 닥친 일은 시작 시점에 알린 뒤 바로 조용해진다.
 // 연속으로 바쁜 일 사이의 짧은 틈에는 그 경계에서 방금 한 일과 다음 일을 함께 알려 메운다.
 // '찾을 때 있어주기'의 연장 — 막연한 침묵(이탈)을 '알고 하는 기다림'으로 바꾼다. 블록당 한 번.
-// 다녀온 뒤는 이 파일 몫이 아니다 — 구간 끝의 깨우기 표시(bot.ts의 wake 핸들러)가 쌓인 메시지
-// 몰아 답장과 복귀 인사를 한 자리에서 처리한다.
+// 다녀온 뒤 무엇을 보낼지는 이 파일이 정하지 않는다 — 구간 끝에 울리는 표시(bot.ts의 wake
+// 핸들러)가 쌓인 메시지 몰아 답장과 복귀 인사를 한 자리에서 처리한다. 다만 그 표시를 거는
+// 것은 이 틱의 몫이다(armReturnRow): 예전에는 유저가 그 구간에 말을 걸어야만 표시가 생겨서,
+// 나가기 전 대화를 나누고 유저가 답하지 않은 채 구간이 지나가면 캐릭터가 다음 날 아침까지
+// 아무 말도 하지 않았다. 유저는 이따 보자는 말을 듣고 기다리는 중인데도.
 //
 // 문안은 대화와 같은 3층 프롬프트(buildSystemBlocks)에 상황 문단만 얹는다 — 앞 두 층이
 // 대화와 같아야 캐시가 붙는다. 정체성·말투·표기 규칙·지금 시각은 3층이 들고 있으니 여기엔 상황만 적는다.
@@ -118,6 +125,45 @@ export const runPresenceTick = async (): Promise<void> => {
   }
 };
 
+/**
+ * 지금 들어가 있는 불가 구간이 끝나는 시각에 울릴 표시를 걸어 둔다.
+ *
+ * 예고를 보냈는지와 무관하게 건다 — 예고가 막혀 조용히 사라진 날이야말로 돌아와서 말을
+ * 거는 게 필요한 날이다. 유저가 그 구간에 말을 걸면 이 행이 'wake'로 바뀌어(promoteWakeRow)
+ * 몰아 답장 쪽으로 간다. 걸어 둔 것이 이미 있으면 두지 않는다 — 한 구간에 행은 하나다.
+ */
+const armReturnRow = (
+  characterId: number,
+  chatId: string,
+  blocks: PlanBlock[],
+  nowMin: number,
+  userMsgAt: string,
+): void => {
+  if (hasWaitingWakeRow(chatId)) return;
+  const cur = blocks.find(
+    (b) => toMin(b.start) <= nowMin && nowMin < toMin(b.end),
+  );
+  if (!cur || !isAwayUnavail(cur)) return;
+  // 알리지 않고 다녀오는 짧은 구간은 돌아와서 인사도 하지 않는다 — 나갈 때 말이 없었는데
+  // 들어와서만 말하면 유저 쪽에서는 앞뒤가 맞지 않는다.
+  if (toMin(cur.end) - toMin(cur.start) < AWAY_MIN_BLOCK_MIN) return;
+  const waitMs =
+    (toMin(cur.end) - nowMin) * 60_000 +
+    Math.floor(Math.random() * BLOCK_END_JITTER_MS);
+  scheduleWakeRow({
+    chatId,
+    characterId,
+    userMsgAt,
+    waitMs,
+    meta: {
+      activity: cur.activity,
+      blockStart: cur.start,
+      blockEnd: cur.end,
+    },
+    kind: "return",
+  });
+};
+
 const presenceTickBody = async (): Promise<void> => {
   const rows = db
     .prepare(`SELECT * FROM characters WHERE status = 'active'`)
@@ -143,6 +189,11 @@ const presenceTickBody = async (): Promise<void> => {
     if (!last) continue;
     // 유저가 붙잡아 지금 일정을 접고 곁에 있는 중이면 자리 비움 예고를 하지 않는다.
     if (isHeldNow(c.id)) continue;
+
+    // 구간 끝에 울릴 표시부터 걸어 둔다. 아래 예고가 상한·중복·침묵으로 접히더라도
+    // 돌아와서 말을 걸 자리는 남는다.
+    armReturnRow(c.id, c.chat_id, blocks, nowMin, lu);
+
     // 하루 예고 상한 — 나갔다 오는 일정이 많은 날도 알리는 말이 과해지지 않게 막는다.
     // 하루 각본을 만들 때부터 같은 상한을 지키므로 여기서 걸리는 날은 드물다.
     // dayStart는 논리일(새벽 5시 컷오프) 기준 — 달력일 기준이면 자정~새벽에 카운트가 리셋된다.
@@ -173,12 +224,7 @@ const presenceTickBody = async (): Promise<void> => {
           ? rel <= AWAY_BEFORE_MIN && rel >= -AWAY_AFTER_MIN
           : rel <= 0 && rel >= -AWAY_SUDDEN_AFTER_MIN;
       if (!eligible) continue;
-      const dup = db
-        .prepare(
-          `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
-        )
-        .get(c.chat_id, dayStart, '%"kind":"away"%', `%"block":"${b.start}"%`);
-      if (dup) continue;
+      if (awayNoticeSent(c.chat_id, dayStart, b.start)) continue;
       target = b;
       between = prevAway;
       prevAct = prev?.activity ?? "";

@@ -1,6 +1,7 @@
 import {
   insertPendingReply,
   getWaitingPendingReplies,
+  getPendingReply,
   hasWaitingPendingReply,
   supersedePendingReplies,
   supersedeWakeRows,
@@ -18,9 +19,13 @@ import { getKstNow, kstDateString } from "./kst.js";
 // 기다리면 몇 분 뒤에 나가는 답장이 방금 본 것처럼 읽히지 않는다.
 //
 // 답장 불가 구간은 미리 만들지 않는다 — 몇 시간 뒤의 답장을 지금 만들면 그 사이 온 메시지를
-// 못 담고, "방금 봤다"는 결도 거짓이 된다. 대신 kind='wake' 행 하나만 남겨 구간이 끝나는
-// 시각에 울리게 하고, 그때 쌓인 메시지를 읽어 한 번에 답장을 만든다(만드는 쪽은 bot.ts).
-// 어느 쪽이든 행으로 남으므로 프로세스가 다시 떠도 이어간다.
+// 못 담고, "방금 봤다"는 결도 거짓이 된다. 대신 행 하나만 남겨 구간이 끝나는 시각에 울리게
+// 하고, 그때 쌓인 메시지를 읽어 한 번에 답장을 만든다(만드는 쪽은 bot.ts).
+//
+// 그 행은 두 종류다. 자리 비움 틱이 구간에 들어갈 때 거는 kind='return'은 아직 답할 말이 없고,
+// 유저가 그 구간에 말을 걸면 kind='wake'로 바뀐다(promoteWakeRow). 한 구간에 행은 하나이고,
+// 울릴 때 무엇을 할지는 그 시점의 종류로 갈린다. 어느 쪽이든 행으로 남으므로 프로세스가
+// 다시 떠도 이어간다.
 
 const RETRY_MS = 60_000;
 const MAX_ATTEMPTS = 3;
@@ -67,10 +72,18 @@ const parseBubbles = (row: PendingReplyRow): string[] => {
   }
 };
 
-const fire = async (row: PendingReplyRow): Promise<void> => {
-  timers.delete(row.id);
-  // 깨우기 표시 — 보낼 말풍선이 없고, 등록된 핸들러가 그 자리에서 답장을 만든다.
-  if (row.kind === "wake") {
+const isWakeKind = (kind: string): boolean =>
+  kind === "wake" || kind === "return";
+
+const fire = async (fired: PendingReplyRow): Promise<void> => {
+  timers.delete(fired.id);
+  // 걸어 둔 뒤에 종류가 바뀌었을 수 있다 — 구간에 들어갈 때 건 'return' 행은 그 사이 유저가
+  // 말을 걸면 'wake'가 된다. 타이머는 걸 때의 값을 들고 있으므로 여기서 지금 값을 다시 읽는다.
+  const row = isWakeKind(fired.kind)
+    ? (getPendingReply(fired.id) ?? fired)
+    : fired;
+  // 깨우기 표시 — 보낼 말풍선이 없고, 등록된 핸들러가 그 자리에서 할 일을 정한다.
+  if (isWakeKind(row.kind)) {
     if (!wakeHandler) return;
     try {
       await wakeHandler(row);
@@ -201,14 +214,21 @@ export const schedulePendingReply = (p: {
   return { id, sendAt };
 };
 
-/** 불가 구간이 끝나는 시각에 울릴 깨우기 표시를 건다. 답장은 그때 만든다. */
+/**
+ * 불가 구간이 끝나는 시각에 울릴 표시를 건다. 무엇을 보낼지는 그때 정한다.
+ *
+ * kind='wake'는 그 구간에 온 유저 메시지에 답해야 해서 거는 행이고, 'return'은 자리 비움 틱이
+ * 구간에 들어가며 거는 행이라 아직 답할 말이 없다. 'return' 행은 선톡을 막지 않는다.
+ */
 export const scheduleWakeRow = (p: {
   chatId: string;
   characterId: number;
   userMsgAt: string;
   waitMs: number;
   meta: { activity: string; blockStart: string; blockEnd: string };
+  kind?: "wake" | "return";
 }): number => {
+  const kind = p.kind ?? "wake";
   const sendAt = stampAfter(p.waitMs);
   const createdAt = stamp();
   const metaJson = JSON.stringify(p.meta);
@@ -219,7 +239,7 @@ export const scheduleWakeRow = (p: {
     bubbles: [],
     noteToSave: null,
     sendAt,
-    kind: "wake",
+    kind,
     metaJson,
     createdAt,
   });
@@ -231,14 +251,14 @@ export const scheduleWakeRow = (p: {
     bubbles_json: "[]",
     note_to_save: null,
     send_at: sendAt,
-    kind: "wake",
+    kind,
     meta_json: metaJson,
     call_id: null,
     attempts: 0,
     created_at: createdAt,
   });
   console.log(
-    `[pending] 깨우기 #${id} ${p.chatId} ${p.meta.activity} → ${sendAt} (${Math.round(p.waitMs / 1000)}초 뒤)`,
+    `[pending] ${kind === "wake" ? "깨우기" : "구간 끝 표시"} #${id} ${p.chatId} ${p.meta.activity} → ${sendAt} (${Math.round(p.waitMs / 1000)}초 뒤)`,
   );
   return id;
 };
@@ -263,7 +283,7 @@ export const dropPendingReplies = (chatId: string): number => {
   return rows.length;
 };
 
-/** 깨우기 표시를 거둔다 — 불가 구간이 아닌 길로 답장이 나가게 됐을 때. */
+/** 구간 끝에 울릴 표시를 거둔다(두 종류 다) — 불가 구간이 아닌 길로 답장이 나가게 됐을 때. */
 export const dropWakeRows = (chatId: string): number => {
   const rows = supersedeWakeRows(chatId);
   for (const r of rows) {
