@@ -57,6 +57,7 @@ const POST_PURPOSES = [
   "reconnect",
   "catchup",
   "goodnight",
+  "mend",
   "away",
   "comeback",
 ] as const;
@@ -153,6 +154,7 @@ interface CallContext {
   /** 객체의 신호 칸 — 키 이름은 그대로 둔다(이미 올라간 기록과 어긋나지 않게). */
   stay?: boolean;
   note?: string | null;
+  userUpset?: boolean;
   /** 객체를 어느 길로 읽었는지(json·stray·salvage·plain·empty). */
   outputParse?: string;
   bubbles?: number;
@@ -206,6 +208,7 @@ const SEND_KIND_NAME: Record<string, string> = {
   checkin: "안부 선톡",
   catchup: "근황 선톡",
   goodnight: "밤 인사 선톡",
+  mend: "달래기 선톡",
   away: "자리비움 선톡",
 };
 
@@ -439,9 +442,9 @@ const outcomeLines = (ctx: CallContext): string[] => {
   // 붙였는지 안 붙였는지를 늘 적는다 — 없을 때 줄이 사라지면 모델이 안 붙인 건지
   // 기록이 안 된 건지 구별되지 않는다.
   out.push(
-    `*답장 신호* 남음 ${ctx.stay ? "붙임" : "없음"}${
-      ctx.outputParse ? ` · 형식 ${parseName(ctx.outputParse)}` : ""
-    }`,
+    `*답장 신호* 남음 ${ctx.stay ? "붙임" : "없음"} · 서운함 ${
+      ctx.userUpset ? "붙임" : "없음"
+    }${ctx.outputParse ? ` · 형식 ${parseName(ctx.outputParse)}` : ""}`,
   );
   // 메모는 붙었는지와 무엇을 적었는지를 같은 줄에서 본다 — 다른 신호와 묶어 두면
   // '메모 없음' 세 글자가 줄 안에 묻혀 저장 여부를 확인하러 스레드를 뒤지게 된다.

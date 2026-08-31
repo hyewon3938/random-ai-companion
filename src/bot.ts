@@ -77,7 +77,7 @@ import {
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
 // reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 선톡,
 // checkin=긴 침묵 뒤 안부 선톡, away=자리비움 선톡(나갈 때·돌아왔을 때),
-// catchup=낮의 근황 선톡, goodnight=밤 인사 선톡
+// catchup=낮의 근황 선톡, goodnight=밤 인사 선톡, mend=서운해한 뒤 보내는 달래기 선톡
 export type SendKind =
   | "reply"
   | "recover"
@@ -85,7 +85,8 @@ export type SendKind =
   | "checkin"
   | "away"
   | "catchup"
-  | "goodnight";
+  | "goodnight"
+  | "mend";
 
 // 텔레그램 API 연결 풀.
 //
@@ -818,6 +819,7 @@ const respond = async (
     attach({
       stay: signals.stay,
       note: signals.note,
+      userUpset: signals.userUpset,
       bubbles: bubbles.length,
       // 말풍선 사이 간격은 발송할 때 글자 수에서 나온다(1초 안쪽 흔들림) — 길이를 남겨 둔다.
       bubbleLens: bubbles.map((b) => b.length),
@@ -833,6 +835,8 @@ const respond = async (
       kind,
       // 발송·폐기 결과를 이 답장을 만든 호출의 트레이스에 잇는다.
       callId: meta.callId ?? null,
+      // 상대가 서운해하는 기색을 읽었다는 표시 — 발송할 때 messages.meta_json으로 옮긴다.
+      userUpset: signals.userUpset,
     });
     attach({ sendAt: scheduled.sendAt });
     // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
@@ -847,6 +851,17 @@ const respond = async (
 
 // 저장해 둔 답장을 실제로 내보내는 자리 — pending.ts가 정한 시각에 부른다.
 // (pending.ts가 bot.ts를 부르면 서로 물고 늘어져서, 발송만 여기서 끼워 넣는다.)
+// 답장을 만들 때 붙은 서운함 표시를 행에서 읽는다 — 발송 기록으로 옮겨야 나중에 침묵
+// 팔로업 틱이 messages만 보고 달래기를 보낼지 정할 수 있다.
+const rowUpset = (metaJson: string | null): boolean => {
+  if (!metaJson) return false;
+  try {
+    return (JSON.parse(metaJson) as { userUpset?: unknown }).userUpset === true;
+  } catch {
+    return false;
+  }
+};
+
 setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
   const kind = (row.kind === "recover" ? "recover" : "reply") as SendKind;
   const { sent, error } = await sendBubbleList(row.chat_id, bubbles);
@@ -865,6 +880,7 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
     nowIso(),
     {
       kind,
+      ...(rowUpset(row.meta_json) ? { userUpset: true } : {}),
       ...(sent.length < bubbles.length
         ? { partial: `${sent.length}/${bubbles.length}` }
         : {}),
@@ -994,6 +1010,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
     attach({
       stay: signals.stay,
       note: signals.note,
+      userUpset: signals.userUpset,
       bubbles: bubbles.length,
       bubbleLens: bubbles.map((b) => b.length),
     });
@@ -1012,6 +1029,8 @@ setWakeHandler(async (row: PendingReplyRow) => {
       {
         kind: "reply",
         gathered: meta.blockStart ?? true,
+        // 이 길은 pending을 타지 않아 표시를 옮길 자리가 여기다.
+        ...(signals.userUpset ? { userUpset: true } : {}),
         ...(sent.length < bubbles.length
           ? { partial: `${sent.length}/${bubbles.length}` }
           : {}),

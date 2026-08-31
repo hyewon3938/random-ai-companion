@@ -259,7 +259,7 @@ const TABLES: Record<string, string> = {
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id TEXT NOT NULL,
   character_id INTEGER,
-  kind TEXT NOT NULL CHECK (kind IN ('away','catchup','goodnight')),
+  kind TEXT NOT NULL CHECK (kind IN ('away','catchup','goodnight','mend')),
   error TEXT NOT NULL,
   failed_at TEXT NOT NULL`,
 
@@ -865,6 +865,37 @@ const migratePendingReturn = (): void => {
   console.log(`[db] pending_replies에 return을 더했다`);
 };
 migratePendingReturn();
+
+// send_failures.kind에 'mend'(달래기 선톡)를 더한다. 위 두 이관과 같은 이유로 테이블을 다시
+// 만들고, 버전 번호 대신 CHECK 문구를 보고 판단한다. 이 표에는 인덱스가 없어 다시 만들 것도
+// 없다 — 실패 기록을 사람이 훑어보는 자리라 조회가 인덱스를 타지 않는다.
+const migrateSendFailureMend = (): void => {
+  const row = db
+    .prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'send_failures'`,
+    )
+    .get() as { sql: string } | undefined;
+  if (!row || row.sql.includes("'mend'")) return;
+
+  db.pragma("foreign_keys = OFF");
+  db.pragma("legacy_alter_table = ON");
+  db.transaction(() => {
+    db.exec(`ALTER TABLE send_failures RENAME TO send_failures_old`);
+    db.exec(`CREATE TABLE send_failures (${TABLES.send_failures}\n)`);
+    db.exec(`
+      INSERT INTO send_failures (id, chat_id, character_id, kind, error, failed_at)
+      SELECT id, chat_id, character_id, kind, error, failed_at FROM send_failures_old`);
+    db.exec(`DROP TABLE send_failures_old`);
+    const broken = db.pragma("foreign_key_check") as unknown[];
+    if (broken.length)
+      throw new Error(
+        `[db] send_failures 재생성 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
+      );
+  })();
+  db.pragma("legacy_alter_table = OFF");
+  console.log(`[db] send_failures에 mend를 더했다`);
+};
+migrateSendFailureMend();
 
 db.pragma("foreign_keys = ON");
 
@@ -1500,7 +1531,7 @@ export const recordSendAttempt = (id: number, error: string): void => {
 export const recordSendFailure = (
   chatId: string,
   characterId: number,
-  kind: "away" | "catchup" | "goodnight",
+  kind: "away" | "catchup" | "goodnight" | "mend",
   error: string,
 ): void => {
   const failedAt = `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
@@ -1934,22 +1965,41 @@ export const saveUserProfile = (
   );
 };
 
+// 마지막 유저 발화 이후 구간의 시작. 유저가 한 번도 말한 적이 없으면 대화 전체를 본다.
+const sinceLastUser = (chatId: string): string =>
+  lastUserTs(chatId) ?? "0000-00-00 00:00:00";
+
 // 마지막 유저 메시지 이후 캐릭터가 먼저 보낸(proactive) 수 — '연속 무응답'을 세어 매달림을 막는다.
-export const proactiveSinceLastUser = (chatId: string): number => {
-  const lastUser = db
-    .prepare(
-      `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
-    )
-    .get(chatId) as { sent_at: string } | undefined;
-  const since = lastUser?.sent_at ?? "0000-00-00 00:00:00";
-  return (
+export const proactiveSinceLastUser = (chatId: string): number =>
+  (
     db
       .prepare(
         `SELECT count(*) c FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at > ? AND meta_json LIKE '%proactive%'`,
       )
-      .get(chatId, since) as { c: number }
+      .get(chatId, sinceLastUser(chatId)) as { c: number }
   ).c;
-};
+
+// 달래기 선톡을 보낼지 정하는 질의 둘. 마지막 유저 발화 이후 구간을 통째로 본다 — 마지막
+// 메시지 하나만 보면 서운함 표시가 붙은 답장 뒤에 자리 비움 예고가 끼었을 때 표시가 가려져
+// 달래기가 영영 안 나간다.
+
+/** 그 구간의 캐릭터 답장에 상대 서운함 표시가 붙었는가(reply-signal의 userUpset). */
+export const upsetSinceLastUser = (chatId: string): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at > ?
+         AND meta_json LIKE '%"userUpset":true%' LIMIT 1`,
+    )
+    .get(chatId, sinceLastUser(chatId));
+
+/** 그 구간에 달래기 선톡이 이미 나갔는가 — 한 번 서운해한 것에 한 통이다. */
+export const mendSentSinceLastUser = (chatId: string): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at > ?
+         AND meta_json LIKE '%"kind":"mend"%' LIMIT 1`,
+    )
+    .get(chatId, sinceLastUser(chatId));
 
 // 복구 워터마크: "이 유저 메시지에는 답장 책임을 졌다"는 표시. 재시작(배포)으로 답장을 보냈지만
 // 로그 전에 프로세스가 죽어도, 다음 부팅의 복구가 같은 메시지에 또 답하지 않도록 막는다.

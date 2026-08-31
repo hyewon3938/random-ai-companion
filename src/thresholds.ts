@@ -64,6 +64,10 @@ export const RECENT_USER_MS = 4 * 60 * 60 * 1000;
 export const GOODNIGHT_SILENCE_MS = 60 * 60 * 1000;
 export const GOODNIGHT_WINDOW = { start: "00:00", end: "05:00" } as const;
 
+/** 달래기 선톡 — 상대가 서운해하고 답이 끊긴 뒤 이만큼 지나면 한 통 보낸다.
+ * 침묵 팔로업 틱이 15분 간격이라 실제 발송은 30~45분 사이에 흩어진다. */
+export const MEND_SILENCE_MS = 30 * 60 * 1000;
+
 /** 자리비움 선톡 — 알리고 나갈 일정의 최소 길이, 나갈 때와 끝난 뒤의 시간 창(분).
  * 미리 아는 일정(advance_known)은 시작 전에 예고하고, 닥친 일은 시작 시점에 알린다.
  * 복귀 알림은 창을 따로 두지 않는다 — 구간 끝의 깨우기 표시(pending의 wake 행)가 그 자리다.
