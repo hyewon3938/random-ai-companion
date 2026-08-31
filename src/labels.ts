@@ -130,6 +130,7 @@ export type CallPurpose =
   | "reconnect"
   | "catchup"
   | "goodnight"
+  | "mend"
   | "away"
   | "comeback"
   | "tool";
@@ -150,6 +151,7 @@ export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
   reconnect: "안부 선톡",
   catchup: "근황 선톡",
   goodnight: "밤 인사 선톡",
+  mend: "달래기 선톡",
   away: "자리비움 선톡",
   comeback: "복귀 선톡",
   tool: "개발 도구",

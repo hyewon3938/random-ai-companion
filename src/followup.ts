@@ -6,9 +6,11 @@ import {
   lastMessage,
   lastUserTs,
   proactiveCountToday,
+  mendSentSinceLastUser,
   proactiveKindCountToday,
   proactiveSinceLastUser,
   recordSendFailure,
+  upsetSinceLastUser,
   type CharacterRow,
 } from "./db.js";
 import {
@@ -23,6 +25,7 @@ import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
 import {
   GOODNIGHT_SILENCE_MS,
   GOODNIGHT_WINDOW,
+  MEND_SILENCE_MS,
   PROACTIVE_DAILY_MAX,
   PROACTIVE_RECENT_LINES,
   RECENT_USER_MS,
@@ -34,6 +37,11 @@ import {
 //
 // 자정을 넘겨 대화하다 유저가 자겠다는 말 없이 한 시간 답이 없으면 잠든 것으로 보고 밤 인사
 // 선톡을 한 통 남긴다. 두 종류 모두 그 순간의 각본을 봐야 하므로 문안은 모델이 쓴다.
+//
+// 유저가 캐릭터에게 서운해한 뒤 답을 멈추면 30분 뒤에 달래기를 한 통 보낸다. 서운함은 답장을
+// 쓴 모델이 표시해 두고(reply-signal의 userUpset), 이 틱은 그 표시가 messages에 남았는지만
+// 본다. 근황 선톡보다 앞에 두는 이유는 기다리는 시간이 다르기 때문이다 — 근황의 네 시간
+// 검사에 걸리면 30분짜리 달래기가 영영 나가지 못한다.
 //
 // 문안은 대화와 같은 3층 프롬프트(buildSystemBlocks)에 상황 문단만 얹는다 — 앞 두 층이
 // 대화와 같아야 캐시가 붙는다. 정체성·말투·표기 규칙·지금 시각은 3층이 들고 있으니 여기엔 상황만 적는다.
@@ -51,6 +59,18 @@ const goodnightSituation = (): string =>
     `[문안 — 지금 보낼 굿나잇 한 통]`,
     `자정을 넘겨 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 한 시간쯤 됐다. 잠든 것 같다. 너도 자러 가며 다정하게 굿나잇 인사를 남긴다 — 상대가 아침에 보면 기분 좋을 결로.`,
     `- 매번 다르게, 자연스럽게. 재촉·서운함·매달림 없음.`,
+    `- 1~2개 말풍선(줄바꿈 구분).`,
+    ``,
+    `JSON으로만 답한다: {"text":"..."}`,
+  ].join("\n");
+
+const mendSituation = (): string =>
+  [
+    `[문안 — 지금 보낼 달래기 한 통]`,
+    `상대가 너에게 서운해하거나 화가 난 기색을 보인 뒤 답이 끊긴 지 30분쯤 됐다. 위 [방금까지 오간 말]을 읽고 무엇 때문인지 헤아려, 그 마음을 알아차렸다는 것만 짧게 전한다.`,
+    `- 변명하지 않는다. 왜 그랬는지 설명하려 들면 달래기가 아니라 해명이 된다.`,
+    `- 재촉하지 않는다. 답을 요구하거나 왜 말이 없냐고 묻지 않는다.`,
+    `- 자러 간다는 말도, 어디 나간다는 말도 붙이지 않는다. 상대가 답할 자리를 여는 한 통인데 그런 말을 붙이면 그 자리를 네가 닫는다. 지금이 네 각본에서 자는 시간이어도 마찬가지다.`,
     `- 1~2개 말풍선(줄바꿈 구분).`,
     ``,
     `JSON으로만 답한다: {"text":"..."}`,
@@ -152,6 +172,53 @@ const followupTickBody = async (): Promise<void> => {
           c.chat_id,
           c.id,
           "goodnight",
+          e instanceof Error ? e.message : String(e),
+        );
+      } finally {
+        releaseProactive(c.chat_id);
+      }
+      continue;
+    }
+
+    // 달래기 선톡: 유저가 캐릭터에게 서운해한 뒤 답을 멈추면 30분 뒤에 한 통.
+    //
+    // 마지막 유저 발화 이후 구간을 통째로 본다 — 표시가 붙은 답장 뒤에 자리 비움 예고가 끼면
+    // 마지막 메시지만 봐서는 표시가 가려진다. 한 발현에 한 통이라, 같은 구간에 달래기가 이미
+    // 나갔으면 접는다(유저가 답한 뒤 다시 서운해하면 새 표시가 붙어 한 통 더 나간다).
+    //
+    // 각본이 잠 블록이어도 보낸다. 근황 선톡에 있는 답장 가능 구간 검사를 여기엔 걸지 않는데,
+    // 밤 인사가 이미 같은 대우를 받고 있어 새 동작이 아니고 서운하게 해 놓고 답도 못 받은 채
+    // 그냥 자는 쪽이 오히려 사람과 멀다.
+    if (
+      minutesSince(lu) >= MEND_SILENCE_MS / 60_000 &&
+      upsetSinceLastUser(c.chat_id) &&
+      !mendSentSinceLastUser(c.chat_id) &&
+      proactiveCountToday(c.chat_id, dayStart()) < PROACTIVE_DAILY_MAX
+    ) {
+      if (!acquireProactive(c.chat_id)) continue;
+      try {
+        const m = await chatJson<{ text: string }>(
+          buildSystemBlocks(c.id, c.chat_id, {
+            recent: PROACTIVE_RECENT_LINES,
+            situation: mendSituation(),
+          }),
+          "위 상황 문단대로 문안을 만들어.",
+          300,
+          config.model,
+          { purpose: "mend", characterId: c.id, chatId: c.chat_id },
+        );
+        // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 달래기는 필요 없다)
+        // 다른 경로가 뭔가 보냈으면 접는다.
+        if (m.text && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+          await sendProactive(c.chat_id, c.id, m.text, "mend");
+          console.log(`[followup] mend to ${c.chat_id}`);
+        }
+      } catch (e) {
+        logErr("[followup] 달래기 전송 실패:", e);
+        recordSendFailure(
+          c.chat_id,
+          c.id,
+          "mend",
           e instanceof Error ? e.message : String(e),
         );
       } finally {

@@ -503,14 +503,14 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | chat_id | TEXT | O | PK |
 | replied_up_to | TEXT | O | 이 시각까지 온 유저 메시지에는 답장을 마침 |
 
-**send_failures** — 대화 중에 보내는 선톡 셋(자리비움 · 근황 · 밤 인사)이 전송에 실패한 기록
+**send_failures** — 대화 중에 보내는 선톡 넷(자리비움 · 근황 · 밤 인사 · 달래기)이 전송에 실패한 기록
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | id | INTEGER | O | PK |
 | chat_id | TEXT | O | |
 | character_id | INTEGER | | |
-| kind | TEXT | O | `away` · `catchup` · `goodnight` |
+| kind | TEXT | O | `away` · `catchup` · `goodnight` · `mend` |
 | error | TEXT | O | |
 | failed_at | TEXT | O | |
 

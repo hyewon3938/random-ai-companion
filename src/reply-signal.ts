@@ -21,6 +21,8 @@ export interface ReplySignals {
   stage: string | null;
   /** 서로 부르는 말이 달라졌을 때 새 호칭(관계 address_terms). */
   addressTerms: string | null;
+  /** 상대가 너에게 서운해하거나 화가 난 기색이 분명하다(달래기 선톡을 보낼지 정하는 데만 쓴다). */
+  userUpset: boolean;
 }
 
 /** 답을 어느 길로 읽었는지 — 운영에서 형식이 얼마나 지켜지는지 보려고 남긴다. */
@@ -38,6 +40,7 @@ export const EMPTY_SIGNALS: ReplySignals = {
   note: null,
   stage: null,
   addressTerms: null,
+  userUpset: false,
 };
 
 // 객체 키·따옴표가 본문 밖에서 토큰을 쓰고, 잘리면 본문 일부가 아니라 JSON 한 덩이가 통째로
@@ -51,13 +54,20 @@ export const REPLY_MAX_TOKENS = 2000;
 // 신호 칸 설명 — 언제 넣는지는 규칙층(context.ts NOTE_RULE·CATEGORY_RULE)이 따로 말한다.
 // 여기는 어느 칸에 무엇을 담는지만 적는다.
 /** 객체에 실려 오는 신호 키. 프롬프트가 쓰는 이름 그대로다. */
-const SIGNAL_KEYS = ["stay", "note", "stage", "address_terms"] as const;
+const SIGNAL_KEYS = [
+  "stay",
+  "note",
+  "stage",
+  "address_terms",
+  "userUpset",
+] as const;
 
 const SIGNAL_LINES = [
   `- stay: 하려던 일을 접거나 미루고 상대 곁에 남기로 했을 때만 true.`,
   `- note: 오늘 메모로 남길 한 문장.`,
   `- stage: 이번 대화로 둘 사이가 실제로 달라졌을 때만, 지금 어떤 사이인지 한 줄로 새로 쓴다. 매일 넣는 칸이 아니다.`,
   `- address_terms: 서로 부르는 말이 달라졌을 때만, 서로를 뭐라고 부르는지 짧게 적는다. 부르던 대로면 넣지 않는다.`,
+  `- userUpset: 상대가 너에게 서운해하거나 화가 난 기색이 분명할 때만 true. 회사 일이나 다른 사람 때문에 상한 기분은 아니다. 애매하면 넣지 않는다.`,
 ].join("\n");
 
 // 답장 경로에서만 프롬프트 맨 끝에 붙는다(context.ts BuildOptions.signals).
@@ -122,6 +132,7 @@ const readSignals = (o: Record<string, unknown>): ReplySignals => ({
   note: asText(o.note),
   stage: asText(o.stage),
   addressTerms: asText(o.address_terms),
+  userUpset: asFlag(o.userUpset),
 });
 
 /** 첫 답이 비어 다시 부른 경우 — 두 답의 신호를 하나로 합친다(먼저 나온 값을 남긴다). */
@@ -133,6 +144,7 @@ export const mergeSignals = (
   note: a.note ?? b.note,
   stage: a.stage ?? b.stage,
   addressTerms: a.addressTerms ?? b.addressTerms,
+  userUpset: a.userUpset || b.userUpset,
 });
 
 // 배열이면 원소마다, 문자열 하나면 그것만. 원소 안에 줄바꿈이 들어와도 말풍선으로 나눈다 —
@@ -218,7 +230,11 @@ const strayObject = (outside: string): Record<string, unknown> => {
 };
 
 const hasSignal = (s: ReplySignals): boolean =>
-  s.stay || s.note !== null || s.stage !== null || s.addressTerms !== null;
+  s.stay ||
+  s.note !== null ||
+  s.stage !== null ||
+  s.addressTerms !== null ||
+  s.userUpset;
 
 // JSON을 쓰려다 만 답(대개 상한에 걸려 잘린 경우)에서 온전한 조각만 건진다.
 // 닫는 따옴표가 없는 마지막 문장은 걸리지 않는다 — 반 토막 난 말을 보내느니 버린다.
