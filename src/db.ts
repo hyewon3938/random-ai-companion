@@ -210,8 +210,12 @@ const TABLES: Record<string, string> = {
   meta_json TEXT`,
 
   // 만들어 둔 답장을 보관했다가 정한 시각에 보낸다. 봇이 내려가도 보낼 것이 남는다.
-  // kind='wake'는 답장이 아니라 깨우기 표시다 — 불가 구간에는 답장을 미리 만들지 않고,
-  // 구간이 끝나는 시각에 이 행이 울리면 그때 쌓인 메시지를 읽고 한 번에 답장을 만든다.
+  // kind='wake'와 'return'은 답장이 아니라 깨우기 표시다 — 불가 구간에는 답장을 미리
+  // 만들지 않고, 구간이 끝나는 시각에 이 행이 울리면 그때 무엇을 할지 정한다. 둘의 차이는
+  // 유저가 그 구간에 말을 걸었는가다. 'return'은 자리 비움 틱이 구간에 들어갈 때 걸어 두는
+  // 행이라 아직 답할 말이 없고, 유저가 그 구간에 말을 걸면 'wake'로 바뀐다. 이 구분이
+  // 필요한 이유는 선톡을 막는 isWaiting이 'wake'만 세야 하기 때문이다 — 'return'까지 세면
+  // 불가 구간 내내 모든 선톡 틱이 멈춰 다음 예고와 아침·점심 선톡이 창을 놓친다.
   pending_replies: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id TEXT NOT NULL,
@@ -220,7 +224,7 @@ const TABLES: Record<string, string> = {
   bubbles_json TEXT NOT NULL,
   note_to_save TEXT,
   send_at TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover','wake')),
+  kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover','wake','return')),
   meta_json TEXT,
   call_id INTEGER,
   status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','sent','superseded','failed')),
@@ -817,6 +821,50 @@ addColumn("llm_calls", "traced", "traced INTEGER NOT NULL DEFAULT 0", () => {
 });
 // 이 답장을 만든 호출 번호. 발송·폐기 결과를 그 답장 스레드에 달 때 쓴다.
 addColumn("pending_replies", "call_id", "call_id INTEGER");
+
+// pending_replies.kind에 'return'을 더한다. 위 wake 이관과 같은 이유로 테이블을 다시 만들고,
+// 버전 번호 대신 CHECK 문구를 보고 판단한다.
+const migratePendingReturn = (): void => {
+  const row = db
+    .prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pending_replies'`,
+    )
+    .get() as { sql: string } | undefined;
+  if (!row || row.sql.includes("'return'")) return;
+
+  db.pragma("foreign_keys = OFF");
+  db.pragma("legacy_alter_table = ON");
+  db.transaction(() => {
+    db.exec(`ALTER TABLE pending_replies RENAME TO pending_replies_old`);
+    db.exec(`DROP INDEX IF EXISTS idx_pending_replies_due`);
+    db.exec(`DROP INDEX IF EXISTS idx_pending_replies_chat`);
+    db.exec(`CREATE TABLE pending_replies (${TABLES.pending_replies}\n)`);
+    db.exec(`
+      INSERT INTO pending_replies
+        (id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save,
+         send_at, kind, meta_json, call_id, status, attempts, last_error,
+         created_at, sent_at)
+      SELECT id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save,
+             send_at, kind, meta_json, call_id, status, attempts, last_error,
+             created_at, sent_at
+        FROM pending_replies_old`);
+    db.exec(`DROP TABLE pending_replies_old`);
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_pending_replies_due ON pending_replies (status, send_at)`,
+    );
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_pending_replies_chat ON pending_replies (chat_id, status)`,
+    );
+    const broken = db.pragma("foreign_key_check") as unknown[];
+    if (broken.length)
+      throw new Error(
+        `[db] pending_replies 재생성 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
+      );
+  })();
+  db.pragma("legacy_alter_table = OFF");
+  console.log(`[db] pending_replies에 return을 더했다`);
+};
+migratePendingReturn();
 
 db.pragma("foreign_keys = ON");
 
@@ -1685,12 +1733,14 @@ export const lastUserTs = (chatId: string): string | undefined =>
 // 마지막 메시지(유저·캐릭 무관)의 시각·역할 — 침묵 팔로업 판단용
 export const lastMessage = (
   chatId: string,
-): { sent_at: string; role: string } | undefined =>
+): { sent_at: string; role: string; meta_json: string | null } | undefined =>
   db
     .prepare(
-      `SELECT sent_at, role FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
+      `SELECT sent_at, role, meta_json FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
     )
-    .get(chatId) as { sent_at: string; role: string } | undefined;
+    .get(chatId) as
+    | { sent_at: string; role: string; meta_json: string | null }
+    | undefined;
 
 // 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸 선톡 수 — 하루 총량 상한을 지키는 데 쓴다.
 // followup·dispatch가 공유한다. 채널별 상한만 있으면 합이 통제되지 않아서, 각자 자기 몫을
@@ -1721,6 +1771,21 @@ export const proactiveKindCountToday = (
       )
       .get(chatId, since, `%"kind":"${kind}"%`) as { c: number }
   ).c;
+
+/** 그 블록의 자리 비움 예고가 오늘 이미 나갔는가.
+ *  두 자리가 같은 질의를 쓴다 — 예고를 두 번 보내지 않게 막는 presence, 예고한 일정으로
+ *  곧 들어가는지 보는 bot의 배웅 답 판단. */
+export const awayNoticeSent = (
+  chatId: string,
+  since: string,
+  blockStart: string,
+): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at >= ?
+         AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
+    )
+    .get(chatId, since, '%"kind":"away"%', `%"block":"${blockStart}"%`);
 
 // 오늘 알리고 나간 자리비움 선톡 수. 돌아와서 하는 인사는 이미 알린 구간을 마무리하는
 // 말이라 빼고 센다.
@@ -2392,19 +2457,45 @@ export const getWaitingPendingReplies = (): PendingReplyRow[] =>
     )
     .all() as PendingReplyRow[];
 
+/** 걸어 둔 행 하나를 지금 값으로 다시 읽는다. 타이머는 걸 때의 값을 들고 있는데, 그 사이
+ *  promoteWakeRow가 종류를 바꿔 놓았을 수 있어 울릴 때 한 번 더 확인한다. */
+export const getPendingReply = (id: number): PendingReplyRow | null =>
+  (db
+    .prepare(
+      `SELECT id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save, send_at, kind, meta_json, call_id, attempts, created_at
+         FROM pending_replies WHERE id = ? AND status = 'waiting'`,
+    )
+    .get(id) as PendingReplyRow | undefined) ?? null;
+
+// 유저가 답을 기다리는 중인가 — 선톡 틱이 이 값을 보고 물러난다. kind='return'은 빼고 센다.
+// 그 행은 답할 말이 없는 구간 경계 알림이라, 세면 불가 구간 내내 모든 선톡이 멈춰 연속 불가
+// 구간의 다음 예고와 아침·점심 선톡이 발송 창을 놓친다.
 export const hasWaitingPendingReply = (chatId: string): boolean =>
   !!db
     .prepare(
-      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' LIMIT 1`,
+      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind <> 'return' LIMIT 1`,
     )
     .get(chatId);
 
+/** 이 구간이 끝나는 시각에 울릴 행이 이미 걸려 있는가. 두 종류를 함께 센다 — 한 구간에 행은
+ *  하나이고, 유저가 말을 걸면 새로 만드는 대신 promoteWakeRow가 그 행의 종류를 바꾼다. */
 export const hasWaitingWakeRow = (chatId: string): boolean =>
   !!db
     .prepare(
-      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'wake' LIMIT 1`,
+      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return') LIMIT 1`,
     )
     .get(chatId);
+
+/** 걸려 있던 'return' 행을 'wake'로 올린다 — 그 구간에 유저가 말을 걸어 답할 말이 생겼다.
+ *  기다린 시간을 재는 기준이 되도록 그 첫 메시지 시각도 함께 적는다. 이미 'wake'인 행은
+ *  그대로 둔다(먼저 온 메시지가 기준이다). 바꾼 행 수를 돌려준다. */
+export const promoteWakeRow = (chatId: string, userMsgAt: string): number =>
+  db
+    .prepare(
+      `UPDATE pending_replies SET kind = 'wake', user_msg_at = ?
+         WHERE chat_id = ? AND status = 'waiting' AND kind = 'return'`,
+    )
+    .run(userMsgAt, chatId).changes;
 
 /** 버린 대기 행 — 트레이스가 그 답장 스레드에 폐기 사실을 달 수 있게 호출 번호까지 준다. */
 export interface SupersededRow {
@@ -2414,15 +2505,17 @@ export interface SupersededRow {
 
 // 유저가 대기 중에 말을 더 걸면 만들어 둔 답장을 버린다 — 그 사이 대화가 바뀌었기 때문.
 // 깨우기 표시는 답장이 아니라 남긴다 — 메시지가 더 쌓여도 구간 끝에 한 번 깨는 건 같다.
+// 조건은 버릴 값이 아니라 남길 값으로 적는다. 'wake가 아닌 것 전부'로 적으면 나중에 종류가
+// 늘 때마다 여기가 조용히 그 행까지 버린다.
 export const supersedePendingReplies = (chatId: string): SupersededRow[] => {
   const rows = db
     .prepare(
-      `SELECT id, call_id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind != 'wake'`,
+      `SELECT id, call_id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind IN ('reply','recover')`,
     )
     .all(chatId) as SupersededRow[];
   if (rows.length)
     db.prepare(
-      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind != 'wake'`,
+      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind IN ('reply','recover')`,
     ).run(chatId);
   return rows;
 };
@@ -2431,12 +2524,12 @@ export const supersedePendingReplies = (chatId: string): SupersededRow[] => {
 export const supersedeWakeRows = (chatId: string): SupersededRow[] => {
   const rows = db
     .prepare(
-      `SELECT id, call_id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'wake'`,
+      `SELECT id, call_id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return')`,
     )
     .all(chatId) as SupersededRow[];
   if (rows.length)
     db.prepare(
-      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind = 'wake'`,
+      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return')`,
     ).run(chatId);
   return rows;
 };

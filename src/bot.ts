@@ -49,6 +49,7 @@ import {
   type RelChange,
 } from "./relationship-update.js";
 import {
+  awayNoticeSent,
   db,
   getActiveCharacter,
   getDayPlan,
@@ -57,6 +58,7 @@ import {
   hasWaitingWakeRow,
   lastMessage,
   logMessage,
+  promoteWakeRow,
   recentUserGaps,
   setCallContext,
   setRecoveryMark,
@@ -554,17 +556,7 @@ const upcomingAnnouncedAway = (
     if (!isAwayUnavail(b)) continue;
     const rel = toMinOfDay(b.start) - nowMin;
     if (rel <= 0 || rel > 15) continue;
-    const announced = db
-      .prepare(
-        `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
-      )
-      .get(
-        chatId,
-        logicalDayStartTs(),
-        '%"kind":"away"%',
-        `%"block":"${b.start}"%`,
-      );
-    if (announced) return b;
+    if (awayNoticeSent(chatId, logicalDayStartTs(), b.start)) return b;
   }
   return null;
 };
@@ -587,12 +579,19 @@ const gatherSituation = (activity: string): string =>
     `그 다음 일정의 답장 여건이 불가면, 이제 그리로 간다는 것까지 이 답장에서 함께 알린다. 같은 말을 하는 예고가 따로 나가지 않는다.`,
   ].join("\n");
 
-// 복귀 인사 — 예고하고 나간 사이 상대가 답이 없었을 때, 돌아왔음을 먼저 알리는 상황 문단.
+// 복귀 인사 — 자리를 비운 사이 상대에게서 온 말이 없었을 때, 돌아왔음을 먼저 알리는 상황 문단.
+//
+// 나가기 전에 그 말을 해 뒀는지는 여기서 단정하지 않는다. 자리 비움 예고가 나갔는지는 코드가
+// 알지만, 예고 없이 답장 안에서 이따 보자고 해 둔 경우도 많아 예고 여부만으로는 어느 쪽인지
+// 정해지지 않는다. 둘 다 되는 문안을 주고 대화 기록을 보고 고르게 한다 — 아니라고 못 박으면
+// 방금 그 말을 해 놓고도 못 했다고 하는 답이 나온다.
 const returnSituation = (activity: string): string =>
   [
     `[문안 — 지금 보낼 복귀 인사 한 통]`,
-    `너는 아까 곧 자리를 비운다고 알리고 다녀왔다. 방금 "${activity}"을(를) 끝내고 돌아왔는데, 그 사이 상대에게선 답이 없었다.`,
+    `너는 방금 "${activity}"을(를) 끝내고 돌아왔다. 그 사이 상대에게선 말이 없었다.`,
     `- 돌아왔음을 가볍게 알린다(그 일이 이제 끝났고 돌아왔다는 결). 아까 하려던 안부를 자연스럽게 이어도 좋다. 매달림이 아니라 자연스러운 복귀 인사다.`,
+    `- 나가기 전에 이따 보자고 해 뒀으면 그 말을 지키는 자리다. 대화 기록에서 그때 한 말을 보고 어긋나지 않게 받는다.`,
+    `- 나가면서 아무 말도 못 했으면 무엇을 하다 왔는지 한 마디만 붙인다. 길게 변명하지 않는다.`,
     `- 짧게 1~2개 말풍선(줄바꿈 구분). 재촉·서운함 없음.`,
     `- 억지스러우면 send=false.`,
     ``,
@@ -665,6 +664,13 @@ const respond = async (
           waitMs: timing.waitMs,
           meta: timing.gather,
         });
+      // 이미 걸려 있으면 새로 만들지 않는다 — 한 구간에 행은 하나다. 다만 자리 비움 틱이
+      // 걸어 둔 'return' 행이면 답할 말이 생긴 것이라 'wake'로 올린다. 그래야 구간이 끝날 때
+      // 복귀 인사가 아니라 몰아 답장으로 간다.
+      else if (promoteWakeRow(chatId, turn.at))
+        console.log(
+          `[pending] 구간 끝 표시를 깨우기로 올림 — 이 구간에 온 말에 답한다 (chat=${chatId})`,
+        );
       else
         console.log(
           `[pending] 깨우기 이미 걸림 — 메시지만 쌓는다 (chat=${chatId})`,
@@ -866,12 +872,13 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
   );
 });
 
-// 깨우기 표시가 울리는 자리 — 답장 불가 구간이 끝났다. 갈래는 셋:
+// 구간 끝 표시가 울리는 자리 — 답장 불가 구간이 끝났다. 갈래는 셋:
 // ① 그 사이 온 메시지가 있으면 몰아 답장 한 번 ("방금 끝났고 이제 봤다"가 사실인 시점에 만든다)
-// ② 온 말은 없지만 자리 비움을 예고해 뒀으면 복귀 인사 ("이제 끝났어")
-// ③ 둘 다 아니면 조용히 지나간다.
+// ② 온 말이 없으면 복귀 인사 ("이제 끝났어") — 나가기 전에 예고를 보냈는지로 문안만 갈린다
+// ③ 직전에 이미 복귀 인사를 했으면 조용히 지나간다.
 // presence.ts에 따로 있던 복귀 알림 경로를 여기로 합쳤다 — 답장과 복귀 인사가 겹쳐 나가는
-// 이중 발송이 구조적으로 사라진다(깨우기 행이 있는 동안 isWaiting이 선톡 틱을 전부 막는다).
+// 이중 발송이 구조적으로 사라진다(답할 말이 있는 kind='wake' 행이 있는 동안 isWaiting이
+// 선톡 틱을 전부 막고, 이 자리에서 둘 중 하나만 고른다).
 setWakeHandler(async (row: PendingReplyRow) => {
   const chatId = row.chat_id;
   // 디바운스·답장 생성이 진행 중이면 그쪽이 답한다(불가 구간은 이미 끝났으니 평범한 길로 나간다).
@@ -1018,41 +1025,46 @@ setWakeHandler(async (row: PendingReplyRow) => {
     return;
   }
 
-  // ② 복귀 인사 — 예고하고 나간 자리였고, 그 사이 상대가 답이 없었던 경우만.
-  const dayStart = logicalDayStartTs();
-  const announced =
-    meta.blockStart &&
-    db
-      .prepare(
-        `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND meta_json LIKE ? AND meta_json LIKE ? LIMIT 1`,
-      )
-      .get(
-        chatId,
-        dayStart,
-        '%"kind":"away"%',
-        `%"block":"${meta.blockStart}"%`,
-      );
-  if (!announced || !last || last.role !== "assistant") return;
-  const draft = await chatJson<{ send: boolean; text?: string }>(
-    buildSystemBlocks(row.character_id, chatId, {
-      recent: PROACTIVE_RECENT_LINES,
-      situation: returnSituation(activity),
-    }),
-    "위 상황 문단대로 문안을 만들어.",
-    400,
-    config.model,
-    { purpose: "away", characterId: row.character_id, chatId },
-  );
-  // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나 다른 경로가 보냈으면 접는다.
-  if (
-    draft.send &&
-    draft.text &&
-    lastMessage(chatId)?.sent_at === last.sent_at
-  ) {
-    await sendProactive(chatId, row.character_id, draft.text, "away", {
-      return: meta.blockStart ?? true,
-    });
-    console.log(`[wake] return @ ${activity} → ${chatId}`);
+  // ② 복귀 인사 — 자리를 비운 사이 상대에게서 온 말이 없었던 경우.
+  //
+  // 예전에는 자리 비움 예고를 보낸 자리에서만 인사했는데, 그 예고는 하루 상한·중복 검사·침묵
+  // 검사에 자주 막힌다. 그래서 나갈 때 답장으로 이따 보자고 해 놓고 예고만 막힌 날에는 상대가
+  // 그 말을 믿고 기다리는데도 캐릭터가 다음 날 아침까지 아무 말도 하지 않았다.
+  if (!last || last.role !== "assistant") return;
+  // 방금 보낸 것이 복귀 인사면 또 하지 않는다 — 불가 구간이 이어지는 날 유저가 답하지 않는
+  // 동안 인사가 구간마다 쌓인다. 유저가 한 번 답하면 last.role이 유저가 되어 다시 열린다.
+  if (last.meta_json?.includes('"return"')) {
+    console.log(`[wake] 복귀 인사 접음 — 직전에 이미 했다 (chat=${chatId})`);
+    return;
+  }
+  // 이 인사는 선톡과 같은 자리를 쓴다. 답할 말이 있는 'wake' 행과 달리 이 행은 선톡 틱을
+  // 막지 않으므로(그래야 구간 안에서 다음 예고와 아침·점심 선톡이 창을 지킨다), 보내는 동안만
+  // 자리를 잡아 같은 순간에 도는 자리 비움 예고와 겹치지 않게 한다.
+  if (!acquireProactive(chatId)) return;
+  try {
+    const draft = await chatJson<{ send: boolean; text?: string }>(
+      buildSystemBlocks(row.character_id, chatId, {
+        recent: PROACTIVE_RECENT_LINES,
+        situation: returnSituation(activity),
+      }),
+      "위 상황 문단대로 문안을 만들어.",
+      400,
+      config.model,
+      { purpose: "away", characterId: row.character_id, chatId },
+    );
+    // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나 다른 경로가 보냈으면 접는다.
+    if (
+      draft.send &&
+      draft.text &&
+      lastMessage(chatId)?.sent_at === last.sent_at
+    ) {
+      await sendProactive(chatId, row.character_id, draft.text, "away", {
+        return: meta.blockStart ?? true,
+      });
+      console.log(`[wake] return @ ${activity} → ${chatId}`);
+    }
+  } finally {
+    releaseProactive(chatId);
   }
 });
 
