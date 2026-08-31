@@ -42,7 +42,11 @@ export const EMPTY_SIGNALS: ReplySignals = {
 
 // 객체 키·따옴표가 본문 밖에서 토큰을 쓰고, 잘리면 본문 일부가 아니라 JSON 한 덩이가 통째로
 // 못 쓰게 된다. 실제로 쓴 만큼만 과금되므로 상한은 여유 있게 둔다.
-export const REPLY_MAX_TOKENS = 1200;
+// 여유를 더 둔 이유는 생각 과정이다(이슈 #214) — sonnet은 thinking 값을 넘기지 않으면 생각을
+// 켜고, 그 텍스트는 응답으로 안 돌아오면서 토큰은 출력으로 계산된다. 08-31 로그에서 본문이
+// 같은 78자인데 출력이 638·151토큰으로 갈렸다. 생각 몫이 큰 쪽으로 몰린 호출에서 본문까지
+// 상한에 닿지 않게 한다.
+export const REPLY_MAX_TOKENS = 2000;
 
 // 신호 칸 설명 — 언제 넣는지는 규칙층(context.ts NOTE_RULE·CATEGORY_RULE)이 따로 말한다.
 // 여기는 어느 칸에 무엇을 담는지만 적는다.
