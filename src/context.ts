@@ -218,9 +218,15 @@ const daySection = (characterId: number): string => {
     return [
       `[너의 오늘 하루 — 미리 알고 있는 흐름]`,
       known.length
-        ? known.map((b) => `${clockLabel(b.start)} ${b.activity}`).join(" → ")
+        ? known
+            .map(
+              (b) =>
+                `${clockLabel(b.start)}~${clockLabel(b.end)} ${b.activity}`,
+            )
+            .join(" → ")
         : "",
-      `- 이건 계획표가 아니라 그냥 네 하루다. 너는 시간표를 의식하지 않는다 — 그 시간이 되면 네가 하고 싶어서 하는 일들이다.`,
+      `- 이건 계획표가 아니라 그냥 네 하루다. 시간표를 읊듯 말하지는 않지만, 사람이 자기 하루를 알듯 각 일이 언제 시작해 언제 끝나는지는 알고 있다 — 그 시간이 되면 네가 하고 싶어서 하는 일들이다.`,
+      `- 상대가 언제 끝나냐고 물으면 위에 적힌 끝 시각 그대로 답한다. 어림해서 다른 시각을 지어내지 않는다.`,
       `- 위에 없는 앞일은 너도 모른다. 닥치면 겪는다.`,
       `- 실제 대화 흐름이 이 밑그림과 다르면 실제가 우선이다(예: 첫 만남 밤이라 늦게까지 깨어 있는 중).`,
       `- 유저와의 상호작용으로 하루를 바꿔도 된다(같이 영화 보기로 해서 서점을 미루는 것처럼). 바꿨으면 바뀐 대로 산다.`,
@@ -382,7 +388,7 @@ const nowSection = (
   // 시각은 숫자 표기와 말 표현을 함께 준다 — "12:30"만 주면 모델이 분을 흘리고 시 토큰만 읽어
   // "곧 12시" 같은 오인이 난다(12시 반인데). 반올림·상대 표현은 코드가 계산한 값을 그대로 쓰게 한다.
   const nowLine = cur
-    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). 너는 지금 "${cur.activity}" 중이다(이 일 시작 ${clockLabel(cur.start)}·${Math.max(0, toMin(now) - toMin(cur.start))}분째, 답장 여건 ${RESPONSIVENESS_NAME[cur.responsiveness]}, 활동 성격 ${ACTIVITY_CATEGORY_NAME[blockCategory(cur)]}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
+    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). 너는 지금 "${cur.activity}" 중이다(이 일 ${clockLabel(cur.start)}~${clockLabel(cur.end)}·시작 ${Math.max(0, toMin(now) - toMin(cur.start))}분째·끝나기까지 ${Math.max(0, toMin(cur.end) - toMin(now))}분, 답장 여건 ${RESPONSIVENESS_NAME[cur.responsiveness]}, 활동 성격 ${ACTIVITY_CATEGORY_NAME[blockCategory(cur)]}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
     : `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지). 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
   return [
     `[지금 — 답장 전에 이 사실들과 어긋나지 않는지 확인한다]`,
@@ -393,6 +399,9 @@ const nowSection = (
     cur ? (RESPONSIVENESS_NOTE[cur.responsiveness] ?? "") : "",
     cur
       ? `- 위 '분째'에 맞게 말한다. 이제 막 시작한 참(0~5분째)이면 아직 그 일을 하지 않은 것이니 끝냈다고 말하지 않고, 한참 지났으면(30분째 이상) 이제 시작하는 것처럼 말하지 않는다.`
+      : "",
+    cur
+      ? `- 상대가 언제 끝나냐고 물으면 위 끝 시각과 남은 시간 그대로 답한다. 다른 시각을 어림해 지어내지 않는다.`
       : "",
     `- 최근 대화에서 이미 알린 자리 비움·상태 전환("방금 뛰고 왔다", "씻고 올게요")을 다시 처음처럼 새로 반복하지 않는다. 이미 말했으면 그 다음 상태로 자연스럽게 이어간다.`,
     `- 말투: ${speechLine(storedLevel, chatId)}`,

@@ -31,7 +31,12 @@ import {
   AWAY_DAILY_MAX,
   RECENT_USER_MS,
 } from "./thresholds.js";
-import { kstLogicalClock, kstLogicalDate, logicalDayStartTs } from "./kst.js";
+import {
+  clockLabel,
+  kstLogicalClock,
+  kstLogicalDate,
+  logicalDayStartTs,
+} from "./kst.js";
 
 // 자리 비움 예고(선-불가 선톡): 곧 한동안 답장이 어려운 일(운동·샤워·외출·회의 등)이 있으면
 // 조용히 사라지지 않고 "이제 ~하러 가요, 답 늦어요"를 먼저 남긴다. 미리 아는 일정은 시작 전에
@@ -60,15 +65,20 @@ const lastCharTs = (chatId: string): string | undefined =>
       .get(chatId) as { sent_at: string } | undefined
   )?.sent_at;
 
+// 문안에 필요한 값(활동 이름·활동 성격·닥친 일인지·언제 끝나는지)이 전부 블록에 들어 있어,
+// 부르는 쪽이 하나씩 뽑아 넘기지 않고 블록 자체를 넘긴다.
 const presenceSituation = (
-  activity: string,
+  block: PlanBlock,
   between: boolean,
   prevAct: string,
-  sudden: boolean,
   pending: boolean,
-  fixed: boolean,
-): string =>
-  [
+): string => {
+  const activity = block.activity;
+  // 연속 불가 사이의 경계(between)는 앞 일이 끝난 자리라, 미리 알던 일정이 아니어도 닥친 일로 치지 않는다.
+  const sudden = !between && !block.advance_known;
+  const fixed = blockCategory(block) === "official";
+  const mins = toMin(block.end) - toMin(block.start);
+  return [
     `[문안 — 지금 보낼 자리 비움 예고 한 통]`,
     between
       ? `너는 방금 "${prevAct}"을(를) 막 끝냈고, 이제 곧 "${activity}"을(를) 하러 간다. 그 동안은 답장이 어렵다.`
@@ -78,6 +88,7 @@ const presenceSituation = (
     fixed
       ? `이건 미룰 수 없는 공적 의무(회의·시험·발표 등)라 폰을 못 본다. 끝나고 연락하겠다는 결로 알린다.`
       : `이건 급하면 미루거나 조정할 수도 있는 일이다. 가볍게 잠깐 다녀오겠다, 급하면 말하라는 결로.`,
+    `이 일은 ${clockLabel(block.end)}에 끝난다(${mins}분짜리). 얼마나 걸리는지 말할지는 네가 정하되, 말한다면 이 시각 그대로 쓴다 — 어림해서 다른 시각을 지어내지 않는다.`,
     ...(pending
       ? [
           `상대가 방금 남긴 말이 있다(위 [방금까지 오간 말]의 마지막 줄). 지금 제대로 답하긴 어려우니 짧게 아는 척만 하고, 다녀와서/이따 얘기하자는 정도로 미뤄도 된다.`,
@@ -92,6 +103,7 @@ const presenceSituation = (
     ``,
     `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
   ].join("\n");
+};
 
 // 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
 let running = false;
@@ -194,12 +206,10 @@ const presenceTickBody = async (): Promise<void> => {
         buildSystemBlocks(c.id, c.chat_id, {
           recent: PROACTIVE_RECENT_LINES,
           situation: presenceSituation(
-            target.activity,
+            target,
             between,
             prevAct,
-            !between && !target.advance_known,
             last.role === "user",
-            blockCategory(target) === "official",
           ),
         }),
         "위 상황 문단대로 문안을 만들어.",
