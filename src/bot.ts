@@ -163,7 +163,7 @@ export const logErr = (prefix: string, e: unknown): void => {
 };
 
 // 줄바꿈으로 끊은 말풍선 — 선톡 문안이 쓴다(문안 여섯 곳은 자기 형식으로 답해 본문이 통글이다).
-// 답장은 봉투의 reply 배열에서 나오므로 이 길을 타지 않는다. 상한 계산만 한곳(capBubbles)에서 쓴다.
+// 답장은 객체의 reply 배열에서 나오므로 이 길을 타지 않는다. 상한 계산만 한곳(capBubbles)에서 쓴다.
 const splitBubbles = (text: string): string[] => {
   const parts = text
     .split("\n")
@@ -174,7 +174,7 @@ const splitBubbles = (text: string): string[] => {
 };
 
 // 순간 네트워크 오류로 전송이 통째로 실패하지 않게 재시도한다(VM↔텔레그램 API 일시 단절 대비).
-// 나쁜 구간은 수 분~수십 분씩 이어지므로 촘촘히 조르기보다 봉투를 넓게 잡는다.
+// 나쁜 구간은 수 분~수십 분씩 이어지므로 촘촘히 조르기보다 간격을 넓게 잡는다.
 // 매 시도는 sendTimeout()(20초)으로 끊기니 최악 ~100초. 호출부(틱)는 이 시간만큼 붙잡힌다.
 const RETRY_BACKOFF_MS = [2_000, 5_000, 12_000];
 
@@ -215,7 +215,7 @@ const sleepWhileTyping = async (chatId: string, ms: number): Promise<void> => {
 //
 // 중간에 실패해도 이미 나간 말풍선은 되돌릴 수 없다. 그래서 실패를 그냥 던지지 않고
 // '어디까지 나갔는지'를 함께 돌려준다 — 호출부가 통째로 재시도해 앞부분을 중복 발송하는 걸 막는다.
-// (재시도 봉투를 넓힌 만큼 이 부분 실패 확률도 같이 올라간다. 잘린 채로 두는 게 중복보다 낫다.)
+// (재시도 간격을 넓힌 만큼 이 부분 실패 확률도 같이 올라간다. 잘린 채로 두는 게 중복보다 낫다.)
 const sendBubbleList = async (
   chatId: string,
   bubbles: string[],
@@ -709,7 +709,7 @@ const respond = async (
     const system = buildSystemBlocks(character.id, chatId, {
       pick,
       trace: built,
-      // 답장만 봉투(JSON)로 받는다 — 본문과 신호가 한 덩이로 온다.
+      // 답장만 객체(JSON)로 받는다 — 본문과 신호가 한 덩이로 온다.
       signals: true,
       ...(away ? { situation: farewellSituation(away) } : {}),
     });
@@ -779,7 +779,7 @@ const respond = async (
     // 관계 신호 — 이번 대화로 사이나 부르는 말이 달라졌으면 그 자리에서 저장한다.
     // 조립 전에 굳힌 말투와 한 목록에 모아 트레이스가 *관계 갱신* 한 자리에서 읽는다.
     relUpdates.push(...applyReplySignals(character.id, signals, nowIso()));
-    // 봉투를 어느 길로 읽었는지는 답장을 버리는 경우에도 남긴다 — 형식이 깨진 날을 되짚는 자리다.
+    // 객체를 어느 길로 읽었는지는 답장을 버리는 경우에도 남긴다 — 형식이 깨진 날을 되짚는 자리다.
     attach({ outputParse: parse });
     // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 stay 신호.
     // 붙잡기 판정이 이미 접었으면 그 기록이 남아 있어 recordHold가 알아서 넘어간다.
@@ -821,7 +821,7 @@ const respond = async (
       characterId: character.id,
       userMsgAt: turn.at,
       bubbles,
-      // 봉투의 note 신호(NOTE_RULE) — 발송이 성공하면 pending.ts가 saveTodayNote로 저장한다.
+      // 객체의 note 신호(NOTE_RULE) — 발송이 성공하면 pending.ts가 saveTodayNote로 저장한다.
       noteToSave: signals.note,
       waitMs: timing.waitMs,
       kind,

@@ -1,4 +1,4 @@
-// 답장 봉투 — 모델이 코드에 신호를 넘기는 통로.
+// 답장 객체 — 모델이 코드에 신호를 넘기는 통로.
 //
 // 옛 방식은 답장 앞뒤에 붙이는 대괄호 표시였다([남음]·[메모]). 신호가 유저에게 보이는 문장과
 // 같은 문자열 안에 있어서, 떼어내기가 한 번 어긋나면 그대로 새어 나갔고(겹친 태그를 하나만
@@ -8,7 +8,7 @@
 //
 // 신호를 늘릴 때 고칠 자리는 이 파일 안 다섯이다: ReplySignals(칸) · SIGNAL_KEYS(키 이름)
 // · SIGNAL_LINES(프롬프트 한 줄) · readSignals(값 읽기) · mergeSignals(두 답 합치기).
-// 잘린 답에서 건져 올리는 자리와 봉투 밖에서 주워 오는 자리는 앞의 둘을 그대로 쓰므로
+// 잘린 답에서 건져 올리는 자리와 객체 밖에서 주워 오는 자리는 앞의 둘을 그대로 쓰므로
 // 따로 손대지 않는다.
 
 /** 답장에 함께 실려 오는 신호. 값이 없으면 신호가 없는 것이다. */
@@ -40,13 +40,13 @@ export const EMPTY_SIGNALS: ReplySignals = {
   addressTerms: null,
 };
 
-// 봉투 키·따옴표가 본문 밖에서 토큰을 쓰고, 잘리면 본문 일부가 아니라 JSON 한 덩이가 통째로
+// 객체 키·따옴표가 본문 밖에서 토큰을 쓰고, 잘리면 본문 일부가 아니라 JSON 한 덩이가 통째로
 // 못 쓰게 된다. 실제로 쓴 만큼만 과금되므로 상한은 여유 있게 둔다.
 export const REPLY_MAX_TOKENS = 1200;
 
 // 신호 칸 설명 — 언제 넣는지는 규칙층(context.ts NOTE_RULE·CATEGORY_RULE)이 따로 말한다.
 // 여기는 어느 칸에 무엇을 담는지만 적는다.
-/** 봉투에 실려 오는 신호 키. 프롬프트가 쓰는 이름 그대로다. */
+/** 객체에 실려 오는 신호 키. 프롬프트가 쓰는 이름 그대로다. */
 const SIGNAL_KEYS = ["stay", "note", "stage", "address_terms"] as const;
 
 const SIGNAL_LINES = [
@@ -181,8 +181,8 @@ const unquote = (quoted: string): string | null => {
   }
 };
 
-// 봉투 밖으로 흘린 신호 줍기. 답을 JSON으로는 제대로 쓰면서 닫는 } 뒤에 note 한 줄을
-// 덧붙이는 일이 실제로 있었다(이슈 #194). 대화 기록에 붙는 예시 봉투에는 신호 키가 없어서
+// 객체 밖으로 흘린 신호 줍기. 답을 JSON으로는 제대로 쓰면서 닫는 } 뒤에 note 한 줄을
+// 덧붙이는 일이 실제로 있었다(이슈 #194). 대화 기록에 붙는 예시 객체에는 신호 키가 없어서
 // 모델이 신호를 객체 밖의 것으로 읽은 것으로 본다. 그 줄은 파싱에서 잘려 나가 통째로
 // 사라지고, JSON 자체는 읽히니 실패로도 안 잡힌다.
 //
@@ -216,7 +216,7 @@ const strayObject = (outside: string): Record<string, unknown> => {
 const hasSignal = (s: ReplySignals): boolean =>
   s.stay || s.note !== null || s.stage !== null || s.addressTerms !== null;
 
-// 봉투를 쓰려다 만 답(대개 상한에 걸려 잘린 경우)에서 온전한 조각만 건진다.
+// JSON을 쓰려다 만 답(대개 상한에 걸려 잘린 경우)에서 온전한 조각만 건진다.
 // 닫는 따옴표가 없는 마지막 문장은 걸리지 않는다 — 반 토막 난 말을 보내느니 버린다.
 // reply 배열을 훑어 온전히 닫힌 문장만 모은다. 닫는 대괄호를 문자열 밖에서만 배열 끝으로
 // 보는 이유는 본문 안에 대괄호가 들어오기 때문이다 — 시간 마커를 흉내 낸 "[어제 22:10]"이
@@ -257,12 +257,12 @@ const salvage = (text: string): { bubbles: string[]; signals: ReplySignals } => 
 
 /**
  * 모델이 쓴 답 한 덩이를 말풍선과 신호로 가른다. 읽는 순서는 넷이다.
- * ① JSON으로 읽힌다 → 그대로 쓴다. 봉투 밖에 신호를 흘렸으면 주워서 합치고(stray) 그렇게
+ * ① JSON으로 읽힌다 → 그대로 쓴다. 객체 밖에 신호를 흘렸으면 주워서 합치고(stray) 그렇게
  *    읽었다는 것을 이름에 남긴다 — 형식 설명을 고쳐도 계속 새는지 트레이스로 보려는 것이다.
- * ② 봉투를 쓰려다 만 답이다 → 온전한 조각만 건진다(salvage)
- * ③ 봉투를 아예 안 썼다 → 옛 방식대로 줄바꿈으로 나눠 그대로 내보낸다(plain)
+ * ② JSON을 쓰려다 만 답이다 → 온전한 조각만 건진다(salvage)
+ * ③ JSON을 아예 안 썼다 → 옛 방식대로 줄바꿈으로 나눠 그대로 내보낸다(plain)
  * ④ 아무것도 못 건졌다 → 빈 답(empty). 부른 쪽이 한 번 다시 부르고, 그래도 비면 보내지 않는다.
- * ②와 ③을 가르는 이유는 새어 나감을 막기 위해서다. 봉투를 쓰려던 흔적이 있으면 못 읽어도
+ * ②와 ③을 가르는 이유는 새어 나감을 막기 위해서다. JSON을 쓰려던 흔적이 있으면 못 읽어도
  * 원문을 유저에게 보내지 않는다 — JSON 조각이 그대로 말풍선이 되는 것이 옛 버그의 재판이다.
  */
 export const parseReplyOutput = (raw: string): ReplyOutput => {
@@ -297,7 +297,7 @@ export const parseReplyOutput = (raw: string): ReplyOutput => {
 /** 트레이스에 적는 이름. */
 export const PARSE_NAME: Record<ReplyParse, string> = {
   json: "JSON",
-  stray: "JSON + 봉투 밖 신호",
+  stray: "JSON + 객체 밖 신호",
   salvage: "잘린 JSON에서 건짐",
   plain: "JSON 아님 — 본문 그대로",
   empty: "읽지 못함",

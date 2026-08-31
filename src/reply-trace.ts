@@ -150,10 +150,10 @@ interface CallContext {
   turns?: number;
   /** 한 번에 답한 유저 메시지 수(나눠 보낸 것을 묶은 결과). */
   userMsgs?: number;
-  /** 봉투의 신호 칸 — 키 이름은 그대로 둔다(이미 올라간 기록과 어긋나지 않게). */
+  /** 객체의 신호 칸 — 키 이름은 그대로 둔다(이미 올라간 기록과 어긋나지 않게). */
   stay?: boolean;
   note?: string | null;
-  /** 봉투를 어느 길로 읽었는지(json·salvage·plain·empty). */
+  /** 객체를 어느 길로 읽었는지(json·stray·salvage·plain·empty). */
   outputParse?: string;
   bubbles?: number;
   bubbleLens?: number[];
