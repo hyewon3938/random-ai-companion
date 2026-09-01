@@ -32,13 +32,21 @@ import {
   setWakeHandler,
 } from "./pending.js";
 import { traceProactiveSend } from "./reply-trace.js";
-import { chat, chatJson, type CallMeta, type ChatTurn } from "./llm.js";
+import {
+  chat,
+  chatJson,
+  type CallMeta,
+  type ChatTurn,
+  type SystemBlock,
+} from "./llm.js";
 import { lastTurns, toTurns } from "./turns.js";
 import {
   REPLY_MAX_TOKENS,
   capBubbles,
   mergeSignals,
   parseReplyOutput,
+  type ReplyParse,
+  type ReplySignals,
 } from "./reply-signal.js";
 import { saveTodayNote } from "./memory.js";
 import {
@@ -528,6 +536,57 @@ const replyHistory = (chatId: string, markFrom?: string): ChatTurn[] =>
     markFrom ? { markFrom } : {},
   );
 
+// 형식이 깨진 답은 한 번 다시 부른다. 대상은 셋이다 — 말풍선을 하나도 못 건진 답(empty),
+// JSON을 아예 안 쓰고 본문만 보낸 답(plain), 토큰 상한에 걸려 잘린 답(salvage). 앞의 둘은
+// note·호칭 같은 신호가 통째로 사라지고 잘린 답은 뒤 말풍선이 날아가는데, 답장 자체는
+// 멀쩡히 나가서 유저 쪽에서도 트레이스에서도 표가 안 난다. 객체 밖으로 신호를 흘린
+// 답(stray)은 그 줄을 주워 합치니 잃는 게 없어 그대로 쓴다.
+const RETRY_PARSE: readonly ReplyParse[] = ["empty", "plain", "salvage"];
+
+// 다시 부른 답은 더 잘 읽혔을 때만 갈아 끼운다. 같은 등급이면 첫 답을 쓴다 — 둘 다 JSON을
+// 안 썼는데 굳이 뒤엣것으로 바꿀 이유가 없다.
+const PARSE_RANK: Record<ReplyParse, number> = {
+  json: 3,
+  stray: 2,
+  salvage: 1,
+  plain: 1,
+  empty: 0,
+};
+
+interface ReplyDraft {
+  bubbles: string[];
+  signals: ReplySignals;
+  parse: ReplyParse;
+  /** 다시 부른 호출의 기록 id. 안 불렀으면 null이다. */
+  retryCallId: number | null;
+}
+
+// 답장 한 통을 받아 온다. 본문과 신호를 여기서 가른다 — 신호 칸은 유저에게 나가지 않는다.
+const askReply = async (
+  system: string | SystemBlock[],
+  turns: ChatTurn[],
+  meta: CallMeta,
+): Promise<ReplyDraft> => {
+  const first = parseReplyOutput(
+    await chat(system, turns, REPLY_MAX_TOKENS, config.model, meta),
+  );
+  if (!RETRY_PARSE.includes(first.parse))
+    return { ...first, retryCallId: null };
+  const retryMeta: CallMeta = { ...meta, attempt: 2 };
+  const retry = parseReplyOutput(
+    await chat(system, turns, REPLY_MAX_TOKENS, config.model, retryMeta),
+  );
+  const take = PARSE_RANK[retry.parse] > PARSE_RANK[first.parse] ? retry : first;
+  return {
+    bubbles: take.bubbles,
+    // 신호는 양쪽을 합친다 — 첫 답이 신호 칸만 뱉고 본문을 비운 경우가 실제로 있었고,
+    // 두 답이 같은 말에 대한 답이라 어느 쪽에서 나온 신호든 이 대화의 것이다.
+    signals: mergeSignals(first.signals, retry.signals),
+    parse: take.parse,
+    retryCallId: retryMeta.callId ?? null,
+  };
+};
+
 // 답장 대상이 되는 유저 발화. 마지막 캐릭터 발화 뒤에 온 유저 메시지를 모은다 —
 // 나눠 보낸 여러 줄이 한 덩어리로 붙잡기 판정에 들어간다.
 const pendingUserTurn = (
@@ -742,27 +801,13 @@ const respond = async (
       characterId: character.id,
       chatId,
     };
-    // 본문과 신호를 여기서 가른다 — 신호 칸은 유저에게 나가지 않는다.
-    const first = parseReplyOutput(
-      await chat(system, turns, REPLY_MAX_TOKENS, config.model, meta),
+    // 빈 답장은 여기서 걸러 낸다. 다시 불러도 비면 아래에서 보내지 않는다 — 빈 텍스트를
+    // 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.
+    const { bubbles, signals, parse, retryCallId } = await askReply(
+      system,
+      turns,
+      meta,
     );
-    let bubbles = first.bubbles;
-    let signals = first.signals;
-    let parse = first.parse;
-    // 빈 답장 방어: 모델이 신호 칸만 뱉거나 빈 문자열을 주는 경우가 있다 → 한 번 재생성,
-    // 그래도 비면 스킵. (빈 텍스트를 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.)
-    // 신호만 뱉은 답이 바로 이 경우라, 첫 답이 준 신호를 재생성분과 합친다.
-    let retryCallId: number | null = null;
-    if (!bubbles.length) {
-      const retryMeta: CallMeta = { ...meta, attempt: 2 };
-      const retry = parseReplyOutput(
-        await chat(system, turns, REPLY_MAX_TOKENS, config.model, retryMeta),
-      );
-      bubbles = retry.bubbles;
-      signals = mergeSignals(signals, retry.signals);
-      parse = retry.parse;
-      retryCallId = retryMeta.callId ?? null;
-    }
     // 이 답장이 어떤 근거로 나왔는지를 호출 기록에 붙인다 — 검색한 태그·기억, 텀 계산의
     // 입력과 결과, 말풍선 수. 기록이 실패해도 답장은 그대로 나간다.
     // 여러 번 나눠 부르므로 덮어쓰지 않고 쌓는다 — 뒤에 붙는 발송 예정 시각이 앞의
@@ -962,23 +1007,11 @@ setWakeHandler(async (row: PendingReplyRow) => {
       characterId: row.character_id,
       chatId,
     };
-    const first = parseReplyOutput(
-      await chat(system, turns, REPLY_MAX_TOKENS, config.model, wakeMeta),
+    const { bubbles, signals, parse, retryCallId } = await askReply(
+      system,
+      turns,
+      wakeMeta,
     );
-    let bubbles = first.bubbles;
-    let signals = first.signals;
-    let parse = first.parse;
-    let retryCallId: number | null = null;
-    if (!bubbles.length) {
-      const retryMeta: CallMeta = { ...wakeMeta, attempt: 2 };
-      const retry = parseReplyOutput(
-        await chat(system, turns, REPLY_MAX_TOKENS, config.model, retryMeta),
-      );
-      bubbles = retry.bubbles;
-      signals = mergeSignals(signals, retry.signals);
-      parse = retry.parse;
-      retryCallId = retryMeta.callId ?? null;
-    }
     // 몰아 답장의 근거. 텀 대신 어느 구간이 끝나 답하는지를 남긴다 — 이 길은 표를 타지 않는다.
     const facts: Record<string, unknown> = {};
     const attach = (extra: Record<string, unknown>): void => {
