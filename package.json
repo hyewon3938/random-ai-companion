@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "eval": "DB_PATH=./data/eval.db tsx src/eval/run.ts",
     "eval:check": "tsx src/eval/scorer-check.ts",
+    "eval:ask": "tsx src/eval/ask-check.ts",
     "eval:log": "tsx src/eval/history.ts"
   },
   "dependencies": {
