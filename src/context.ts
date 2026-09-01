@@ -274,8 +274,13 @@ const nowSection = (
     : `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지). 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
   return [
     `[지금 — 답장 전에 이 사실들과 어긋나지 않는지 확인한다]`,
+    // 끝 시각까지 함께 준다. 시작 시각만 있으면 "20:15 씻기"가 지금 하는 일인지 이미 마친
+    // 일인지 갈리지 않아, 방금 끝낸 일을 아직 안 했다고 답하는 길이 열린다(이슈 #238).
     past.length
-      ? `- 지나온 오늘: ${past.map((b) => `${clockLabel(b.start)} ${b.activity}`).join(" → ")}`
+      ? `- 지나온 오늘(전부 이미 마친 일이다): ${past.map((b) => `${clockLabel(b.start)}~${clockLabel(b.end)} ${b.activity}`).join(" → ")}`
+      : "",
+    past.length
+      ? `- '지나온 오늘'에 있는 일을 아직 안 했다거나 이제부터 하려는 것처럼 말하지 않는다. 상대가 그 일을 물으면 이미 끝낸 사람으로서 답한다.`
       : "",
     nowLine,
     cur ? (RESPONSIVENESS_NOTE[cur.responsiveness] ?? "") : "",

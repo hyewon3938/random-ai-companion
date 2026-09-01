@@ -518,12 +518,14 @@ const computeWait = (chatId: string): number => {
 
 // 답장 프롬프트에 넣는 대화 기록. 행을 넉넉히 읽어 최근 몇 턴에서 자른다 — 한 사람이
 // 연달아 보낸 말은 몇 통이든 한 턴이라, 유저가 끊어 보내도 남는 대화 길이가 같다.
-const replyHistory = (chatId: string): ChatTurn[] =>
+// markFrom을 주면 그 시각 이후 첫 메시지에 시간 표시를 강제한다(몰아 답장 자리, 이슈 #238).
+const replyHistory = (chatId: string, markFrom?: string): ChatTurn[] =>
   toTurns(
     lastTurns(
       getRecentMessages(chatId, RECENT_MESSAGE_FETCH_MAX),
       RECENT_TURN_COUNT,
     ),
+    markFrom ? { markFrom } : {},
   );
 
 // 답장 대상이 되는 유저 발화. 마지막 캐릭터 발화 뒤에 온 유저 메시지를 모은다 —
@@ -952,7 +954,9 @@ setWakeHandler(async (row: PendingReplyRow) => {
       signals: true,
       situation: gatherSituation(activity),
     });
-    const turns = replyHistory(chatId);
+    // 구간에 처음 온 메시지에 시간 표시를 강제한다 — 자리를 비운 사이가 한 시간이 안 되면
+    // 마커가 안 붙어, 나가기 직전 발화와 그 뒤에 온 말이 기록에서 맞붙는다.
+    const turns = replyHistory(chatId, row.user_msg_at);
     const wakeMeta: CallMeta = {
       purpose: "reply",
       characterId: row.character_id,
