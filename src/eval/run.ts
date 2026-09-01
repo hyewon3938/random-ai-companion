@@ -8,6 +8,7 @@
 // 평가만 옛 문안을 재고 통과한다. 대신 DB는 평가 전용 파일을 쓴다(DB_PATH=./data/eval.db).
 // 대화 기록·일기·관계가 매일 달라지는 운영 DB로 재면 프롬프트를 안 고친 날에도 숫자가 움직여서,
 // 무엇이 바꾼 것인지 가릴 수 없다.
+import "./guard-db.js"; // db.js보다 먼저 — 운영 DB로 도는 것을 막는다
 import { db, type CharacterRow } from "../db.js";
 import { createDaepyoCharacter } from "../character.js";
 import { buildSystemBlocks } from "../context.js";
