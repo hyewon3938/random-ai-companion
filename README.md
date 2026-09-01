@@ -340,7 +340,7 @@ graph TB
 | 영역 | 선택 | 이유 |
 |---|---|---|
 | 채널 | Telegram Bot API (grammY), long polling | 이미 유저의 일상에 있는 앱. long polling이라 인바운드 포트와 공개 도메인이 필요 없다 |
-| 런타임 | Node.js 22 + TypeScript (ESM, strict) | 자동 점검은 타입 검사(`yarn typecheck`)와 단위 테스트(`yarn test`) 둘이다. 타입 검사에서 최대한 많이 걸러지도록 strict와 `any` 금지를 걸었고, 빌드 단계 없이 tsx로 바로 실행한다 |
+| 런타임 | Node.js 22 + TypeScript (ESM, strict) | 자동 점검은 타입 검사(`yarn typecheck`)와 단위 테스트(`yarn test`) 둘이고, main 푸시와 PR마다 GitHub Actions에서 돌린다. 타입 검사에서 최대한 많이 걸러지도록 strict와 `any` 금지를 걸었고, 빌드 단계 없이 tsx로 바로 실행한다 |
 | LLM | Claude. 실시간 대화는 빠른 모델, 일기·각본·월 리듬은 품질 우선 모델 | 대화는 응답이 늦어지면 그 자체로 어색해서 속도를 우선했고, 하루 한 번 도는 배치는 실시간일 필요가 없어 품질을 우선했다 |
 | 저장 | SQLite (better-sqlite3, WAL) | 지금 유저 규모에서 별도 DB 서버를 띄울 이유가 없다. WAL로 배치와 대화의 동시 접근을 처리한다 |
 | 스케줄 | node-cron (Asia/Seoul) | 캐릭터의 하루가 KST 기준이라 타임존을 프로세스가 아니라 스케줄에 고정 |
