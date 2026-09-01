@@ -1,3 +1,14 @@
+// 모델을 부르는 자리.
+//
+// 세 가지를 여기서 처리한다.
+// - 프롬프트 앞 두 층 끝에 cache_control을 붙여 1시간 캐시를 태운다. 층을 안정도 순으로
+//   쌓아 둔 이유가 여기서 값을 낸다(context.ts).
+// - 호출 정보(meta)를 받으면 프롬프트와 응답 원문을 llm_calls에 적고 행 번호를 돌려준다.
+//   트레이스와 피드백 수집이 그 번호로 호출을 되짚는다.
+// - 응답 토큰과 캐시 적중(cw/cr)을 로그에 남긴다.
+//
+// JSON을 받아야 하는 자리는 chatJson을 쓴다.
+
 import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";

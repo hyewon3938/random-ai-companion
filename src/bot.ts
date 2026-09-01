@@ -1,3 +1,25 @@
+// 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
+//
+// grammY long polling으로 받는다. 유저가 말을 나눠 보내면 디바운스로 모아 한 번에 읽고,
+// 기다리는 시간은 그 유저가 이어 보내던 간격을 학습해 20~40초 사이에서 정한다.
+//
+// 답장 순서는 텀 결정(reply-timing.ts) → 생성 → 대기 → 발송(pending.ts)이다.
+// 답장 불가 구간에 온 말은 답장을 만들지 않고 깨우기 표시만 걸어 두고, 구간이 끝나면
+// wake 핸들러가 세 갈래로 나뉜다 — 쌓인 메시지에 몰아 답하거나, 예고하고 나간 자리면
+// 복귀 인사를 하거나, 아무것도 하지 않는다.
+// 예고한 블록이 시작하기 전까지 온 말에는 farewellSituation으로 배웅 답을 보낸다.
+//
+// 부팅하면 recoverMissedReplies가 놓친 답장을 복구한다. 워터마크로 중복을 막고 최근
+// 3시간 것만 본다 — 더 멀리 보면 자정 경계에서 어제 것까지 딸려 온다.
+//
+// 모델이 답한 것은 parseReplyOutput(reply-signal.ts)이 본문과 신호로 가른다.
+// 대화 기록은 lastTurns/toTurns가 최근 40턴으로 자르고 시간 마커를 넣는다 — 이어 보낸
+// 말은 한 턴으로 세고, 몰아 답장은 markFrom으로 구간 첫 메시지에 마커를 강제한다.
+//
+// 선톡 틱과는 acquireProactive로 chat 단위 상호 배제를 건다(대기 중인 답장이 있으면
+// 선톡을 접는다). 발송과 깨우기 함수는 setPendingSender·setWakeHandler로 pending.ts에
+// 넘겨 준다 — 순환 참조를 피하려고 주입한다.
+
 import { Bot, InlineKeyboard, type ApiClientOptions } from "grammy";
 import { Agent } from "node:https";
 import { inspect } from "node:util";

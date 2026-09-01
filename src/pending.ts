@@ -1,3 +1,16 @@
+// 만들어 둔 답장을 정한 시각에 내보내는 자리.
+//
+// 답장을 pending_replies에 적어 두고 정해진 시각에 발송한다(재시도 3회). 부팅하면
+// resumePendingReplies가 이어받고, 유저가 말을 더 보내면 dropPendingReplies로 버린 뒤
+// 텀부터 다시 계산한다.
+//
+// 답장 불가 구간의 깨우기 표시도 같은 표를 쓴다 — 문안 없이 kind='wake' 행으로 구간 끝
+// 시각에 걸어 둔다. 유저가 말을 더 보내도 이 행은 살아남고(구간 끝 시각은 그대로다),
+// 지우는 것은 dropWakeRows다. 기다리는 동안 isWaiting이 참이라 선톡 틱이 물러난다.
+//
+// 발송 함수와 깨우기 함수는 bot.ts가 setPendingSender·setWakeHandler로 넣어 준다 —
+// 여기서 bot.ts를 부르면 순환 참조가 된다.
+
 import {
   insertPendingReply,
   getWaitingPendingReplies,

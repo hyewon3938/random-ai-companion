@@ -1,3 +1,11 @@
+// SQLite 연결과 스키마.
+//
+// 표 정의는 이 파일의 TABLES 한곳이고, 스키마를 바꾸면 SCHEMA_VERSION을 올려 마이그레이션을
+// 붙인다. 표·컬럼의 뜻과 관계는 erd.md, 코드가 어떻게 나뉘어 있는지는 modules.md가 갖는다.
+//
+// 이 모듈을 부르면 DB를 쓰기로 열고 마이그레이션까지 돌린다. 값을 보기만 하는 도구
+// (관리 대시보드)는 그래서 이쪽을 쓰지 않고 읽기 전용으로 따로 연다.
+
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";

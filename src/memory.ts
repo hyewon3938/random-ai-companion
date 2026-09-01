@@ -1,3 +1,15 @@
+// 기억을 저장하고 찾는 자리.
+//
+// saveMemory는 항목·주인·영역·무엇 넷을 키로 자리를 찾아 덮어쓴다. 저장은 언제나 conversation
+// 행에만 하고, 캐릭터를 만들 때 한 번 saveCreationMemory가 creation 행을 쓴다. creation 행은
+// 생성 때 정한 큰 정체성이라 수정을 거부한다.
+//
+// searchMemories는 태그로 후보를 모으고, 꺼낸 기록을 남긴다(track:false로 끌 수 있다).
+// 후보 중 무엇을 프롬프트에 넣을지 고르는 규칙과 줄을 만드는 일은 recall.ts가 갖는다.
+//
+// tagSearch는 유저 발화에서 검색어를 뽑는다. 한 글자 태그("일"·"돈"·"집")는 어절 단위로만
+// 맞춘다 — 문자열 포함으로 두면 "일요일"·"생일"·"수집" 속 글자에 걸린다(이슈 #54).
+
 import {
   upsertMemoryItem,
   insertCreationMemory,
