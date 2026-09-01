@@ -2,7 +2,8 @@
 //
 //   yarn eval              케이스마다 한 번씩
 //   yarn eval --runs=3     케이스마다 세 번 (모델이 흔들리는 폭까지 본다)
-//   yarn eval --pass=0.9   통과율 하한 (기본 1.0, 미달이면 종료 코드 1)
+//   yarn eval --pass=0.9   표기 통과율 하한 (기본 1.0, 미달이면 종료 코드 1)
+//   yarn eval --json-pass=0.9   형식 유지율 하한 (기본 0.8)
 //   yarn eval --note="웃음 규칙 고친 뒤"   결과 기록에 남길 메모
 //   yarn eval --no-log     이번 실행은 eval-runs.jsonl에 남기지 않는다
 //
@@ -44,6 +45,12 @@ const strArg = (name: string): string | undefined =>
 
 const runs = Math.max(1, Math.round(numArg("runs", 1)));
 const passLine = numArg("pass", 1);
+// 형식 하한은 표기와 달리 100%로 두지 않는다. 평가는 모델을 한 번만 부르고, 운영은 형식이
+// 깨지면 한 번 더 불러 나은 쪽을 쓴다(reply-ask.ts). 한 번 만에 다 맞기를 요구하면 운영에서
+// 아무 문제가 없는 날에도 평가가 실패한다. 되묻는 자리처럼 답이 한 줄로 짧은 케이스가 주로
+// 흘리는데, 지금 그 폭이 10회 중 1~4회다. 하한은 그 아래에 둬서 규칙을 고쳐 형식이 무너진
+// 날에만 걸리게 한다. 케이스 9건 한 바퀴(--runs=1)는 표본이 적어 이 하한을 믿을 자리가 아니다.
+const jsonLine = numArg("json-pass", 0.8);
 
 const activeCharacter = (): { id: number; chatId: string } => {
   const row = db
@@ -123,10 +130,11 @@ for (const r of results) {
 const passed = results.filter((r) => r.violations.length === 0).length;
 const asJson = results.filter((r) => r.parse === PARSE_NAME.json).length;
 const rate = passed / results.length;
+const jsonRate = asJson / results.length;
 
 console.log(
   `\n표기 통과 ${passed}/${results.length} (${(rate * 100).toFixed(1)}%)` +
-    `  ·  형식 JSON ${asJson}/${results.length}`,
+    `  ·  형식 JSON ${asJson}/${results.length} (${(jsonRate * 100).toFixed(1)}%)`,
 );
 
 if (!process.argv.includes("--no-log")) {
@@ -161,7 +169,10 @@ if (!process.argv.includes("--no-log")) {
   console.log(`기록 남김 — eval-runs.jsonl (${commit}${dirty ? ", 커밋 안 된 변경 있음" : ""})`);
 }
 
-if (rate < passLine) {
-  console.log(`하한 ${(passLine * 100).toFixed(1)}% 미달`);
+const under: string[] = [];
+if (rate < passLine) under.push(`표기 하한 ${(passLine * 100).toFixed(1)}%`);
+if (jsonRate < jsonLine) under.push(`형식 하한 ${(jsonLine * 100).toFixed(1)}%`);
+if (under.length) {
+  console.log(`${under.join(" · ")} 미달`);
   process.exit(1);
 }
