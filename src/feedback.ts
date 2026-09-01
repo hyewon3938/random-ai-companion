@@ -2,7 +2,8 @@
 //
 // 채널에 올라온 답장을 읽다가 이상한 것을 보면 리액션 하나로 분류를 고르고(❌ 사실 오류 ·
 // 💬 말투 · ⏰ 타이밍 · 👍 좋음), 그렇게 본 이유는 스레드 답글로 적는다. 10분 간격 틱이
-// 채널을 다시 읽어 그 표시를 call_feedback에 쌓는다.
+// 채널을 다시 읽어 그 표시를 call_feedback에 쌓는다. 분류 넷 중 맞는 것이 없으면 리액션
+// 없이 스레드에만 적어도 같이 쌓인다.
 //
 // 원칙 셋.
 // - 답장 파이프라인에는 손대지 않는다. 이미 남아 있는 게시 기록(trace_events)의 slack_ts로
@@ -296,6 +297,44 @@ const liveReactionsOf = (m: SlackMessage): LiveReaction[] => {
   return out;
 };
 
+// 게시글에는 우리가 올린 판단 근거가 스레드 자식으로 함께 달려서, 사람이 아무 말도 적지
+// 않은 글에서도 reply_count가 0보다 크다. 우리가 올린 자식 수와 이미 수집한 답글 수를 세어
+// 두고 그보다 많을 때만 스레드를 연다 — 리액션을 조건으로 걸면 분류 네 가지 중 맞는 것이
+// 없어 이유만 적은 글을 통째로 놓친다(이슈 #236).
+const knownReplyCount = (slackTs: string): number => {
+  const threadKey = db
+    .prepare(
+      `SELECT thread_key FROM trace_events
+        WHERE slack_ts = ? ORDER BY id DESC LIMIT 1`,
+    )
+    .pluck()
+    .get(slackTs) as string | null | undefined;
+  // 부모 행을 못 찾으면 0으로 둔다. 스레드를 한 번 헛읽는 비용이 사람이 적은 이유를
+  // 놓치는 것보다 싸서, 모를 때는 읽는 쪽으로 기운다.
+  const ours = threadKey
+    ? (db
+        .prepare(
+          `SELECT COUNT(*) FROM trace_events
+            WHERE parent_key = ? AND status = 'sent'`,
+        )
+        .pluck()
+        .get(threadKey) as number)
+    : 0;
+  const collected = db
+    .prepare(
+      `SELECT COUNT(*) FROM call_feedback
+        WHERE slack_ts = ? AND source = 'reply'`,
+    )
+    .pluck()
+    .get(slackTs) as number;
+  return ours + collected;
+};
+
+const hasUnreadReply = (m: SlackMessage): boolean => {
+  const total = m.reply_count ?? 0;
+  return total > 0 && total > knownReplyCount(m.ts);
+};
+
 const collectThread = async (
   channel: string,
   m: SlackMessage,
@@ -353,8 +392,8 @@ export const runFeedbackTick = async (): Promise<void> => {
       added += sync.added;
       restored += sync.restored;
       removed += sync.removed;
-      // 이유는 표시가 붙은 글에서만 찾는다 — 스레드는 답장마다 있어서 전부 읽으면 호출이 는다.
-      if (!live.length) continue;
+      // 이유는 아직 안 읽은 사람 글이 있는 글에서만 찾는다.
+      if (!hasUnreadReply(m)) continue;
       try {
         reasons += await collectThread(channel, m);
       } catch (e) {
