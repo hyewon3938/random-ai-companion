@@ -51,7 +51,7 @@ export const EMPTY_SIGNALS: ReplySignals = {
 // 상한에 닿지 않게 한다.
 export const REPLY_MAX_TOKENS = 2000;
 
-// 신호 칸 설명 — 언제 넣는지는 규칙층(context.ts NOTE_RULE·CATEGORY_RULE)이 따로 말한다.
+// 신호 칸 설명 — 언제 넣는지는 규칙층(src/prompts/reply.ts의 NOTE_RULE·CATEGORY_RULE)이 따로 말한다.
 // 여기는 어느 칸에 무엇을 담는지만 적는다.
 /** 객체에 실려 오는 신호 키. 프롬프트가 쓰는 이름 그대로다. */
 const SIGNAL_KEYS = [
