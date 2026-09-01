@@ -32,8 +32,8 @@ import {
   setWakeHandler,
 } from "./pending.js";
 import { traceProactiveSend } from "./reply-trace.js";
-import { chat, chatJson, type CallMeta } from "./llm.js";
-import { toTurns } from "./turns.js";
+import { chat, chatJson, type CallMeta, type ChatTurn } from "./llm.js";
+import { lastTurns, toTurns } from "./turns.js";
 import {
   REPLY_MAX_TOKENS,
   capBubbles,
@@ -41,7 +41,11 @@ import {
   parseReplyOutput,
 } from "./reply-signal.js";
 import { saveTodayNote } from "./memory.js";
-import { PROACTIVE_RECENT_LINES } from "./thresholds.js";
+import {
+  PROACTIVE_RECENT_LINES,
+  RECENT_MESSAGE_FETCH_MAX,
+  RECENT_TURN_COUNT,
+} from "./thresholds.js";
 import { pickTags } from "./tag-pick.js";
 import {
   applyReplySignals,
@@ -512,6 +516,16 @@ const computeWait = (chatId: string): number => {
   return wait;
 };
 
+// 답장 프롬프트에 넣는 대화 기록. 행을 넉넉히 읽어 최근 몇 턴에서 자른다 — 한 사람이
+// 연달아 보낸 말은 몇 통이든 한 턴이라, 유저가 끊어 보내도 남는 대화 길이가 같다.
+const replyHistory = (chatId: string): ChatTurn[] =>
+  toTurns(
+    lastTurns(
+      getRecentMessages(chatId, RECENT_MESSAGE_FETCH_MAX),
+      RECENT_TURN_COUNT,
+    ),
+  );
+
 // 답장 대상이 되는 유저 발화. 마지막 캐릭터 발화 뒤에 온 유저 메시지를 모은다 —
 // 나눠 보낸 여러 줄이 한 덩어리로 붙잡기 판정에 들어간다.
 const pendingUserTurn = (
@@ -720,7 +734,7 @@ const respond = async (
       signals: true,
       ...(away ? { situation: farewellSituation(away) } : {}),
     });
-    const turns = toTurns(getRecentMessages(chatId, 40));
+    const turns = replyHistory(chatId);
     const meta: CallMeta = {
       purpose: "reply",
       characterId: character.id,
@@ -938,7 +952,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
       signals: true,
       situation: gatherSituation(activity),
     });
-    const turns = toTurns(getRecentMessages(chatId, 40));
+    const turns = replyHistory(chatId);
     const wakeMeta: CallMeta = {
       purpose: "reply",
       characterId: row.character_id,

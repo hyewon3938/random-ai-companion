@@ -42,6 +42,33 @@ const chunkText = (role: Role, c: Chunk): string => {
   return bubbles.length ? head + JSON.stringify({ reply: bubbles }) : "";
 };
 
+/**
+ * 최근 몇 턴만 남기고 앞을 자른다. 한 사람이 연달아 보낸 말은 몇 통이든 한 턴으로 센다.
+ *
+ * 행으로 세면 남는 대화 길이가 유저의 습관에 딸려 간다 — 한 번에 길게 쓰는 사람은 스무 번
+ * 왕복이 남고, 짧게 끊어 보내는 사람은 열 번도 못 남는다. 세는 단위를 턴으로 옮겨 두 사람이
+ * 같은 길이의 대화를 본다.
+ *
+ * 자르는 자리를 toTurns 앞에 두는 이유는 시간 마커다. 마커는 앞 발화와의 간격으로 붙는데,
+ * 턴을 만든 뒤에 잘라 내면 남은 첫 턴이 이미 사라진 발화를 기준으로 마커를 못 받은 상태일
+ * 수 있다. 행에서 먼저 자르면 남은 첫 행은 앞이 없으므로 언제나 마커를 받는다.
+ */
+export const lastTurns = (rows: MessageRow[], turns: number): MessageRow[] => {
+  if (turns <= 0) return [];
+  let kept = 0;
+  let prev: Role | null = null;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (!row) continue;
+    const role: Role = row.role === "user" ? "user" : "assistant";
+    if (role === prev) continue;
+    kept += 1;
+    if (kept > turns) return rows.slice(i + 1);
+    prev = role;
+  }
+  return rows;
+};
+
 export const toTurns = (rows: MessageRow[]): ChatTurn[] => {
   const groups: { role: Role; chunks: Chunk[] }[] = [];
   let prevTs: string | null = null;
