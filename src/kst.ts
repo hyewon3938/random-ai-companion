@@ -1,4 +1,4 @@
-import { DAY_BOUNDARY_HOUR } from "./thresholds.js";
+import { DAY_BOUNDARY_HOUR, TIME_MARKER_GAP_MS } from "./thresholds.js";
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
@@ -133,9 +133,6 @@ export const logicalDaysAgo = (
       86_400_000,
   );
 
-// 마커를 새로 줄 만큼 시간이 벌어졌다고 보는 간격
-const MARKER_GAP_MS = 60 * 60 * 1000;
-
 // 대화 기록 턴 앞에 붙일 시간 표시. 앞 메시지와 시간이 벌어진 지점에만 준다(매 턴에 붙이면 노이즈).
 // null이면 붙이지 않는다. 며칠 전인지는 코드가 세어 말로 준다 — 모델에게 날짜 뺄셈을 시키지 않는다.
 export const timeMarkerFor = (
@@ -146,7 +143,7 @@ export const timeMarkerFor = (
   const newBlock =
     prevTs === null ||
     logicalDateOf(prevTs) !== logicalDateOf(ts) ||
-    kstDateOf(ts).getTime() - kstDateOf(prevTs).getTime() >= MARKER_GAP_MS;
+    kstDateOf(ts).getTime() - kstDateOf(prevTs).getTime() >= TIME_MARKER_GAP_MS;
   if (!newBlock) return null;
   const clock = ts.slice(11, 16);
   const ago = logicalDaysAgo(ts, todayLogical);

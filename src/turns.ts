@@ -24,6 +24,18 @@ interface Chunk {
   lines: string[];
 }
 
+export interface TurnOptions {
+  /**
+   * 이 시각 이후 처음 오는 메시지에는 간격이 모자라도 시간 표시를 붙인다.
+   *
+   * 몰아 답장 자리에서만 켠다. 마커는 앞 발화와 한 시간 이상 벌어져야 붙는데 자리를 비우는
+   * 구간은 대개 그보다 짧다(저녁 40분·씻기 25분). 그러면 모델이 보는 기록에서 나가기 직전
+   * 발화와 구간 중에 온 말이 표시 없이 맞붙어, 그 사이에 한 시간 가까이 지나고 일정을 둘이나
+   * 마친 사실이 기록에서 사라진다 — 아직 저녁을 안 먹었다고 답하는 길이 여기다(이슈 #238).
+   */
+  markFrom?: string;
+}
+
 const bubblesOf = (lines: string[]): string[] =>
   lines
     .flatMap((line) => line.split("\n"))
@@ -69,12 +81,23 @@ export const lastTurns = (rows: MessageRow[], turns: number): MessageRow[] => {
   return rows;
 };
 
-export const toTurns = (rows: MessageRow[]): ChatTurn[] => {
+export const toTurns = (
+  rows: MessageRow[],
+  opts: TurnOptions = {},
+): ChatTurn[] => {
   const groups: { role: Role; chunks: Chunk[] }[] = [];
   let prevTs: string | null = null;
+  let markFrom = opts.markFrom ?? null;
   for (const row of rows) {
     const role: Role = row.role === "user" ? "user" : "assistant";
-    const marker = timeMarkerFor(row.sent_at, prevTs);
+    let marker = timeMarkerFor(row.sent_at, prevTs);
+    // 기준 시각을 넘어선 첫 메시지는 간격이 모자라도 마커를 받는다. 앞이 없는 것처럼 불러
+    // 오늘·어제 표기를 같은 함수에서 그대로 가져온다. 한 번 준 뒤 기준을 내리는 이유는
+    // 뒤이어 온 말까지 마커를 받으면 한 덩이로 붙을 말이 통마다 갈리기 때문이다.
+    if (markFrom !== null && row.sent_at >= markFrom) {
+      marker ??= timeMarkerFor(row.sent_at, null);
+      markFrom = null;
+    }
     prevTs = row.sent_at;
     let group = groups[groups.length - 1];
     if (!group || group.role !== role) {
