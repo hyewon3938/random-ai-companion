@@ -10,7 +10,8 @@
     "dashboard:serve": "tsx src/tools/serve-db.ts",
     "typecheck": "tsc --noEmit",
     "eval": "DB_PATH=./data/eval.db tsx src/eval/run.ts",
-    "eval:check": "tsx src/eval/scorer-check.ts"
+    "eval:check": "tsx src/eval/scorer-check.ts",
+    "eval:log": "tsx src/eval/history.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

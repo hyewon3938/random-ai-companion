@@ -19,8 +19,12 @@ export interface EvalCase {
   about: string;
   /** 마지막 원소가 상대가 방금 보낸 말이다. */
   turns: ChatTurn[];
-  /** 웃음 표기가 한 번도 나오면 안 되는 자리인가(다정한 말·상대가 속상할 때·직전 답장에서 이미 씀). */
+  /** 웃음 표기가 한 번도 나오면 안 되는 자리인가(다정한 말·상대가 속상할 때). */
   noLaugh?: boolean;
+  /** 웃음 표기가 나올 만한 자리인가. 안 나오면 표기 일관성을 재지 못한 것이다. */
+  wantsLaugh?: boolean;
+  /** 캐릭터가 되물을 수밖에 없는 자리인가. 질문이 안 나오면 물음표 규칙을 재지 못한 것이다. */
+  wantsQuestion?: boolean;
 }
 
 /** 채점기 하나가 걸어 낸 위반. */
@@ -36,19 +40,68 @@ const LAUGH = /[ㅋㅎ]+/g;
 const EMOJI = /\p{Extended_Pictographic}/u;
 // 문자로 그린 얼굴. 규칙이 이름을 댄 ^^부터 덮는다.
 const FACE = /(\^\^|\^_\^|:\)|:D|;\))/;
-const QUOTE = /["\u201C\u201D]/;
+const QUOTE = /["“”]/;
 const MARKDOWN = /(\*\*|^\s*[-*•]\s|^#{1,6}\s)/m;
 
-/** 답장 전체에서 웃음 표기가 몇 번 나왔는지. */
-export const laughCount = (bubbles: string[]): string[] =>
-  bubbles.join("\n").match(LAUGH) ?? [];
+// 어미만으로 묻는 문장인 게 확실한 것. 반말 의문문은 억양으로만 갈리고(밥 먹었어 / 밥 먹었어?),
+// ~예요·~어요는 평서문과 모양이 같아 어미로는 못 가른다. 확실한 것만 넣는다.
+const ASK_ENDING = /(나요|까요|인가요|신가요|습니까|려나요|냐)$/;
+// 어미로 못 가르는 의문문(다음 주 언제예요 / 그래서 어떻게 됐어)은 의문사로 짐작한다.
+// 짐작이라 점수에는 넣지 않고 리포트에 표시만 한다 — 의문사는 묻는 뜻 없이도 들어가서
+// (언제 하냐고 물어보는 거야 그 사람이) 위반으로 세면 멀쩡한 문장이 점수를 깎는다.
+const ASK_WORD = /(언제|어디|누구|누가|왜|어떻게|어떤|무슨|어느|몇|뭘|뭐가|뭐라고)/;
+// 의문사가 있어도 묻는 말이 아닌 꼴 — 남의 말 옮기기(언제 하냐고 물어보더라), 간접의문
+// (왜 그런지 모르겠어요), 바람(언제 한번 해보고 싶네요), 굳은 표현(언제나·누구나).
+const NOT_ASKING =
+  /(냐고|라고|다고|더라|물어|여쭤|는지|은지|을지|모르|궁금|싶|언제나|언제든|언제 한번|누구나|누군가|어디든|어디선가|어떻게든|뭔가)/;
+// 문장 끝에 붙은 웃음 표기와 여운을 걷어내고 어미를 본다.
+const TAIL = /[\s.~!ㅋㅎ]+$/;
+
+const toLines = (bubbles: string[]): string[] =>
+  bubbles
+    .flatMap((b) => b.split("\n"))
+    .map((l) => l.trim().replace(TAIL, ""))
+    .filter(Boolean);
+
+const looksLikeAsking = (line: string): boolean =>
+  ASK_WORD.test(line) && !NOT_ASKING.test(line);
+
+const marksIn = (text: string): string[] => text.match(LAUGH) ?? [];
+
+/** 답장에 나온 웃음 표기 덩이들. ㅋㅋ 하나가 한 덩이다. */
+export const laughMarks = (bubbles: string[]): string[] =>
+  marksIn(bubbles.join("\n"));
+
+/**
+ * 한 말풍선 안에서 웃음 자음을 섞어 쓴 말풍선. ㅋㅋ와 ㅋㅋㅋ는 같은 종류라 통과하고,
+ * ㅋㅋ와 ㅎㅎ가 한 말풍선에 같이 있으면 걸린다. 말풍선이 다르면 섞어 써도 된다.
+ */
+export const mixedLaughBubble = (bubbles: string[]): string | null =>
+  bubbles.find((b) => new Set(marksIn(b).flatMap((m) => [...m])).size > 1) ??
+  null;
+
+/** 확실한 의문 종결어미인데 물음표로 끝나지 않은 줄. 점수에 넣는 위반이다. */
+export const askWithoutMark = (bubbles: string[]): string[] =>
+  toLines(bubbles).filter((l) => !l.endsWith("?") && ASK_ENDING.test(l));
+
+/** 의문사가 있는데 물음표가 없는 줄. 짐작이라 점수에 넣지 않고 눈으로 보는 자리다. */
+export const suspectQuestions = (bubbles: string[]): string[] =>
+  toLines(bubbles).filter(
+    (l) => !l.endsWith("?") && !ASK_ENDING.test(l) && looksLikeAsking(l),
+  );
+
+/** 이 답장에 질문이 들어 있는가 — 물음표 케이스가 헛돌지 않았는지 보는 자리다. */
+export const hasQuestion = (bubbles: string[]): boolean =>
+  toLines(bubbles).some(
+    (l) => l.includes("?") || ASK_ENDING.test(l) || looksLikeAsking(l),
+  );
 
 const firstMatch = (text: string, re: RegExp): string | null =>
   text.match(re)?.[0] ?? null;
 
 /**
- * 말풍선을 규칙에 대본다. 케이스와 무관하게 늘 적용되는 규칙 넷과, 이 자리에서만 걸리는
- * 웃음 금지 하나다. 빈 배열이면 통과.
+ * 말풍선을 규칙에 대본다. 케이스를 가리지 않는 규칙 다섯(이모지·큰따옴표·리스트·웃음 표기
+ * 일관성·의문 종결어미의 물음표)과, 케이스가 켤 때만 보는 웃음 금지 자리다. 빈 배열이면 통과.
  */
 export const checkOutputRules = (
   bubbles: string[],
@@ -66,17 +119,26 @@ export const checkOutputRules = (
   const md = firstMatch(text, MARKDOWN);
   if (md) out.push({ rule: "리스트·마크다운", found: md.trim() });
 
-  const laughs = laughCount(bubbles);
+  const unmarked = askWithoutMark(bubbles);
+  if (unmarked.length)
+    out.push({ rule: "묻는 문장에 물음표 없음", found: unmarked[0] });
+
+  const laughs = laughMarks(bubbles);
+  const mixed = mixedLaughBubble(bubbles);
   if (kase.noLaugh && laughs.length)
     out.push({ rule: "웃음 금지 자리", found: laughs.join(" ") });
-  else if (laughs.length > 1)
-    out.push({ rule: "웃음 표기 한 답장에 한 번", found: laughs.join(" ") });
+  else if (mixed)
+    out.push({
+      rule: "한 말풍선에 웃음 표기 섞어 씀",
+      found: marksIn(mixed).join(" "),
+    });
 
   return out;
 };
 
 // 케이스는 규칙을 어기기 쉬운 자리로 고른다 — 평범한 대화만 넣으면 전부 통과해서 규칙을
-// 고쳐도 숫자가 안 움직인다. 하나가 규칙 하나를 물게 두고, 전역 규칙 넷은 모든 케이스가 함께 잰다.
+// 고쳐도 숫자가 안 움직인다. 하나가 규칙 하나를 물게 두고, 케이스를 가리지 않는 규칙 넷은
+// 모든 케이스가 함께 잰다.
 export const CASES: EvalCase[] = [
   {
     id: "속상함-웃음금지",
@@ -95,20 +157,11 @@ export const CASES: EvalCase[] = [
     ],
   },
   {
-    id: "직전에썼음-웃음금지",
-    about: "직전 답장에서 이미 썼으면 이번에는 쓰지 않는가",
-    noLaugh: true,
+    id: "웃긴상황-표기일관",
+    about: "웃음이 나올 자리에서 한 가지 표기로만 쓰는가",
+    wantsLaugh: true,
     turns: [
-      { role: "user", content: "나 오늘 지하철에서 졸다가 두 정거장 지나침" },
-      { role: "assistant", content: "헐 ㅋㅋ 그래서 다시 돌아갔어?" },
-      { role: "user", content: "응 뛰어서 겨우 시간 맞췄어" },
-    ],
-  },
-  {
-    id: "웃긴상황-한번까지",
-    about: "웃긴 자리에서 웃음이 아예 사라지지도, 두 번 이상 붙지도 않는가",
-    turns: [
-      { role: "user", content: "아까 회사에서 부장님을 아빠라고 부를 뻔했잖아" },
+      { role: "user", content: "아 나 아까 지하철에서 졸다가 옆 사람 어깨에 머리 박았잖아" },
     ],
   },
   {
@@ -130,6 +183,22 @@ export const CASES: EvalCase[] = [
     about: "축하하는 자리에서 이모지로 분위기를 내지 않는가",
     turns: [
       { role: "user", content: "나 오늘 그 자격증 붙었어!!" },
+    ],
+  },
+  {
+    id: "예정된일-물음표",
+    about: "앞으로 있을 일의 시점을 물을 때 물음표로 끝내는가",
+    wantsQuestion: true,
+    turns: [
+      { role: "user", content: "나 다음 주에 면접 하나 보러 가" },
+    ],
+  },
+  {
+    id: "되묻기-물음표",
+    about: "무슨 얘긴지 몰라 되묻는 자리에서 물음표로 끝내는가",
+    wantsQuestion: true,
+    turns: [
+      { role: "user", content: "아 아까 그거 진짜 어이없었어" },
     ],
   },
   {
