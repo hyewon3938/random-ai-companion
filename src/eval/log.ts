@@ -31,6 +31,9 @@ export interface RunRecord {
   suspects: number;
   /** 재지 못한 케이스 — 되묻는 자리인데 질문이 안 나온 경우 등. */
   missed: number;
+  /** 오늘 메모가 실려 온 횟수와, 그것을 잰 실행 횟수. 메모 케이스가 붙기 전 기록에는 없다. */
+  noteHits?: number;
+  noteTotal?: number;
   /** --note=로 남기는 메모. 무엇을 고치고 잰 것인지. */
   note?: string;
 }
