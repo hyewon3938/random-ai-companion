@@ -2,9 +2,15 @@
 //
 // 채점기가 아무것도 못 잡으면 평가는 늘 100%로 나오고, 그 100%는 규칙을 지켰다는 뜻이 아니라
 // 재지 못했다는 뜻이다. 위반이 있는 답과 없는 답을 하나씩 놓고 채점기가 가르는지 먼저 본다.
-// 사용: yarn eval:check
-import { parseReplyOutput } from "../reply-signal.js";
-import { checkOutputRules, suspectQuestions, CASES } from "./output-rules.js";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import {
+  CASES,
+  checkOutputRules,
+  suspectQuestions,
+} from "../src/eval/output-rules.js";
+import { parseReplyOutput } from "../src/reply-signal.js";
 
 const fixtures: {
   name: string;
@@ -39,28 +45,23 @@ const fixtures: {
   { name: "형식 안 지킨 답", raw: "그냥 줄글로 답함", noLaugh: false, want: [] },
 ];
 
-let bad = 0;
-for (const f of fixtures) {
-  const out = parseReplyOutput(f.raw);
-  const got = checkOutputRules(out.bubbles, { noLaugh: f.noLaugh }).map(
-    (v) => v.rule,
-  );
-  const suspect = suspectQuestions(out.bubbles).length > 0;
-  const ok =
-    got.length === f.want.length &&
-    f.want.every((w) => got.includes(w)) &&
-    suspect === !!f.suspect;
-  if (!ok) bad++;
-  const mark = f.suspect || suspect ? ` 표시[기대 ${!!f.suspect} 나옴 ${suspect}]` : "";
-  console.log(
-    `${ok ? "○" : "✕"} ${f.name} — parse=${out.parse} 기대[${f.want}] 나옴[${got}]${mark}`,
-  );
-}
-console.log(`\n채점기 픽스처 ${fixtures.length - bad}/${fixtures.length} 통과`);
-console.log(
-  `골든셋 케이스 ${CASES.length}건 — 웃음 금지 자리 ${CASES.filter((c) => c.noLaugh).length}건, ` +
-    `웃음 나올 자리 ${CASES.filter((c) => c.wantsLaugh).length}건, ` +
-    `되묻는 자리 ${CASES.filter((c) => c.wantsQuestion).length}건`,
-);
+const sorted = (v: string[]): string[] => [...v].sort();
 
-if (bad) process.exit(1);
+for (const f of fixtures) {
+  test(f.name, () => {
+    const out = parseReplyOutput(f.raw);
+    const got = checkOutputRules(out.bubbles, { noLaugh: f.noLaugh }).map(
+      (v) => v.rule,
+    );
+    assert.deepEqual(sorted(got), sorted(f.want));
+    // 점수 밖 표시 — 물음표가 빠진 것 같다고 리포트에 찍히는가
+    assert.equal(suspectQuestions(out.bubbles).length > 0, !!f.suspect);
+  });
+}
+
+// 케이스가 한쪽으로 몰리면 채점기가 놀고 있어도 통과율은 그대로라 알 수 없다.
+test("골든셋이 세 종류의 자리를 모두 덮는다", () => {
+  assert.ok(CASES.some((c) => c.noLaugh), "웃음 금지 자리가 없다");
+  assert.ok(CASES.some((c) => c.wantsLaugh), "웃음 나올 자리가 없다");
+  assert.ok(CASES.some((c) => c.wantsQuestion), "되묻는 자리가 없다");
+});

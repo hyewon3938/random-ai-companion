@@ -8,7 +8,7 @@
 // 유저 메시지가 오면 즉시 평상으로 돌아온다.
 
 import { db, hasUserScheduleOn } from "./db.js";
-import { kstDateString } from "./kst.js";
+import { kstLogicalDate, logicalDateOf } from "./kst.js";
 import { QUIET_AFTER_DAYS, RECONNECT_AT_DAYS } from "./thresholds.js";
 
 // 선제 발화 정책(관제탑): "지금 이 유저에게 먼저 말을 걸어도 되는가"의 단일 판단 지점.
@@ -32,12 +32,6 @@ export interface SilenceState {
   tier: SilenceTier;
   days: number; // 마지막 유저 메시지 이후 경과 논리일 수
 }
-
-// ts(KST 벽시계 "YYYY-MM-DD HH:MM:SS")의 논리일(새벽 5시 컷오프)
-const logicalDayOf = (ts: string): string => {
-  const epoch = new Date(ts.replace(" ", "T") + "+09:00").getTime();
-  return kstDateString(new Date(epoch + 9 * 3600_000 - 5 * 3600_000));
-};
 
 const daysBetween = (a: string, b: string): number =>
   Math.round(
@@ -65,10 +59,10 @@ export const silenceState = (
     )?.created_at;
   if (!anchor) return { tier: "normal", days: 0 };
 
-  const nowLogical = kstDateString(
-    new Date(Date.now() + 9 * 3600_000 - 5 * 3600_000),
+  const days = Math.max(
+    0,
+    daysBetween(logicalDateOf(anchor), kstLogicalDate()),
   );
-  const days = Math.max(0, daysBetween(logicalDayOf(anchor), nowLogical));
 
   if (days < QUIET_AFTER_DAYS) return { tier: "normal", days };
   if (days < RECONNECT_AT_DAYS) return { tier: "quiet", days };
