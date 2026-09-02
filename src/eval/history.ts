@@ -15,6 +15,7 @@ for (const r of shown) {
   const day = r.at.slice(0, 16).replace("T", " ");
   const rate = `${(r.rate * 100).toFixed(1)}%`.padStart(6);
   const flags = [
+    r.noteTotal ? `메모 ${r.noteHits}/${r.noteTotal}` : "",
     r.dirty ? "커밋 안 된 변경" : "",
     r.missed ? `못 잰 케이스 ${r.missed}` : "",
     r.suspects ? `물음표 확인 ${r.suspects}` : "",
