@@ -11,6 +11,9 @@
 //   스레드 — 발송·폐기 결과(pending.ts가 그때 쌓는다)
 // 하루 종일 같은 앞 두 덩이는 그날 첫 호출에서 한 번만 올리고, 하루 중에 바뀌면 바뀐 줄만 올린다.
 //
+// 선톡도 문안 호출이 같은 길로 올라간다. 나간 뒤에는 발송 행이 따로 붙고, 재시도를 다 쓰고
+// 끝내 못 나가면 그 문안 스레드에 발송 포기가 달린다 — 문안만 보고 나간 것으로 읽지 않게.
+//
 // 새벽 정리 쪽 호출(diary·extract·arc·day_plan·life_plan)은 여기서 건너뛴다 —
 // 구간 3이 이전 값과 함께 올린다. 두 곳이 같은 호출을 올리면 채널이 두 벌로 찬다.
 
@@ -900,5 +903,26 @@ export const traceProactiveSend = (p: {
     characterId: p.characterId,
     kind: "proactive_send",
     text: `:calling: *${name} 발송* · ${clock()}${partial}\n${quote(clip(p.text, 500))}`,
+  });
+};
+
+/**
+ * 선톡이 문안까지 만들어 놓고 끝내 못 나간 자리(presence·followup의 catch).
+ * 실패는 send_failures 표에도 적지만 그것만으로는 채널에 아무 표시가 없어서, 문안만 남은
+ * 채널을 보면 나간 것으로 읽힌다. 문안 호출 번호를 알면 그 문안 스레드에 달아 준다.
+ */
+export const traceProactiveFail = (p: {
+  characterId: number;
+  kind: string;
+  error: string;
+  callId?: number;
+}): void => {
+  if (!traceEnabled()) return;
+  const name = SEND_KIND_NAME[p.kind] ?? `${p.kind} 선톡`;
+  recordTraceEvent({
+    characterId: p.characterId,
+    kind: "proactive_fail",
+    parentKey: p.callId ? callKey(p.callId) : undefined,
+    text: `:x: *${name} 발송 포기* · ${clock()} — ${esc(clip(p.error, 300))}`,
   });
 };

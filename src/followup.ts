@@ -9,7 +9,7 @@
 // 문안은 대화와 같은 3층(buildSystemBlocks)에 상황 문단을 더해 만든다 — 앞 두 층 캐시를
 // 대화와 함께 쓴다. 경과 시간은 Date.now()로 잰다(getKstNow().getTime()은 9시간 어긋난다).
 
-import { chatJson } from "./llm.js";
+import { chatJson, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
 import {
   db,
@@ -32,6 +32,7 @@ import {
 } from "./bot.js";
 import { buildSystemBlocks, currentBlock } from "./context.js";
 import { proactiveAllowed } from "./proactive-policy.js";
+import { traceProactiveFail } from "./reply-trace.js";
 import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
 import {
   GOODNIGHT_SILENCE_MS,
@@ -160,6 +161,12 @@ const followupTickBody = async (): Promise<void> => {
     ) {
       // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
       if (!acquireProactive(c.chat_id)) continue;
+      // 호출 번호를 catch에서도 봐야 한다 — 발송에 실패하면 이 문안 스레드에 실패를 단다.
+      const meta: CallMeta = {
+        purpose: "goodnight",
+        characterId: c.id,
+        chatId: c.chat_id,
+      };
       try {
         const g = await chatJson<{ text: string }>(
           buildSystemBlocks(c.id, c.chat_id, {
@@ -169,7 +176,7 @@ const followupTickBody = async (): Promise<void> => {
           "위 상황 문단대로 문안을 만들어.",
           300,
           config.model,
-          { purpose: "goodnight", characterId: c.id, chatId: c.chat_id },
+          meta,
         );
         // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 굿나잇은 필요 없다)
         // 다른 경로가 뭔가 보냈으면(마지막 메시지가 바뀜) 접는다.
@@ -178,13 +185,15 @@ const followupTickBody = async (): Promise<void> => {
           console.log(`[followup] goodnight to ${c.chat_id}`);
         }
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
         logErr("[followup] 굿나잇 전송 실패:", e);
-        recordSendFailure(
-          c.chat_id,
-          c.id,
-          "goodnight",
-          e instanceof Error ? e.message : String(e),
-        );
+        recordSendFailure(c.chat_id, c.id, "goodnight", msg);
+        traceProactiveFail({
+          characterId: c.id,
+          kind: "goodnight",
+          error: msg,
+          callId: meta.callId,
+        });
       } finally {
         releaseProactive(c.chat_id);
       }
@@ -207,6 +216,12 @@ const followupTickBody = async (): Promise<void> => {
       proactiveCountToday(c.chat_id, dayStart()) < PROACTIVE_DAILY_MAX
     ) {
       if (!acquireProactive(c.chat_id)) continue;
+      // 호출 번호를 catch에서도 봐야 한다 — 발송에 실패하면 이 문안 스레드에 실패를 단다.
+      const meta: CallMeta = {
+        purpose: "mend",
+        characterId: c.id,
+        chatId: c.chat_id,
+      };
       try {
         const m = await chatJson<{ text: string }>(
           buildSystemBlocks(c.id, c.chat_id, {
@@ -216,7 +231,7 @@ const followupTickBody = async (): Promise<void> => {
           "위 상황 문단대로 문안을 만들어.",
           300,
           config.model,
-          { purpose: "mend", characterId: c.id, chatId: c.chat_id },
+          meta,
         );
         // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 달래기는 필요 없다)
         // 다른 경로가 뭔가 보냈으면 접는다.
@@ -225,13 +240,15 @@ const followupTickBody = async (): Promise<void> => {
           console.log(`[followup] mend to ${c.chat_id}`);
         }
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
         logErr("[followup] 달래기 전송 실패:", e);
-        recordSendFailure(
-          c.chat_id,
-          c.id,
-          "mend",
-          e instanceof Error ? e.message : String(e),
-        );
+        recordSendFailure(c.chat_id, c.id, "mend", msg);
+        traceProactiveFail({
+          characterId: c.id,
+          kind: "mend",
+          error: msg,
+          callId: meta.callId,
+        });
       } finally {
         releaseProactive(c.chat_id);
       }
@@ -256,6 +273,12 @@ const followupTickBody = async (): Promise<void> => {
 
     // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
     if (!acquireProactive(c.chat_id)) continue;
+    // 호출 번호를 catch에서도 봐야 한다 — 발송에 실패하면 이 문안 스레드에 실패를 단다.
+    const meta: CallMeta = {
+      purpose: "catchup",
+      characterId: c.id,
+      chatId: c.chat_id,
+    };
     try {
       const draft = await chatJson<{ send: boolean; text?: string }>(
         buildSystemBlocks(c.id, c.chat_id, {
@@ -265,7 +288,7 @@ const followupTickBody = async (): Promise<void> => {
         "위 상황 문단대로 문안을 만들어.",
         500,
         config.model, // 실시간성이라 대화 모델(sonnet)
-        { purpose: "catchup", characterId: c.id, chatId: c.chat_id },
+        meta,
       );
       // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 말을 걸었으면(답장이 담당) 근황톡을 접고,
       // 다른 경로가 이미 보냈으면(마지막 메시지가 바뀜) 겹쳐 보내지 않는다.
@@ -278,13 +301,15 @@ const followupTickBody = async (): Promise<void> => {
         console.log(`[followup] sent to ${c.chat_id} @ ${block.activity}`);
       }
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       logErr("[followup] 전송 실패:", e);
-      recordSendFailure(
-        c.chat_id,
-        c.id,
-        "catchup",
-        e instanceof Error ? e.message : String(e),
-      );
+      recordSendFailure(c.chat_id, c.id, "catchup", msg);
+      traceProactiveFail({
+        characterId: c.id,
+        kind: "catchup",
+        error: msg,
+        callId: meta.callId,
+      });
     } finally {
       releaseProactive(c.chat_id);
     }
