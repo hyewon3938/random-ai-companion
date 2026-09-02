@@ -34,6 +34,13 @@ export interface TurnOptions {
    * 마친 사실이 기록에서 사라진다 — 아직 저녁을 안 먹었다고 답하는 길이 여기다(이슈 #238).
    */
   markFrom?: string;
+  /**
+   * 마커 문구의 기준이 되는 오늘(논리일 "YYYY-MM-DD"). 넘기지 않으면 지금 시각으로 잡는다.
+   *
+   * 어제·그저께·3일 전은 오늘이 언제냐에 따라 달라져서, 검사에서는 오늘을 고정해야 같은
+   * 기록이 늘 같은 결과를 낸다.
+   */
+  todayLogical?: string;
 }
 
 const bubblesOf = (lines: string[]): string[] =>
@@ -90,12 +97,12 @@ export const toTurns = (
   let markFrom = opts.markFrom ?? null;
   for (const row of rows) {
     const role: Role = row.role === "user" ? "user" : "assistant";
-    let marker = timeMarkerFor(row.sent_at, prevTs);
+    let marker = timeMarkerFor(row.sent_at, prevTs, opts.todayLogical);
     // 기준 시각을 넘어선 첫 메시지는 간격이 모자라도 마커를 받는다. 앞이 없는 것처럼 불러
     // 오늘·어제 표기를 같은 함수에서 그대로 가져온다. 한 번 준 뒤 기준을 내리는 이유는
     // 뒤이어 온 말까지 마커를 받으면 한 덩이로 붙을 말이 통마다 갈리기 때문이다.
     if (markFrom !== null && row.sent_at >= markFrom) {
-      marker ??= timeMarkerFor(row.sent_at, null);
+      marker ??= timeMarkerFor(row.sent_at, null, opts.todayLogical);
       markFrom = null;
     }
     prevTs = row.sent_at;

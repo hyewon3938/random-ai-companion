@@ -1,0 +1,79 @@
+# 표기 규칙 평가를 GitHub에서 돌린다. 모델을 실제로 부르므로 기본 검사(ci.yml)와 분리했다.
+#
+# 도는 때는 둘이다.
+#   Actions 탭에서 Run workflow로 직접 실행. 케이스를 몇 번씩 돌릴지 고를 수 있다.
+#   PR에 eval 라벨을 붙일 때. 프롬프트나 표기 규칙을 고친 PR에만 붙인다.
+#
+# 푸시마다 돌리지 않는 이유는 두 가지다. 호출이 케이스 9건 × 반복 횟수만큼 나가서 비용이
+# 붙고, 통과율은 모델이 그날 어떻게 답하느냐에 따라 흔들려서 고친 것과 무관하게 떨어지는
+# 실행이 섞인다.
+name: 표기 규칙 평가
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: 케이스마다 몇 번씩 부를지 (호출 수 = 9건 × 이 값)
+        default: "5"
+      pass_line:
+        description: 표기 통과율 하한. 비우면 기본값 1.0
+        default: ""
+      json_pass_line:
+        description: 형식 유지율 하한. 비우면 기본값 0.8
+        default: ""
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'eval'
+    name: 골든셋 통과율
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: yarn
+
+      - run: yarn install --frozen-lockfile
+
+      - name: 키 확인
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "ANTHROPIC_API_KEY 시크릿이 없다." >&2
+            echo "저장소 Settings > Secrets and variables > Actions에 넣고 다시 돌린다." >&2
+            exit 1
+          fi
+
+      - name: 평가 실행
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 평가는 텔레그램을 부르지 않지만 config가 값을 요구해서 자리만 채운다.
+          TELEGRAM_BOT_TOKEN: unused-in-eval
+          RUNS: ${{ inputs.runs || '5' }}
+          PASS: ${{ inputs.pass_line }}
+          JSON_PASS: ${{ inputs.json_pass_line }}
+        run: |
+          set -o pipefail
+          # 하한은 비워 두면 run.ts의 기본값을 쓴다. 무엇이 통과인지를 YAML에 다시 적으면
+          # 기준이 두 곳으로 갈라진다.
+          # 실행 기록(eval-runs.jsonl)은 커밋으로 남기는 파일이라 여기서는 쌓지 않는다.
+          yarn eval --runs="$RUNS" --no-log \
+            ${PASS:+--pass="$PASS"} ${JSON_PASS:+--json-pass="$JSON_PASS"} \
+            | tee eval-output.txt
+
+      - name: 결과를 실행 요약에 붙이기
+        if: always()
+        run: |
+          if [ -f eval-output.txt ]; then
+            { echo '```'; cat eval-output.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
