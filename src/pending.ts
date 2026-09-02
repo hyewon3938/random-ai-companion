@@ -4,6 +4,9 @@
 // resumePendingReplies가 이어받고, 유저가 말을 더 보내면 dropPendingReplies로 버린 뒤
 // 텀부터 다시 계산한다.
 //
+// 재시도를 다 쓰고 행을 닫을 때는 그 행이 지고 있던 답장 책임도 함께 놓는다
+// (releaseRecoveryMark). 그래야 복구 틱이 이어받아 그 시점의 대화로 답장을 새로 만든다.
+//
 // 답장 불가 구간의 깨우기 표시도 같은 표를 쓴다 — 문안 없이 kind='wake' 행으로 구간 끝
 // 시각에 걸어 둔다. 유저가 말을 더 보내도 이 행은 살아남고(구간 끝 시각은 그대로다),
 // 지우는 것은 dropWakeRows다. 기다리는 동안 isWaiting이 참이라 선톡 틱이 물러난다.
@@ -20,6 +23,8 @@ import {
   supersedeWakeRows,
   markPendingReply,
   bumpPendingAttempt,
+  getRecoveryMark,
+  setRecoveryMark,
   type PendingReplyRow,
 } from "./db.js";
 import { saveTodayNote } from "./memory.js";
@@ -42,6 +47,27 @@ import { getKstNow, kstDateString } from "./kst.js";
 
 const RETRY_MS = 60_000;
 const MAX_ATTEMPTS = 3;
+
+/**
+ * 이 행이 지고 있던 답장 책임을 놓는다 — 발송을 끝내 못 하고 행을 닫는 자리에서 부른다.
+ *
+ * 답장을 만들 때 bot.ts가 복구 표시(recovery_marks)를 유저 메시지 시각으로 찍는다. 저장된
+ * 이 행이 발송을 보장하니 복구 틱이 같은 메시지에 다시 답하지 않아도 된다는 뜻이다. 행이
+ * 실패로 닫히면 그 보장이 사라지므로 표시도 함께 거둔다. 그대로 두면 복구 틱이 이미 답한
+ * 메시지로 읽고 건너뛰어, 유저가 보낸 말이 아무 답도 못 받은 채 남는다.
+ *
+ * 지금 표시가 이 행의 유저 메시지 시각과 같을 때만 지운다. 그 사이 다른 경로가 새로 찍은
+ * 표시까지 지우면 그쪽이 책임진 답장이 두 번 나간다.
+ *
+ * 밖에서 부를 일은 없고, 지우는 조건을 테스트에서 재려고 열어 둔다.
+ */
+export const releaseRecoveryMark = (row: PendingReplyRow): void => {
+  if (getRecoveryMark(row.chat_id) !== row.user_msg_at) return;
+  setRecoveryMark(row.chat_id, "");
+  console.log(
+    `[pending] 복구 표시 거둠 #${row.id} — 다음 복구 틱이 이어받는다`,
+  );
+};
 
 /** 발송은 bot.ts가 한다 — 여기서 부르면 순환 참조가 되므로 등록받아 쓴다. */
 export type PendingSender = (
@@ -106,6 +132,7 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
       bumpPendingAttempt(row.id, msg);
       if (row.attempts + 1 >= MAX_ATTEMPTS) {
         markPendingReply(row.id, "failed", null, msg);
+        releaseRecoveryMark(row);
         console.error(`[pending] 깨우기 포기 #${row.id}: ${msg}`);
         return;
       }
@@ -125,6 +152,7 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
   const bubbles = parseBubbles(row);
   if (!bubbles.length) {
     markPendingReply(row.id, "failed", null, "만들어 둔 답장을 읽지 못함");
+    releaseRecoveryMark(row);
     traceReplyOutcome({
       callId: row.call_id,
       outcome: "failed",
@@ -148,6 +176,7 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
     bumpPendingAttempt(row.id, msg);
     if (row.attempts + 1 >= MAX_ATTEMPTS) {
       markPendingReply(row.id, "failed", null, msg);
+      releaseRecoveryMark(row);
       traceReplyOutcome({
         callId: row.call_id,
         outcome: "failed",
