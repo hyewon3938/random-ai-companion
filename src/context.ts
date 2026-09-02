@@ -1,3 +1,19 @@
+// 프롬프트를 조립하는 자리 — 안정도 순 3층.
+//
+// buildSystemBlocks가 세 층을 쌓는다. 바뀌는 값을 전부 뒤로 몰아서 앞 두 층을 캐시에 태운다.
+//   불변층   — 정체성 기억(creation), 유저 프로필, 공통 규칙(태도·대화·표기·말의 결·note 신호)
+//   일간층   — 관계 8컬럼 서술, 주변 인물, 진행 중인 일, 아크, 일정, 최근 일기
+//   실시간   — 검색해 꺼낸 기억, 주제로 찾은 지난 일기와 일정, 오늘 각본, 오늘 메모,
+//              직전 대화 시점, 지금 시각, 말투, 상황 문단, 답장 객체 설명
+//
+// 말투는 저장값(relationships.speech_level)을 먼저 보고, 없을 때만 currentSpeechLevel이
+// 최근 발화로 판정한다. 판정만으로 정하면 존댓말로 되돌아간다.
+//
+// 각본에 지금 시각의 블록이 없으면 sleepGap이 잠 블록으로 메운다(자정 이후만).
+//
+// 답장 객체 설명은 답장 경로에서만 붙인다(opts.signals). 선톡 문안은 같은 3층을 쓰되 자기
+// 형식으로 답하므로, 규칙층에 넣으면 두 형식이 부딪힌다.
+
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import type { SystemBlock } from "./llm.js";
 import { blockCategory } from "./day-plan.js";

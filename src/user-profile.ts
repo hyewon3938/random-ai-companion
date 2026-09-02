@@ -1,3 +1,8 @@
+// 유저 프로필을 프롬프트 한 덩이로 만드는 자리.
+//
+// 캐릭터가 상대를 어떻게 알고 있는지에 해당하는 값이라 불변층에 들어간다. 값이 없으면
+// 환경변수의 기본 프로필로 메운다.
+
 import { config } from "./config.js";
 import { getUserProfile } from "./db.js";
 

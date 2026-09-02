@@ -1,3 +1,16 @@
+// 캐릭터를 만드는 자리.
+//
+// 지금 대화에 붙어 있는 것은 고정 대표 캐릭터(DAEPYO_BIBLE)다. 유저가 적은 입력으로 만드는
+// 길은 createUserCharacter가 갖는다:
+//   inputProblem     — 모델을 부르기 전에 입력을 거른다.
+//   generateGenesis  — 첫 호출. 정체성·주변 인물·진행 중인 일·관계 첫 값·첫 인사를 한 번에
+//                      짓고, genesisProblem으로 검증해 어긋나면 한 번 다시 부른다.
+//   persistGenesis   — 트랜잭션 하나로 genesis_json{v:2}·creation 기억 행·관계 첫 값을 쓴다.
+//   ensureArcs       — 지은 재료(arcMaterial)로 아크를 만든다.
+//
+// 봇에 붙이는 것은 아직 남았고, 그때까지 실행은 tools/create-character.ts로 한다.
+// 랜덤 생성 코드는 나중에 쓸 자리가 있어 지우지 않고 둔다.
+
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
 import { getKstNow, kstDateString } from "./kst.js";

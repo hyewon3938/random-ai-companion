@@ -1,3 +1,4 @@
 #!/bin/sh
 # 커밋 전 검사. 켜는 법: git config core.hooksPath .githooks
-node scripts/check-claude-md.mjs
+node scripts/check-claude-md.mjs || exit 1
+node scripts/gen-modules.mjs --check || exit 1

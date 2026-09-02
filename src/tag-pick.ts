@@ -1,3 +1,12 @@
+// 이번 발화로 무엇을 검색할지 주제 태그를 고르는 자리.
+//
+// 답장을 만들기 전에 짧은 호출(128토큰) 한 번으로, 이미 저장된 태그 이름 중에서 관련 있는
+// 것을 고른다. 답은 저장된 목록에 대조해 거른다(mergeTags) — 목록에 없는 말을 그대로 받으면
+// 유저가 쓴 낱말이 태그가 되어 검색이 헛돈다.
+//
+// 글자가 일치하는 태그(tagSearch)와 합쳐 최대 TAG_PICK_MAX개까지 쓰고, 호출이 실패하면
+// 글자 일치만으로 이어 간다.
+
 import { chat } from "./llm.js";
 import type { CallMeta } from "./llm.js";
 import { config } from "./config.js";

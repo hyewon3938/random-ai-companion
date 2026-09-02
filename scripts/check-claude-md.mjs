@@ -5,7 +5,8 @@
 import { execFileSync } from "node:child_process";
 
 const FILE = "CLAUDE.md";
-const LIMIT = 20000;
+const LIMIT = 12000;
+const WARN = 10000;
 
 const staged = () => {
   try {
@@ -24,8 +25,13 @@ if (text !== null) {
       `[check-claude-md] ${FILE}가 ${chars.toLocaleString()}자로 상한 ${LIMIT.toLocaleString()}자를 넘었습니다.`,
     );
     console.error(
-      `[check-claude-md] 상한을 올리지 말고 상태 절에서 끝난 항목부터 줄이세요(CLAUDE.md 규칙 절).`,
+      `[check-claude-md] 상한을 올리지 말고 상태 절에서 확인이 끝난 항목부터 지우세요(CLAUDE.md 규칙 절).`,
     );
     process.exit(1);
+  }
+  if (chars > WARN) {
+    console.warn(
+      `[check-claude-md] ${FILE}가 ${chars.toLocaleString()}자입니다. 상한 ${LIMIT.toLocaleString()}자가 가깝습니다 — 확인이 끝난 항목부터 지우세요.`,
+    );
   }
 }

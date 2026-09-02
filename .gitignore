@@ -1,8 +1,7 @@
 node_modules/
 dist/
 .env
-LOCAL-CONTEXT.md
-LOCAL-HISTORY.md
+LOCAL-*.md
 docs/*
 # 설계 판단 기록만 공개한다
 !docs/adr/

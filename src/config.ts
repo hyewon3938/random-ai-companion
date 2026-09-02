@@ -1,3 +1,9 @@
+// 환경변수를 한 번 읽어 두는 자리.
+//
+// 프로세스가 사는 동안 바뀌지 않는 값만 담는다 — 텔레그램 토큰, 모델 API 키, 쓸 모델 이름,
+// DB 경로, 슬랙 채널. 값을 쓰는 쪽이 process.env를 직접 읽지 않게 해서, 이름을 바꿀 때
+// 고칠 자리가 여기 하나가 된다.
+
 import "dotenv/config";
 
 const requireEnv = (key: string): string => {

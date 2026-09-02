@@ -1,3 +1,12 @@
+// 선제 발화 관제탑 — 오늘 먼저 연락해도 되는지, 무엇을 보낼지 한곳에서 정한다.
+//
+// silenceState가 유저가 답하지 않은 논리일 수를 세어 단계를 매긴다(normal·quiet·checkin·
+// dormant). dailySendPlan은 그날 보낼 종류 하나를 고른다(morning·lunch·checkin·none) —
+// 새벽에 문안을 준비할 때, 반영 게이트에서, 발송 직전 재확인에서 모두 이 함수를 부른다.
+// 세 자리가 각자 판단하면 준비한 것과 보내는 것이 어긋난다.
+//
+// 유저 메시지가 오면 즉시 평상으로 돌아온다.
+
 import { db, hasUserScheduleOn } from "./db.js";
 import { kstLogicalDate, logicalDateOf } from "./kst.js";
 import { QUIET_AFTER_DAYS, RECONNECT_AT_DAYS } from "./thresholds.js";
