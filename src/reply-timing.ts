@@ -5,7 +5,7 @@
 //   즉답     — 0~2분, 짧은 쪽으로 몰린다
 //   틈틈이   — 개인 20초~2.5분 / 사회 30초~4분 / 공적 1~8분
 //   불가     — 그 일정이 끝날 때 + 0~1분 지터
-// 예외 둘 — 자는 중이면 첫 연락 3~25분이고 깬 뒤로는 즉답, 이미 붙잡혀 접힌 일정이면 즉답.
+// 예외 둘 — 자는 중이면 첫 연락은 틈틈이·개인 칸이고 깬 뒤로는 즉답, 이미 붙잡혀 접힌 일정이면 즉답.
 //
 // 불가면 지금 답장을 만들지 않고 TimingDecision.gather로 넘겨 구간 끝 몰아 답장에 맡긴다.
 // 개인·사회 불가에 온 메시지는 붙잡기 판정 한 콜(16토큰)로 갈라, 붙잡혔으면 개인은 취소·
@@ -42,8 +42,6 @@ import {
   INTERMITTENT_OFFICIAL_MIN_MS,
   INTERMITTENT_OFFICIAL_MAX_MS,
   BLOCK_END_JITTER_MS,
-  SLEEP_WAKE_MIN_MS,
-  SLEEP_WAKE_MAX_MS,
 } from "./thresholds.js";
 import {
   getKstNow,
@@ -63,8 +61,9 @@ import {
 //   틈틈이    | 20초~2분 30초   | 30초~4분, 짧은 쪽  | 1~8분, 짧은 쪽
 //   불가      | 일정이 끝날 때. 붙잡는 말이면 20초~2분 30초 | (개인과 같음) | 일정이 끝날 때
 //
-// 표를 타지 않는 예외가 둘이다. 자는 시간에 온 연락은 진동에 깨서 폰을 볼 때까지 3~25분이
-// 걸리고, 한 번 깬 뒤로는 즉답 값을 쓴다. 이미 붙잡혀 일정을 접어 둔 상태에서도 즉답이다.
+// 블록의 두 태그를 그대로 읽지 않는 예외가 둘이고, 둘 다 표의 다른 칸을 빌려 쓴다. 자는 시간에
+// 처음 온 연락은 폰을 집어 드는 만큼만 두고 틈틈이·개인 칸으로 답하며, 한 번 깬 뒤로는 즉답 칸을
+// 쓴다. 이미 붙잡혀 일정을 접어 둔 상태에서도 즉답이다.
 //
 // 숫자는 thresholds.ts가 갖는다. 유저 말이 다 도착할 때까지 기다리는 20~40초는 답장 텀에
 // 넣지 않는다(bot.ts의 도착 대기).
@@ -286,7 +285,9 @@ export const decideReplyTiming = async (
   if (isSleeping(b)) {
     // 자는 시간에 온 연락. 각본에는 자는 것으로 되어 있던 시간이라 오늘 실제 기록에 남겨,
     // 그날 새벽 정리가 일기와 다음 날 각본에 함께 놓고 본다. 같은 잠 블록에서는 한 번만
-    // 남기고, 그 기록이 곧 깨어 있다는 표시가 되어 다음 연락부터는 즉답 값으로 답한다.
+    // 남기고, 그 기록이 곧 깨어 있다는 표시가 되어 다음 연락부터는 즉답 칸으로 답한다. 깨어나는
+    // 첫 한 통도 폰을 집어 드는 만큼만 두고 틈틈이·개인 칸으로 답한다 — 밤에 찾아온 상대를
+    // 몇십 분씩 기다리게 하지 않는다.
     const awake = wokeInBlock(characterId, b.start);
     if (!awake)
       recordDayActual(
@@ -300,8 +301,8 @@ export const decideReplyTiming = async (
       );
     return {
       waitMs: awake
-        ? skewLow(INSTANT_MIN_MS, INSTANT_MAX_MS)
-        : rand(SLEEP_WAKE_MIN_MS, SLEEP_WAKE_MAX_MS),
+        ? tableDelay("instant", "personal")
+        : tableDelay("intermittent", "personal"),
       held: null,
       gather: null,
       trace: {
