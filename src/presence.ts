@@ -15,7 +15,7 @@
 // 다녀온 뒤는 이 모듈 몫이 아니다. 구간 끝의 깨우기 처리(bot.ts)가 몰아 답장과 복귀 인사를
 // 한 자리에서 한다.
 
-import { chatJson } from "./llm.js";
+import { chatJson, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
 import { isHeldNow } from "./reply-timing.js";
 import {
@@ -30,6 +30,7 @@ import {
   type CharacterRow,
 } from "./db.js";
 import { scheduleWakeRow } from "./pending.js";
+import { traceProactiveFail } from "./reply-trace.js";
 import { buildSystemBlocks } from "./context.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory, isAwayUnavail } from "./day-plan.js";
@@ -264,6 +265,12 @@ const presenceTickBody = async (): Promise<void> => {
 
     // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
     if (!acquireProactive(c.chat_id)) continue;
+    // 호출 번호를 catch에서도 봐야 한다 — 발송에 실패하면 이 문안 스레드에 실패를 단다.
+    const meta: CallMeta = {
+      purpose: "away",
+      characterId: c.id,
+      chatId: c.chat_id,
+    };
     try {
       const draft = await chatJson<{ send: boolean; text?: string }>(
         buildSystemBlocks(c.id, c.chat_id, {
@@ -278,7 +285,7 @@ const presenceTickBody = async (): Promise<void> => {
         "위 상황 문단대로 문안을 만들어.",
         400,
         config.model, // 실시간성이라 대화 모델(sonnet)
-        { purpose: "away", characterId: c.id, chatId: c.chat_id },
+        meta,
       );
       // 발송 직전 재확인 — LLM을 기다리는 사이 대화 상태가 바뀌었으면(유저 추가 발화·다른 발송) 접는다
       if (
@@ -294,13 +301,15 @@ const presenceTickBody = async (): Promise<void> => {
         );
       }
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       logErr("[presence] 전송 실패:", e);
-      recordSendFailure(
-        c.chat_id,
-        c.id,
-        "away",
-        e instanceof Error ? e.message : String(e),
-      );
+      recordSendFailure(c.chat_id, c.id, "away", msg);
+      traceProactiveFail({
+        characterId: c.id,
+        kind: "away",
+        error: msg,
+        callId: meta.callId,
+      });
     } finally {
       releaseProactive(c.chat_id);
     }
