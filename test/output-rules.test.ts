@@ -19,6 +19,8 @@ const fixtures: {
   want: string[];
   /** 점수 밖 표시 — 물음표가 빠진 것 같다고 리포트에 찍혀야 하는가. */
   suspect?: boolean;
+  /** 답에 다시 나오면 안 되는 질문 속 말. */
+  echo?: string[];
 }[] = [
   { name: "깨끗한 답", raw: '{"reply":["헐 진짜?","그래서 어떻게 됐어?"]}', noLaugh: true, want: [] },
   { name: "웃음 1회(허용)", raw: '{"reply":["아 ㅋㅋ 뭐야"]}', noLaugh: false, want: [] },
@@ -43,6 +45,18 @@ const fixtures: {
   { name: "물음표 붙은 질문", raw: '{"reply":["다음 주 언제 가나요?"]}', noLaugh: false, want: [] },
   { name: "평서문은 안 잡는다", raw: '{"reply":["저는 방금 라면 먹었어요","아 그러니까"]}', noLaugh: false, want: [] },
   { name: "형식 안 지킨 답", raw: "그냥 줄글로 답함", noLaugh: false, want: [] },
+  { name: "과거형 어미 셋 반복", raw: '{"reply":["아니었어","예매해놨어","잡았어"]}', noLaugh: false, want: ["말풍선 끝 같은 어미 반복"] },
+  { name: "끝 하나가 되묻기면 통과", raw: '{"reply":["아니었어","예매해놨어","너는 몇 시에 와?"]}', noLaugh: false, want: [] },
+  { name: "끝 하나가 지금 하는 일이면 통과", raw: '{"reply":["아니었어","예매해놨어","지금 시간표 보는 중이야"]}', noLaugh: false, want: [] },
+  { name: "말풍선 둘은 안 잡는다", raw: '{"reply":["아니었어","잡았어"]}', noLaugh: false, want: [] },
+  { name: "끝말이 셋 다 같음", raw: '{"reply":["그래","알겠어 그래","응 그래"]}', noLaugh: false, want: ["말풍선 끝 같은 어미 반복"] },
+  { name: "웃음 뒤에 숨은 과거형도 잡는다", raw: '{"reply":["아니었어 ㅋㅋ","예매해놨어","잡았어"]}', noLaugh: false, want: ["말풍선 끝 같은 어미 반복"] },
+  { name: "하루 은유", raw: '{"reply":["오늘은 하루가 좀 늘어지는 느낌이었어"]}', noLaugh: false, want: ["하루·시간 은유"] },
+  { name: "하루가 길었다는 입말은 통과", raw: '{"reply":["오늘 하루 진짜 길었다"]}', noLaugh: false, want: [] },
+  { name: "추측형 말끝 둘", raw: '{"reply":["일이 많아서 그런지 시간이 안 가더라고","그래서 그런가 좀 피곤하네"]}', noLaugh: false, want: ["추측형 말끝 겹침"] },
+  { name: "추측형 말끝 하나는 통과", raw: '{"reply":["일이 많아서 그런지 좀 피곤하네"]}', noLaugh: false, want: [] },
+  { name: "질문의 말 되풀이", raw: '{"reply":["하루가 길게 느껴진 건 일이 많아서였어"]}', noLaugh: false, echo: ["길게", "늘어"], want: ["질문의 말 되풀이"] },
+  { name: "되풀이 없으면 통과", raw: '{"reply":["낮에 일이 계속 밀려서","이제 집 와서 누워 있어"]}', noLaugh: false, echo: ["길게"], want: [] },
 ];
 
 const sorted = (v: string[]): string[] => [...v].sort();
@@ -50,7 +64,10 @@ const sorted = (v: string[]): string[] => [...v].sort();
 for (const f of fixtures) {
   test(f.name, () => {
     const out = parseReplyOutput(f.raw);
-    const got = checkOutputRules(out.bubbles, { noLaugh: f.noLaugh }).map(
+    const got = checkOutputRules(out.bubbles, {
+      noLaugh: f.noLaugh,
+      echo: f.echo,
+    }).map(
       (v) => v.rule,
     );
     assert.deepEqual(sorted(got), sorted(f.want));

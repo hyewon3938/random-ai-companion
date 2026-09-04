@@ -55,6 +55,11 @@ export interface EvalCase {
    * 움직였는지 안 갈린다.
    */
   wantsNote?: boolean;
+  /**
+   * 상대의 물음에 들어 있던 말 가운데 답에 다시 나오면 안 되는 것. 왜냐고 물으면 그 전제를
+   * 답의 앞뒤에 되풀이하는 버릇을 잰다(이슈 #281). 케이스가 켤 때만 본다.
+   */
+  echo?: string[];
 }
 
 /** 채점기 하나가 걸어 낸 위반. */
@@ -72,6 +77,15 @@ const EMOJI = /\p{Extended_Pictographic}/u;
 const FACE = /(\^\^|\^_\^|:\)|:D|;\))/;
 const QUOTE = /["“”]/;
 const MARKDOWN = /(\*\*|^\s*[-*•]\s|^#{1,6}\s)/m;
+// 말풍선 끝의 과거형 평서문. 받침으로 줄어든 꼴(했·됐·왔·갔·봤)까지 받는다. 물음표로 끝나면
+// 묻는 말이라 여기 안 걸린다.
+const PAST_END =
+  /(았|었|였|했|됐|왔|갔|봤|났|샀|줬|잤|탔|섰|컸|켰|뒀|놨|쳤|졌|렸|겼|혔|웠|랐|었었|았었)어$/;
+// 하루·시간을 주어로 세운 글 은유. 하루가 길었다는 말은 입말이라 세지 않는다.
+const TIME_METAPHOR =
+  /(하루|시간|오늘|밤|마음|공기)(가|이|는|은|도)?\s*(유독|좀|너무|되게|진짜|다|약간)?\s*(늘어지|늘어진|가라앉|내려앉|물들|스며들|흘러가|흘러내)/;
+// 추측형 말끝. 한 번은 입말이고 두 번부터 문장을 짓는 티가 난다.
+const HEDGE = /(그런지|그런가|싶더라|그랬나|것 같기도)/g;
 
 // 어미만으로 묻는 문장인 게 확실한 것. 반말 의문문은 억양으로만 갈리고(밥 먹었어 / 밥 먹었어?),
 // ~예요·~어요는 평서문과 모양이 같아 어미로는 못 가른다. 확실한 것만 넣는다.
@@ -130,16 +144,49 @@ export const hasQuestion = (bubbles: string[]): boolean =>
 const firstMatch = (text: string, re: RegExp): string | null =>
   text.match(re)?.[0] ?? null;
 
+/** 말풍선마다 마지막 줄. 웃음 표기·기호는 떼고 본다. */
+const bubbleEnds = (bubbles: string[]): string[] =>
+  bubbles
+    .map((b) => b.trim().split("\n").at(-1)?.trim().replace(TAIL, "") ?? "")
+    .filter(Boolean);
+
 /**
- * 말풍선을 규칙에 대본다. 케이스를 가리지 않는 규칙 다섯(이모지·큰따옴표·리스트·웃음 표기
- * 일관성·의문 종결어미의 물음표)과, 케이스가 켤 때만 보는 웃음 금지 자리다. 빈 배열이면 통과.
+ * 말풍선 셋 이상이 전부 과거형 평서문으로 끝나거나 끝 두 글자가 같으면 그 끝들을 돌려준다.
+ * "아니었어 / 예매해놨어 / 잡았어"가 걸리고, 셋 중 하나가 되묻기나 지금 하는 일이면 통과다.
+ */
+export const sameEndings = (bubbles: string[]): string[] | null => {
+  const ends = bubbleEnds(bubbles);
+  if (ends.length < 3) return null;
+  const allPast = ends.every((e) => PAST_END.test(e));
+  const tails = new Set(ends.map((e) => e.slice(-2)));
+  return allPast || tails.size === 1 ? ends : null;
+};
+
+/**
+ * 말풍선을 규칙에 대본다. 케이스를 가리지 않는 규칙(이모지·큰따옴표·리스트·웃음 표기 일관성·
+ * 의문 종결어미의 물음표·말풍선 끝 어미 반복·추측형 말끝 겹침·하루 은유)과, 케이스가 켤 때만
+ * 보는 웃음 금지 자리·질문의 말 되풀이다. 빈 배열이면 통과.
  */
 export const checkOutputRules = (
   bubbles: string[],
-  kase: Pick<EvalCase, "noLaugh">,
+  kase: Pick<EvalCase, "noLaugh" | "echo">,
 ): Violation[] => {
   const text = bubbles.join("\n");
   const out: Violation[] = [];
+
+  const ends = sameEndings(bubbles);
+  if (ends)
+    out.push({ rule: "말풍선 끝 같은 어미 반복", found: ends.join(" / ") });
+
+  const hedges = text.match(HEDGE) ?? [];
+  if (hedges.length >= 2)
+    out.push({ rule: "추측형 말끝 겹침", found: hedges.join(" ") });
+
+  const metaphor = firstMatch(text, TIME_METAPHOR);
+  if (metaphor) out.push({ rule: "하루·시간 은유", found: metaphor });
+
+  const echoed = (kase.echo ?? []).find((w) => text.includes(w));
+  if (echoed) out.push({ rule: "질문의 말 되풀이", found: echoed });
 
   const emoji = firstMatch(text, EMOJI) ?? firstMatch(text, FACE);
   if (emoji) out.push({ rule: "이모지·그림 이모티콘", found: emoji });
@@ -354,6 +401,25 @@ export const CASES: EvalCase[] = [
       heard("오늘 집 정리 좀 했어"),
       said("오 대청소했네", "뭐 특별한 일 있어?"),
       heard("내일 친구가 집에 놀러 와서 자고 가기로 했거든"),
+    ],
+  },
+  {
+    id: "이유질문-전제되풀이금지",
+    about: "왜냐고 물었을 때 질문에 들어 있던 말을 답의 앞뒤에 되풀이하지 않는가",
+    echo: ["길었", "길게", "늘어"],
+    turns: [
+      heard("퇴근했어?"),
+      said("응 이제 막 집 왔어", "오늘 하루 진짜 길었다"),
+      heard("왜? 무슨 일 있었는데?"),
+    ],
+  },
+  {
+    id: "주말근황-어미반복금지",
+    about: "한 일을 몇 개 말하는 자리에서 말풍선 끝을 전부 과거형으로 맺지 않는가",
+    turns: [
+      heard("주말 잘 보냈어?"),
+      said("응 푹 쉬었어", "너는?"),
+      heard("나는 그냥 집에만 있었어 너는 주말에 뭐 했어?"),
     ],
   },
   {
