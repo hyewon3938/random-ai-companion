@@ -11,6 +11,11 @@
 //
 // 그날 컨디션은 월 리듬에 미리 정해 둔 시드를 읽어 기상 시각과 활동으로 잇는다.
 // 어제 일기에 남은 실제 여파가 시드보다 우선한다.
+//
+// 며칠에 걸쳐 하는 일(진행 중인 일)은 캐릭터 쪽이면서 유저가 이미 아는 것만 각본에 넣는다.
+// 프롬프트 줄 앞에 기억 행 번호를 붙이고, 그 줄에서 펼친 블록은 source "ongoing"과 그 번호를
+// 갖는다 — 새벽 정리가 어제 각본에서 이 블록을 찾아 그 일의 값을 한 걸음 옮긴다(이슈 #276).
+// 유저에게 한 번도 말하지 않은 일은 기억으로만 두고 각본으로 굴리지 않는다.
 
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
@@ -115,17 +120,38 @@ export const PLAN_SYSTEM = `너는 한 인물의 하루 흐름을 짜는 작가�
 const scheduleLine = (s: ScheduleRow): string =>
   `- [${s.id}] ${s.time_hint ? `${s.time_hint} ` : ""}${s.content}`;
 
-// 며칠에 걸쳐 하는 일 한 줄. 새벽 정리가 같은 항목을 프롬프트에 넣는 방식(nightly.ts)을 따르되,
-// 각본에는 캐릭터 쪽 항목만 들어가서 누구 일인지 적을 자리가 없다.
+// 며칠에 걸쳐 하는 일 한 줄. 각본에는 캐릭터 쪽 항목만 들어가서 누구 일인지 적을 자리가 없다.
+// 줄 앞의 행 번호는 일정 줄과 같은 구실이다 — 이 줄에서 펼친 블록이 source_id에 그대로 적는다.
 // 끝나는 조건을 값과 함께 적는다 — 조건이 이미 채워진 일을 오늘 또 하는 각본이 나오지 않게.
 const ongoingLine = (r: MemoryRow): string =>
-  `- ${r.area}/${r.subject}: ${r.value}${r.end_condition ? ` (끝나는 조건: ${r.end_condition})` : ""}`;
+  `- [${r.id}] ${r.area}/${r.subject}: ${r.value}${r.end_condition ? ` (끝나는 조건: ${r.end_condition})` : ""}`;
+
+/**
+ * 각본에 넣을 진행 중인 일. 캐릭터 쪽이면서 유저가 이미 아는 것만, 최근에 손댄 것부터
+ * PLAN_ONGOING_MAX까지. 같은 키에 생성 행과 대화 행이 나란히 있으면 대화 행이 지금 값이다.
+ * 새벽 정리가 봇 밖 경로에 같은 목록을 넘길 때도 이 함수를 쓴다.
+ */
+export const planOngoingRows = (characterId: number): MemoryRow[] => {
+  const byKey = new Map<string, MemoryRow>();
+  for (const r of listMemoryItems(characterId, "ongoing")) {
+    if (r.owner !== "char" || r.user_knows !== "known") continue;
+    const k = `${r.area}/${r.subject}`;
+    const cur = byKey.get(k);
+    if (cur && !(cur.origin !== "conversation" && r.origin === "conversation"))
+      continue;
+    byKey.set(k, r);
+  }
+  return [...byKey.values()].slice(0, PLAN_ONGOING_MAX);
+};
+
+export const planOngoingLines = (characterId: number): string =>
+  planOngoingRows(characterId).map(ongoingLine).join("\n");
 
 // 진행 중인 일 절. 없는 날에는 머리말째로 빠진다 — 다른 절처럼 "(없음)"을 적어 두면
 // 며칠에 한 번 손대는 일이 오늘은 없다는 것과 아예 없다는 것이 같은 글자로 보인다.
 const ongoingSection = (ongoing: string): string =>
   ongoing
-    ? `\n[진행 중인 일 — 며칠에 걸쳐 이어 하는 일. 오늘 손댈 만한 것이 있으면 그 다음 한 걸음을 블록으로 넣는다. 끝나는 조건이 이미 채워진 일은 넣지 않는다. 매일 손대는 일은 아니니 오늘 몫이 없으면 넣지 않아도 된다]\n${ongoing}\n`
+    ? `\n[진행 중인 일 — 며칠에 걸쳐 이어 하는 일. 오늘 손댈 만한 것이 있으면 그 다음 한 걸음을 블록으로 넣는다. 끝나는 조건이 이미 채워진 일은 넣지 않는다. 매일 손대는 일은 아니니 오늘 몫이 없으면 넣지 않아도 된다. 넣은 블록에는 source "ongoing"과 줄 앞 [번호]를 적는다]\n${ongoing}\n`
     : "";
 
 const seedLine = (seed: DaySeed | undefined): string => {
@@ -201,27 +227,28 @@ ${diary || "(없음)"}
 - 각 블록의 source = 이 블록이 어느 원본에서 나왔는가. 원본이 있는 블록에만 적는다.
   - 위 [이 날의 확정 일정]의 한 줄을 그날치로 펼친 블록이면 "schedule", source_id에 그 줄 앞 [번호]를 그대로 적는다. 한 일정이 두 블록으로 쪼개졌으면 두 블록에 같은 번호를 적는다.
   - 위 [생활 리듬]의 매주 루틴에서 나온 블록이면 "routine". 되짚을 원본 행이 없으니 source_id는 적지 않는다.
+  - 위 [진행 중인 일]의 한 줄에서 오늘 몫을 펼친 블록이면 "ongoing", source_id에 그 줄 앞 [번호]를 그대로 적는다. 이 번호로 그 일이 오늘 어디까지 갔는지 되짚는다.
   - 어느 쪽도 아닌 블록(잠·식사·이동·그날 갑자기 생긴 일)에는 두 값을 적지 않는다.
 
 [JSON 형식 — 이 구조 그대로]
-{"date":"${date}","blocks":[{"start":"05:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"unavailable","advance_known":false,"category":"official"},{"start":"19:00","end":"20:00","activity":"운동","responsiveness":"unavailable","advance_known":true,"category":"personal","source":"routine"},{"start":"24:10","end":"29:00","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"}]}
-위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다. source_id의 12도 예시이니, 실제 번호는 위 [이 날의 확정 일정]에 적힌 것을 쓴다.`;
+{"date":"${date}","blocks":[{"start":"05:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"unavailable","advance_known":false,"category":"official"},{"start":"19:00","end":"20:00","activity":"운동","responsiveness":"unavailable","advance_known":true,"category":"personal","source":"routine"},{"start":"22:00","end":"23:00","activity":"책 이어 읽기","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"ongoing","source_id":61},{"start":"24:10","end":"29:00","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"}]}
+위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다. source_id의 12와 61도 예시이니, 실제 번호는 위 [이 날의 확정 일정]과 [진행 중인 일]에 적힌 것을 쓴다.`;
 
 // 행 번호로 쓸 수 있는 값인가. 생성이 숫자를 따옴표에 넣어 답하는 일이 있어 문자열도 받는다.
-const toScheduleId = (v: unknown): number | null => {
+const toSourceId = (v: unknown): number | null => {
   const n = typeof v === "string" ? Number(v.trim()) : v;
   return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : null;
 };
 
 // 출처 두 칸을 함께 판정한다 — 둘은 한 쌍이라 따로 살아남으면 뜻이 없다.
-// "schedule"은 되짚을 행 번호가 있어야 원본을 찾을 수 있으니 번호가 없으면 출처째로 버리고,
-// "routine"은 되짚을 행이 없는 게 정상이라 번호 없이 남긴다.
+// "schedule"과 "ongoing"은 되짚을 행 번호가 있어야 원본을 찾을 수 있으니 번호가 없으면
+// 출처째로 버리고, "routine"은 되짚을 행이 없는 게 정상이라 번호 없이 남긴다.
 const normalizeSource = (
   b: PlanBlock,
 ): Pick<PlanBlock, "source" | "source_id"> => {
   const source = toBlockSource(b.source);
-  if (source === "schedule") {
-    const id = toScheduleId(b.source_id);
+  if (source === "schedule" || source === "ongoing") {
+    const id = toSourceId(b.source_id);
     return id === null ? {} : { source, source_id: id };
   }
   if (source === "routine") return { source };
@@ -285,12 +312,8 @@ export const buildPlanPrompt = (characterId: number, date: string): string => {
     .map(scheduleLine)
     .join("\n");
   // 며칠에 걸쳐 이어 하는 일. 이걸 각본이 모르면 캐릭터가 여러 날에 나눠 하는 일이 하루
-  // 흐름에 한 번도 드러나지 않는다. 캐릭터 쪽 항목만, 최근에 손댄 것부터 상한까지.
-  const ongoing = listMemoryItems(characterId, "ongoing")
-    .filter((r) => r.owner === "char")
-    .slice(0, PLAN_ONGOING_MAX)
-    .map(ongoingLine)
-    .join("\n");
+  // 흐름에 한 번도 드러나지 않는다. 유저가 아는 캐릭터 쪽 항목만, 최근에 손댄 것부터 상한까지.
+  const ongoing = planOngoingLines(characterId);
   const arcs = Object.entries(getArcs(characterId))
     .map(([h, c]) => `${h}: ${c}`)
     .join(" / ");

@@ -24,12 +24,16 @@ export const ACTIVITY_CATEGORY_NAME: Record<ActivityCategory, string> = {
   official: "공적",
 };
 
-/** 각본 블록의 출처 — 이 블록이 무엇을 그날치로 펼친 사본인가. 원본이 있는 블록에만 붙는다. */
-export type BlockSource = "schedule" | "routine";
+/**
+ * 각본 블록의 출처 — 이 블록이 무엇을 그날치로 펼친 사본인가. 원본이 있는 블록에만 붙는다.
+ * ongoing은 며칠에 걸쳐 하는 일의 오늘 몫으로, source_id가 그 일의 기억 행 번호다.
+ */
+export type BlockSource = "schedule" | "routine" | "ongoing";
 
 export const BLOCK_SOURCE_NAME: Record<BlockSource, string> = {
   schedule: "예정된 일",
   routine: "매주 루틴",
+  ongoing: "진행 중인 일",
 };
 
 /** 기억 한 건이 들어가는 저장 항목. 주인(캐릭터·유저)과 짝지어 여섯 조합이 된다. */
@@ -123,6 +127,7 @@ export type CallPurpose =
   | "arc"
   | "diary"
   | "extract"
+  | "progress"
   | "genesis"
   | "bible"
   | "morning"
@@ -144,6 +149,7 @@ export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
   arc: "아크",
   diary: "일기",
   extract: "기억 정리",
+  progress: "진행 중인 일",
   genesis: "캐릭터 생성",
   bible: "옛 랜덤 생성",
   morning: "아침 선톡",
@@ -181,8 +187,10 @@ const ACTIVITY_CATEGORY_BY_TEXT: Record<string, ActivityCategory> = {
 const BLOCK_SOURCE_BY_TEXT: Record<string, BlockSource> = {
   schedule: "schedule",
   routine: "routine",
+  ongoing: "ongoing",
   "예정된 일": "schedule",
   "매주 루틴": "routine",
+  "진행 중인 일": "ongoing",
 };
 
 export const toResponsiveness = (v: unknown): Responsiveness | null =>
