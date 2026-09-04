@@ -1,8 +1,8 @@
 // 만들어 둔 답장을 정한 시각에 내보내는 자리.
 //
-// 답장을 pending_replies에 적어 두고 정해진 시각에 발송한다(재시도 3회). 부팅하면
-// resumePendingReplies가 이어받고, 유저가 말을 더 보내면 dropPendingReplies로 버린 뒤
-// 텀부터 다시 계산한다.
+// 답장을 pending_replies에 적어 두고 정해진 시각에 발송한다. 발송이 실패하면 1·2·5·10분
+// 간격으로 다시 보내 20분 가까이 버틴다(RETRY_MS). 부팅하면 resumePendingReplies가
+// 이어받고, 유저가 말을 더 보내면 dropPendingReplies로 버린 뒤 텀부터 다시 계산한다.
 //
 // 재시도를 다 쓰고 행을 닫을 때는 그 행이 지고 있던 답장 책임도 함께 놓는다
 // (releaseRecoveryMark). 그래야 복구 틱이 이어받아 그 시점의 대화로 답장을 새로 만든다.
@@ -45,8 +45,21 @@ import { getKstNow, kstDateString } from "./kst.js";
 // 울릴 때 무엇을 할지는 그 시점의 종류로 갈린다. 어느 쪽이든 행으로 남으므로 프로세스가
 // 다시 떠도 이어간다.
 
-const RETRY_MS = 60_000;
-const MAX_ATTEMPTS = 3;
+// 실패한 발송을 다시 시도하는 간격. 몇 번째 실패인지로 골라 쓰고, 표가 끝나면 행을 닫는다.
+//
+// 60초 3회(≈2분)로 두었더니 텔레그램으로 가는 길이 몇 분 끊긴 날 만들어 둔 답장을 그대로
+// 버렸다. 나쁜 구간은 수 분에서 수십 분씩 이어지므로 촘촘히 조르지 말고 1·2·5·10분으로
+// 넓혀 18분을 덮는다. 그 사이 유저가 말을 더 보내면 dropPendingReplies가 superseded로
+// 거두므로, 오래된 답장이 뒤늦게 나갈 걱정은 없다.
+const RETRY_MS = [60_000, 120_000, 300_000, 600_000];
+
+// 깨우기·구간 끝 표시는 표의 앞 두 칸(1·2분)까지만 쓴다 — 지금까지와 같은 3회다.
+//
+// 이쪽은 만들어 둔 문안을 보내는 자리가 아니라 그 자리에서 모델을 불러 몰아 답장을 새로
+// 만드는 길이라, 한 번 더 시도할 때마다 호출이 한 번 더 든다. 게다가 실패한 행이 닫히면
+// 복구 표시가 풀려 2분 틱이 같은 일을 이어받으므로(releaseRecoveryMark), 여기서 오래
+// 붙잡고 있을 이유가 없다.
+const WAKE_RETRIES = 2;
 
 /**
  * 이 행이 지고 있던 답장 책임을 놓는다 — 발송을 끝내 못 하고 행을 닫는 자리에서 부른다.
@@ -114,6 +127,22 @@ const parseBubbles = (row: PendingReplyRow): string[] => {
 const isWakeKind = (kind: string): boolean =>
   kind === "wake" || kind === "return";
 
+/**
+ * 이번 실패 뒤 얼마를 기다렸다 다시 보낼지. 표를 다 썼으면 null — 그 자리에서 행을 닫는다.
+ *
+ * row.attempts는 이번 것을 빼고 지금까지 쌓인 실패 횟수라 그대로 표의 자리가 된다. 그 값은
+ * bumpPendingAttempt가 행에 적어 두므로, 프로세스가 다시 떠서 arm이 행을 이어받아도 남은
+ * 재시도가 처음부터 다시 시작되지 않는다.
+ *
+ * 밖에서 부를 일은 없고, 간격 표를 테스트에서 재려고 열어 둔다.
+ */
+export const retryDelayMs = (row: PendingReplyRow): number | null => {
+  const table = isWakeKind(row.kind)
+    ? RETRY_MS.slice(0, WAKE_RETRIES)
+    : RETRY_MS;
+  return row.attempts < table.length ? table[row.attempts] : null;
+};
+
 const fire = async (fired: PendingReplyRow): Promise<void> => {
   timers.delete(fired.id);
   // 걸어 둔 뒤에 종류가 바뀌었을 수 있다 — 구간에 들어갈 때 건 'return' 행은 그 사이 유저가
@@ -130,20 +159,21 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       bumpPendingAttempt(row.id, msg);
-      if (row.attempts + 1 >= MAX_ATTEMPTS) {
+      const delay = retryDelayMs(row);
+      if (delay === null) {
         markPendingReply(row.id, "failed", null, msg);
         releaseRecoveryMark(row);
         console.error(`[pending] 깨우기 포기 #${row.id}: ${msg}`);
         return;
       }
       console.warn(
-        `[pending] 깨우기 실패 #${row.id}, ${RETRY_MS / 1000}초 뒤 재시도: ${msg}`,
+        `[pending] 깨우기 실패 #${row.id} (${row.attempts + 1}번째), ${delay / 1000}초 뒤 재시도: ${msg}`,
       );
       timers.set(
         row.id,
         setTimeout(() => {
           void fire({ ...row, attempts: row.attempts + 1 });
-        }, RETRY_MS),
+        }, delay),
       );
     }
     return;
@@ -174,7 +204,8 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     bumpPendingAttempt(row.id, msg);
-    if (row.attempts + 1 >= MAX_ATTEMPTS) {
+    const delay = retryDelayMs(row);
+    if (delay === null) {
       markPendingReply(row.id, "failed", null, msg);
       releaseRecoveryMark(row);
       traceReplyOutcome({
@@ -186,13 +217,13 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
       return;
     }
     console.warn(
-      `[pending] 발송 실패 #${row.id}, ${RETRY_MS / 1000}초 뒤 재시도: ${msg}`,
+      `[pending] 발송 실패 #${row.id} (${row.attempts + 1}번째), ${delay / 1000}초 뒤 재시도: ${msg}`,
     );
     timers.set(
       row.id,
       setTimeout(() => {
         void fire({ ...row, attempts: row.attempts + 1 });
-      }, RETRY_MS),
+      }, delay),
     );
   }
 };
@@ -345,7 +376,12 @@ export const dropWakeRows = (chatId: string): number => {
 export const isWaiting = (chatId: string): boolean =>
   hasWaitingPendingReply(chatId);
 
-/** 프로세스가 다시 떴을 때 남아 있는 대기 답장을 이어서 건다. */
+/**
+ * 프로세스가 다시 떴을 때 남아 있는 대기 답장을 이어서 건다.
+ *
+ * 재시도 중에 프로세스가 죽은 행은 보낼 시각이 이미 지나 있어 바로 울린다. 몇 번째 실패였는지는
+ * 행의 attempts에 적혀 있어서(bumpPendingAttempt), 남은 간격도 그 자리에서 이어진다.
+ */
 export const resumePendingReplies = (): void => {
   const rows = getWaitingPendingReplies();
   for (const r of rows) arm(r);

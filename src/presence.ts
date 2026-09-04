@@ -13,6 +13,9 @@
 // 미루고, 마지막 말이 캐릭터 것이면 이미 답한 말에 다시 답하지 않고 그 말에 이어 나간다고 한다.
 // 문안 JSON에는 자리를 비우는 일을 한 구절로 적는 away 칸을 두고, 그 칸이 비면 보내지 않는다.
 //
+// 만든 문안이 한 통도 못 나갔으면 버리지 않고 들고 있다가(proactive-policy의 보관 자리),
+// 다음 틱이 같은 블록에 다시 오면 모델을 부르지 않고 그 문안부터 보낸다.
+//
 // 캐릭터가 방금 말했으면 예고하지 않는다. 기준은 최소 AWAY_QUIET_MIN분이되, 알릴 일정이
 // 이미 시작했으면 그 시작 시각까지 넓힌다 — 구간 끝 몰아 답장이 이미 같은 전환을 알린
 // 뒤라서, 그 답장 자리에서 다음 일정까지 함께 말하고 예고는 나가지 않는다.
@@ -35,6 +38,11 @@ import {
   type CharacterRow,
 } from "./db.js";
 import { scheduleWakeRow } from "./pending.js";
+import {
+  holdFailedDraft,
+  takeHeldDraft,
+  type HeldDraft,
+} from "./proactive-policy.js";
 import { traceProactiveFail } from "./reply-trace.js";
 import { buildSystemBlocks } from "./context.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
@@ -278,42 +286,56 @@ const presenceTickBody = async (): Promise<void> => {
       characterId: c.id,
       chatId: c.chat_id,
     };
+    // 앞 틱에서 못 나간 문안이 같은 블록의 것이면 모델을 다시 부르지 않고 그것부터 보낸다 —
+    // 길이 몇 분 끊긴 사이 같은 예고를 매 틱 새로 만들어 또 실패하는 것을 막는다(이슈 #269).
+    let outgoing: HeldDraft | null = takeHeldDraft(
+      c.chat_id,
+      "away",
+      target.start,
+    );
     try {
-      const draft = await chatJson<{
-        send: boolean;
-        away?: string;
-        text?: string;
-      }>(
-        buildSystemBlocks(c.id, c.chat_id, {
-          recent: PROACTIVE_RECENT_LINES,
-          situation: presenceSituation(
-            target,
-            between,
-            prevAct,
-            last.role === "user",
-          ),
-        }),
-        "위 상황 문단대로 문안을 만들어.",
-        400,
-        config.model, // 실시간성이라 대화 모델(sonnet)
-        meta,
-      );
-      // 자리를 비우는 일을 적는 칸이 비었으면 보내지 않는다 — 상대 말에 답만 하고 나간 문안이
-      // 이 모양이다(이슈 #265). 다음 틱에 아직 알릴 창 안이면 다시 만든다.
-      const away = typeof draft.away === "string" ? draft.away.trim() : "";
-      if (draft.send && draft.text && !away) {
-        console.log(
-          `[presence] ${c.chat_id} @ ${target.activity} 접음 — 문안에 자리를 비우는 일이 없다`,
+      if (!outgoing) {
+        const draft = await chatJson<{
+          send: boolean;
+          away?: string;
+          text?: string;
+        }>(
+          buildSystemBlocks(c.id, c.chat_id, {
+            recent: PROACTIVE_RECENT_LINES,
+            situation: presenceSituation(
+              target,
+              between,
+              prevAct,
+              last.role === "user",
+            ),
+          }),
+          "위 상황 문단대로 문안을 만들어.",
+          400,
+          config.model, // 실시간성이라 대화 모델(sonnet)
+          meta,
         );
-      } else if (
-        // 발송 직전 재확인 — LLM을 기다리는 사이 대화 상태가 바뀌었으면(유저 추가 발화·다른 발송) 접는다
-        draft.send &&
-        draft.text &&
-        lastMessage(c.chat_id)?.sent_at === last.sent_at
-      ) {
-        await sendProactive(c.chat_id, c.id, draft.text, "away", {
+        // 자리를 비우는 일을 적는 칸이 비었으면 보내지 않는다 — 상대 말에 답만 하고 나간 문안이
+        // 이 모양이다(이슈 #265). 다음 틱에 아직 알릴 창 안이면 다시 만든다.
+        const away = typeof draft.away === "string" ? draft.away.trim() : "";
+        if (draft.send && draft.text && !away) {
+          console.log(
+            `[presence] ${c.chat_id} @ ${target.activity} 접음 — 문안에 자리를 비우는 일이 없다`,
+          );
+        } else if (draft.send && draft.text) {
+          outgoing = {
+            kind: "away",
+            text: draft.text,
+            block: target.start,
+            madeAt: Date.now(),
+          };
+        }
+      }
+      // 발송 직전 재확인 — LLM을 기다리는 사이 대화 상태가 바뀌었으면(유저 추가 발화·다른 발송) 접는다
+      if (outgoing && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+        await sendProactive(c.chat_id, c.id, outgoing.text, "away", {
           block: target.start,
         });
+        outgoing = null; // 나갔으니 들고 있지 않는다
         console.log(
           `[presence] ${c.chat_id} @ ${target.activity} (between=${between})`,
         );
@@ -328,6 +350,9 @@ const presenceTickBody = async (): Promise<void> => {
         error: msg,
         callId: meta.callId,
       });
+      // 만들어 둔 문안이 한 통도 못 나갔으면 들고 있는다(일부라도 나가면 sendProactive가
+      // 던지지 않으므로 여기 오지 않는다 — 같은 말이 두 번 나갈 일은 없다).
+      if (outgoing) holdFailedDraft(c.chat_id, outgoing);
     } finally {
       releaseProactive(c.chat_id);
     }

@@ -66,7 +66,7 @@ const graceUntil = (windowStart: string, windowEnd: string): string => {
   return d < "06:30" ? "06:30" : d;
 };
 
-// 틱이 겹치지 않게 — 재시도 간격을 넓히면서 한 틱이 최대 ~100초까지 붙잡힐 수 있게 됐고,
+// 틱이 겹치지 않게 — 재시도 간격을 넓히면서 한 틱이 최대 ~130초까지 붙잡힐 수 있게 됐고,
 // 틱 간격도 짧아졌다. 겹치면 같은 행을 두 틱이 집어 이중 발송이 된다.
 let running = false;
 

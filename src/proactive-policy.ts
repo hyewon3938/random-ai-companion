@@ -6,6 +6,10 @@
 // 세 자리가 각자 판단하면 준비한 것과 보내는 것이 어긋난다.
 //
 // 유저 메시지가 오면 즉시 평상으로 돌아온다.
+//
+// 발송에 실패한 선톡 문안을 다음 틱까지 들고 있는 자리도 여기다(holdFailedDraft·
+// takeHeldDraft). 무엇을 보낼지 정하는 곳과 같은 자리라, 조건이 아직 맞으면 모델을 다시
+// 부르지 않고 만들어 둔 문안부터 보낸다.
 
 import { db, hasUserScheduleOn } from "./db.js";
 import { kstLogicalDate, logicalDateOf } from "./kst.js";
@@ -132,4 +136,73 @@ export const dailySendPlan = (
       reason: `무응답 ${days}일, 아침 대신 점심에 한 통`,
     };
   return { ...base, kind: "morning", reason: "아침에 한 통" };
+};
+
+// 발송에 실패한 선톡 문안을 다음 틱까지 들고 있는 자리.
+//
+// 문안을 만든 직후에 발송이 실패하면 지금까지는 그 문안을 버렸다. 그러면 다음 틱이 같은 조건을
+// 다시 만나 모델을 한 번 더 부르고, 길이 아직 안 열렸으니 또 실패한다 — 밤 인사가 15분 간격으로
+// 세 번 그렇게 나갔다. 만들어 둔 것을 들고 있다가 그 자리가 아직 유효하면 모델 없이 그대로 다시
+// 보낸다. 아침 선톡만 이런 날 살아남는 이유가 문안을 행에 적어 두고 틱마다 다시 보내서다.
+//
+// 표를 새로 만들지 않고 메모리에 채팅별로 마지막 하나만 든다. 프로세스가 다시 뜨면 잊는데,
+// 그때는 조건도 대개 지나 있고 잃는 것은 문안 하나다.
+//
+// 자리가 유효한지는 두 겹으로 본다. 하나는 종류다 — 같은 종류의 자리에 다시 왔을 때만 꺼내
+// 쓴다. 밤 인사처럼 창이 닫히는 문안은 부르는 쪽(followup·presence)이 창·침묵 조건을 이미
+// 다시 확인한 뒤라, 그 자리에 다시 왔다는 것 자체가 창 안이라는 뜻이다. 자리 비움 예고는
+// 활동 블록까지 같아야 한다 — 다음 블록의 예고를 앞 블록 문안으로 보내면 엉뚱한 말이 나간다.
+// 다른 하나는 나이다. 만든 지 오래된 문안은 지금 상황을 더 이상 말하지 못하므로 버린다.
+
+export type HeldDraftKind = "goodnight" | "mend" | "catchup" | "away";
+
+export interface HeldDraft {
+  kind: HeldDraftKind;
+  /** 보낼 문안 본문. 말풍선 나누기는 발송하는 쪽이 한다. */
+  text: string;
+  /** 자리 비움 예고만 채운다 — 같은 활동 블록에서만 다시 보낸다(블록 시작 시각). */
+  block?: string;
+  /** 문안을 만든 시각(ms). 오래되면 버린다. */
+  madeAt: number;
+}
+
+// 들고 있는 시간의 상한. 팔로업 틱이 15분이라 한 번, 자리 비움 틱이 10분이라 두 번까지
+// 다시 보내고 그 뒤로는 버린다. 더 늘리면 "지금 ~하는 중"이라고 쓴 문안이 지난 일을 말한다.
+const HELD_DRAFT_MAX_MS = 20 * 60_000;
+
+const heldDrafts = new Map<string, HeldDraft>();
+
+/** 발송에 실패한 문안을 다음 틱까지 들고 있는다. 만든 시각은 그대로 둔다 — 나이로 버리므로. */
+export const holdFailedDraft = (chatId: string, draft: HeldDraft): void => {
+  heldDrafts.set(chatId, draft);
+  console.log(`[proactive] ${draft.kind} 문안 보관 — 다음 틱에 다시 보낸다`);
+};
+
+/**
+ * 이 자리에서 다시 보낼 문안을 꺼낸다. 없거나 조건이 지났으면 null이고, 꺼낸 것은 지운다.
+ *
+ * 같은 종류인데 자리가 달라졌으면(자리 비움 예고의 블록이 바뀌었으면) 그 문안은 이제 쓸 데가
+ * 없으니 버린다. 다른 종류의 자리에서 물어본 것이면 그대로 둔다 — 자리 비움 틱(10분)이
+ * 밤 인사 문안을 대신 버리면, 정작 그 문안을 보낼 팔로업 틱(15분)이 빈손으로 온다.
+ */
+export const takeHeldDraft = (
+  chatId: string,
+  kind: HeldDraftKind,
+  block?: string,
+): HeldDraft | null => {
+  const d = heldDrafts.get(chatId);
+  if (!d) return null;
+  if (Date.now() - d.madeAt > HELD_DRAFT_MAX_MS) {
+    heldDrafts.delete(chatId);
+    console.log(`[proactive] ${d.kind} 보관 문안 버림 — 만든 지 오래됐다`);
+    return null;
+  }
+  if (d.kind !== kind) return null;
+  if (d.block !== block) {
+    heldDrafts.delete(chatId);
+    console.log(`[proactive] ${d.kind} 보관 문안 버림 — 그 자리가 지났다`);
+    return null;
+  }
+  heldDrafts.delete(chatId);
+  return d;
 };
