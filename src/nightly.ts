@@ -9,6 +9,10 @@
 // 일기에는 기억과 같은 어휘의 주제 태그를 최대 8개 붙인다. 생성 프롬프트에 이미 쓰는 태그
 // 목록을 넣어서, 지난 일기도 같은 태그로 걸린다.
 //
+// 기억 정리 프롬프트에는 이미 있는 키 목록과 함께, 그날 대화·메모에 태그가 걸린 상대 쪽 사실의
+// 지금 값도 싣는다. 캐릭터 쪽 사실·인물·진행 중인 일은 값까지 다 실리는데 상대 쪽 사실은 키만
+// 들어가서, 같은 키를 다시 쓸 때 앞 값의 세부가 지워졌다(이슈 #264).
+//
 // 유저가 오래 조용하면 gather가 침묵 단계를 노출하고 apply가 게이트를 강제한다 — quiet·
 // dormant면 일기와 시드와 리듬만 만들고 각본과 선톡은 건너뛰고, reconnect면 저녁 재연결
 // 문안만 만든다. 밖에서 부르는 경로가 백오프를 몰라도 안전하게 두려는 것이다.
@@ -52,6 +56,8 @@ import {
   existingKeys,
   existingAreas,
   identityLines,
+  searchMemories,
+  tagSearch,
 } from "./memory.js";
 import {
   applyMonthPlan,
@@ -70,6 +76,7 @@ import { afterNightlyTrace, beforeNightlyTrace } from "./nightly-trace.js";
 import {
   DIARY_TAG_MAX,
   EXTRACT_SCHEDULE_MAX,
+  EXTRACT_USER_FACT_MAX,
   LUNCH_WINDOW,
   RECONNECT_WINDOW,
   RECENT_DIARY_DAYS,
@@ -187,6 +194,10 @@ export interface NightlyGathered {
   identity: string; // 정체성 사실 줄들 (creation + conversation, 같은 키는 최신이 이김)
   people: string; // 주변 인물 줄들 (캐릭터 쪽·유저 쪽 모두)
   ongoing: string; // 진행 중인 일 줄들
+  // 상대 쪽 사실 중 그날 대화·메모에 태그가 걸린 것의 지금 값. identity가 캐릭터 쪽 사실을
+  // 전부 싣는 것과 달리 상대 쪽은 키만 들어가서, 같은 키를 다시 쓸 때 모델이 앞 값을 못 보고
+  // 그날 들은 것만 적었다(이슈 #264). 전부 싣지 않고 겹치는 것만 EXTRACT_USER_FACT_MAX까지.
+  touchedUserFacts: string[];
   relationship: string; // 관계 일곱 항목의 지금 값
   userProfile: string; // 대화로 채우는 상대 프로필 두 값(하는 일·사는 지역)의 지금 상태
   todayNotes: string[]; // 그 하루 동안 대화하며 적어 둔 오늘 메모
@@ -260,6 +271,31 @@ const personLine = (r: MemoryRow): string => {
 
 const ongoingLine = (r: MemoryRow): string =>
   `- ${r.owner === "user" ? "(상대) " : ""}${r.area}/${r.subject}: ${r.value}${r.end_condition ? ` (끝나는 조건: ${r.end_condition})` : ""}`;
+
+// 갱신 날짜를 함께 적는다 — 앞 값이 언제 것인지 알아야 한 번 있었던 일과 이어지는 상태를 가른다.
+const userFactLine = (r: MemoryRow): string =>
+  `- ${r.area}/${r.subject}: ${r.value} (${r.updated_at.slice(0, 10)} 갱신)`;
+
+/**
+ * 상대 쪽 사실 중 그날 대화·메모에 태그가 걸린 것을 지금 값과 함께 줄로 만든다.
+ * 답장 경로와 같은 태그 대조·고르기(tagSearch·searchMemories)를 쓰고, 상한만 새벽 정리 것으로
+ * 바꾼다. 캐릭터 쪽 사실은 검색 대상이 아니라(recall.ts searchable) 여기 섞이지 않는다.
+ * 꺼낸 기록은 남기지 않는다 — 답장에 넣은 것이 아니라서.
+ */
+export const touchedUserFactLines = (
+  characterId: number,
+  dayText: string,
+): string[] => {
+  const { tags } = tagSearch(characterId, dayText);
+  if (!tags.length) return [];
+  return searchMemories(characterId, tags, {
+    itemTypes: ["fact"],
+    limits: { fact: EXTRACT_USER_FACT_MAX },
+    track: false,
+  })
+    .filter((r) => r.owner === "user")
+    .map(userFactLine);
+};
 
 // 대화로 채우는 프로필 두 값의 지금 상태. 모르는 값을 그대로 드러내 추출 호출이
 // 무엇을 찾아야 하는지 알게 하고, 이미 아는 값은 다시 쓰지 않게 한다.
@@ -341,6 +377,16 @@ export const gatherNightlyInput = (
     text: string;
   }[];
 
+  const convo = msgs
+    .map(
+      (m) =>
+        `[${m.sent_at.slice(11, 16)}] ${m.role === "user" ? "상대" : "나"}: ${m.text.replace(/\n/g, " ")}`,
+    )
+    .join("\n");
+  const todayNotes = getTodayNotes(character.id, `${diaryDate} 05:00:00`)
+    .filter((n) => n.created_at < `${diaryNext} 05:00:00`)
+    .map((n) => `[${n.created_at.slice(11, 16)}] ${n.note}`);
+
   const silence = silenceState(character.chat_id, character.id);
   const plan = dailySendPlan(character.chat_id, character.id, today);
   return {
@@ -354,12 +400,7 @@ export const gatherNightlyInput = (
         `SELECT 1 FROM diary_entries WHERE character_id = ? AND date = ? LIMIT 1`,
       )
       .get(character.id, diaryDate),
-    convo: msgs
-      .map(
-        (m) =>
-          `[${m.sent_at.slice(11, 16)}] ${m.role === "user" ? "상대" : "나"}: ${m.text.replace(/\n/g, " ")}`,
-      )
-      .join("\n"),
+    convo,
     msgsCount: msgs.length,
     planBriefYesterday: planBrief(getDayPlan(character.id, diaryDate)),
     planExistsToday: !!getDayPlan(character.id, today),
@@ -368,11 +409,13 @@ export const gatherNightlyInput = (
     ongoing: listMemoryItems(character.id, "ongoing")
       .map(ongoingLine)
       .join("\n"),
+    touchedUserFacts: touchedUserFactLines(
+      character.id,
+      [convo, ...todayNotes].join("\n"),
+    ),
     relationship: relationshipLines(getRelationship(character.id)),
     userProfile: userProfileLines(character.chat_id),
-    todayNotes: getTodayNotes(character.id, `${diaryDate} 05:00:00`)
-      .filter((n) => n.created_at < `${diaryNext} 05:00:00`)
-      .map((n) => `[${n.created_at.slice(11, 16)}] ${n.note}`),
+    todayNotes,
     dayActuals: getDayActuals(character.id, diaryDate).map(
       (a) =>
         `- ${a.block_start ? `${clockLabel(a.block_start)} ` : ""}${a.intended} → ${a.outcome}${a.reason ? ` (${a.reason})` : ""}`,
@@ -728,7 +771,7 @@ const TAG_RULE = `내용과 관련된 말을 넉넉히 붙인다. 사람 이름�
 
 const EXTRACT_SYSTEM = `너는 캐릭터의 하루에서 다음 대화에 필요한 기억을 정리하는 정리자다. 대화에 나온 확실한 사실만 담고, 남길 것이 없으면 빈 배열을 준다.`;
 
-const extractPrompt = (g: NightlyGathered): string => {
+export const extractPrompt = (g: NightlyGathered): string => {
   const keyLines = g.existingKeys
     .map((k) => `- ${k.itemType} ${k.owner} ${k.key}`)
     .join("\n");
@@ -742,6 +785,9 @@ ${g.people || "(없음)"}
 
 [진행 중인 일]
 ${g.ongoing || "(없음)"}
+
+[상대에 대해 이미 아는 것 — 오늘 대화와 겹치는 키의 지금 값]
+${g.touchedUserFacts.join("\n") || "(없음)"}
 
 [상대와의 관계 — 지금 값]
 ${g.relationship || "(이제 막 시작한 사이)"}
@@ -771,13 +817,16 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"]}]}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"]}]}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.
 - item_type: 그때그때의 사실=fact / 끝나는 조건이 있는 일=ongoing / 사람=person.
 - 키 = 영역/무엇. 영역은 위 [영역 이름 목록]에서 고르고, 꼭 맞는 게 없을 때만 새로 만든다(12자 이내). '무엇'은 명사 한 덩어리 20자 이내. 두 자리 모두 슬래시·세로줄·쉼표·가운뎃점 금지.
-- 같은 주제가 [이미 있는 키]에 있으면 반드시 그 키를 그대로 쓴다 — 같은 키에 쓰면 내용이 새 사실로 갈아 끼워진다. 이미 아는 내용과 같은 것은 다시 넣지 않는다.
+- 같은 주제가 [이미 있는 키]에 있으면 반드시 그 키를 그대로 쓴다. 같은 키에 쓰면 값이 통째로 갈아 끼워지니, 다시 쓸 때는 위에 적힌 앞 값에 있던 원인 추정·장소·이름·숫자 같은 세부를 그대로 두고 이번에 새로 안 것을 합쳐 쓴다. 앞 값과 모순되는 부분만 새 값으로 바꾼다. 이미 아는 내용과 같은 것은 다시 넣지 않는다.
+- 합친 값이 길어지면 지나간 상태와 되풀이된 감상부터 줄이고, 원인·장소·이름·숫자처럼 한 번 지우면 되찾을 수 없는 것은 남긴다. 값은 두 문장 안에 둔다.
+- 한 번 있었던 일은 날짜를 붙인 사건으로 적는다(예: ${g.diaryDate} 저녁에 야근했다). 평소 그렇다는 성향 문장은 같은 모습이 앞 값에도 있어 여러 번 나왔을 때만 쓴다.
+- 값에는 사실만 적고, 그날 대화에서 누가 무엇을 묻고 어떻게 답했는지 같은 장면은 넣지 않는다. 그런 장면은 일기의 몫이다.
 - person: 영역=갈래(가족·직장·친구 등), 무엇=이름(모르면 호칭 그대로). 상대가 흘리듯 언급한 상대 쪽 사람도 빠뜨리지 않는다. 이미 아는 인물은 내용이 달라졌을 때만 같은 키로 다시 쓴다.
 - "~라고 불러줘" 같은 지시·부탁은 사실 문장으로 바꿔 저장한다 (예: 상대는 OO라고 불리는 걸 좋아한다).
 - tags: ${TAG_RULE}
