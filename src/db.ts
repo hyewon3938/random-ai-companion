@@ -1357,6 +1357,26 @@ export const addSchedule = (
   );
 };
 
+// 이미 있는 일정 줄의 시각만 고쳐 적는다. 오후라고만 적힌 줄의 시각이 대화에서 정해진 날,
+// 새벽 정리가 새 줄을 만드는 대신 이 자리로 온다 — 같은 일을 두 줄로 쌓지 않으면서 다음 날
+// 각본이 그 시각을 쓰게 하려면 원본 줄의 값을 고치는 수밖에 없다(이슈 #278).
+//
+// 고치는 것은 time_hint 하나뿐이다. 주인·날짜·내용까지 열어 두면 새벽 정리 한 번이 이미 저장된
+// 일정을 다른 일로 바꿔 놓을 수 있고, 그 자리에는 되돌릴 값이 남지 않는다.
+// character_id를 함께 걸어 생성이 엉뚱한 번호를 답해도 다른 캐릭터의 일정에 닿지 않게 한다.
+// status를 active로 거르는 것은 취소·미룸으로 접힌 일정의 시각을 다시 적을 이유가 없어서다.
+export const setScheduleTimeHint = (
+  characterId: number,
+  id: number,
+  timeHint: string,
+): boolean =>
+  db
+    .prepare(
+      `UPDATE schedules SET time_hint = ?
+       WHERE character_id = ? AND id = ? AND status = 'active'`,
+    )
+    .run(timeHint, characterId, id).changes > 0;
+
 // 같은 주인·날짜에 지금 살아 있는 일정들. 새벽 정리가 대화에서 뽑은 일정을 넣기 전에
 // 이 목록과 견줘 같은 일이면 넣지 않는다(nightly.ts). status를 active로 거르는 것은
 // 취소·미룸으로 표시된 줄과는 겹쳐도 막지 않으려는 것이다 — 접혔던 일이 다시 잡히면 그건

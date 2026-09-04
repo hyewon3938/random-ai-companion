@@ -1,7 +1,8 @@
 // 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 // 입력 형식: {"characterId": n, "output": {"entry": {...},
 //            "extract": {"memories":[...], "relationship":{...}|null,
-//                        "user_profile":{"job"?,"region"?}|null, "schedules":[...]}|null,
+//                        "user_profile":{"job"?,"region"?}|null, "schedules":[...],
+//                        "schedule_updates":[{"id","time_hint"}]?}|null,
 //            "progress": [{"id","value","done"?}]|null,
 //            "plan": {...}|null, "send": {"window_start","window_end","text","kind"?}|null,
 //            "arcs": {...}|null, "rhythm": [...]|null}}

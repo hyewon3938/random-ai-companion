@@ -17,6 +17,10 @@
 // 일정] 목록을 보여주고 다시 적지 말라고 하는데도 같은 일이 날마다 한 줄씩 쌓여서(이슈 #267),
 // 저장하는 자리에서도 한 번 막는다.
 //
+// 그렇게 걸러진 일이라도 시각이 이번 대화에서 정해졌으면 이미 있는 줄의 time_hint를 그 값으로
+// 고친다(이슈 #278). 캐릭터가 말한 시각이 아무 데도 안 남으면 다음 날 각본이 오후라고만 적힌
+// 값을 보고 엉뚱한 시각에 그 일을 넣어, 어제 말한 시각과 다른 하루가 만들어진다.
+//
 // 유저가 오래 조용하면 gather가 침묵 단계를 노출하고 apply가 게이트를 강제한다 — quiet·
 // dormant면 일기와 시드와 리듬만 만들고 각본과 선톡은 건너뛰고, reconnect면 저녁 재연결
 // 문안만 만든다. 밖에서 부르는 경로가 백오프를 몰라도 안전하게 두려는 것이다.
@@ -32,6 +36,7 @@ import {
   getRelationship,
   updateRelationshipNotes,
   addSchedule,
+  setScheduleTimeHint,
   getActiveSchedulesOn,
   getArcs,
   saveArc,
@@ -172,6 +177,10 @@ export interface ExtractOutput {
     // 옵셔널인 이유는 이미 저장된 일정과 아직 이 항목을 안 만드는 생성 경로가 있어서다.
     tags?: string[];
   }[];
+  // 이미 저장된 일정 줄의 시각을 이번 대화에서 정해진 값으로 고친다. 새 줄을 만드는 자리가
+  // 아니라 있는 줄을 고치는 자리라, id는 프롬프트의 [이미 저장된 일정]에 보여 준 번호다.
+  // 옵셔널인 이유는 이 항목을 아직 안 만드는 생성 경로가 있어서다(이슈 #278).
+  schedule_updates?: { id: number; time_hint: string }[];
 }
 
 export interface SendDraft {
@@ -578,6 +587,7 @@ const applyNightlyTxn = db.transaction(
     const extractTouched = new Set<string>();
     let schedTagCount = 0;
     let schedSkipped = 0;
+    let schedTimeFixed = 0;
     let profileFilled: string[] = [];
     const skippedKeys: string[] = [];
     if (ex) {
@@ -701,6 +711,20 @@ const applyNightlyTxn = db.transaction(
         console.log(
           `[nightly] 이미 있는 일정 ${schedSkipped}건은 다시 넣지 않음 (캐릭터 ${g.characterId}, ${g.diaryDate})`,
         );
+
+      // 이미 있는 줄의 시각 고치기. 위 넣기와 달리 값을 덮어쓰는 자리라 성한 것만 넘긴다 —
+      // 번호가 아니거나 시각이 빈 줄은 여기서 버리고, 남의 캐릭터·접힌 일정인지는 db가 건다.
+      for (const u of ex.schedule_updates ?? []) {
+        const schedId = Number(u?.id);
+        const hint = typeof u?.time_hint === "string" ? u.time_hint.trim() : "";
+        if (!Number.isInteger(schedId) || schedId <= 0 || !hint) continue;
+        if (setScheduleTimeHint(g.characterId, schedId, hint))
+          schedTimeFixed += 1;
+      }
+      if (schedTimeFixed)
+        console.log(
+          `[nightly] 일정 시각 ${schedTimeFixed}건 고침 (캐릭터 ${g.characterId}, ${g.diaryDate})`,
+        );
     }
 
     // 그날 각본: 없으면 저장하고, 있어도 새벽 대화가 만든 lazy 각본이면 정식 각본으로 교체한다.
@@ -803,7 +827,7 @@ const applyNightlyTxn = db.transaction(
       `${nextDate(g.diaryDate)} 05:00:00`,
     );
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
@@ -985,7 +1009,7 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"]}]}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"]}],"schedule_updates":[{"id":0,"time_hint":"14:30"}]}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.
@@ -1010,9 +1034,15 @@ schedules 규칙:
 - 기준 날짜로 환산 가능한 날짜만. 위 정체성의 직업·생활과 어긋나는 날짜면 제외한다.
 - 위 [이미 저장된 일정]에 같은 일이 있으면 넣지 않는다. 말이 조금 다르게 적혀 있어도
   같은 날 같은 약속을 가리키면 같은 일이다 — 시간이나 사람 이름이 이번에 더 나왔다고
-  해서 새로 적지 않는다. 그 줄은 이미 있는 것으로 두고 넘어간다.
+  해서 새로 적지 않는다. 그 줄은 이미 있는 것으로 두고 넘어간다. 시각이 이번에 정해진
+  것이면 아래 schedule_updates로 그 줄을 고친다.
 - 새 일정으로 넣는 것은 [이미 저장된 일정]에 없는 일만이다.
-- tags: ${TAG_RULE}`;
+- tags: ${TAG_RULE}
+schedule_updates 규칙:
+- [이미 저장된 일정]에 있는 줄의 시각이 이번 대화에서 정해졌으면 그 줄 앞 [번호]와 정해진 시각을 넣는다. 오후라고만 적혀 있던 줄에 두 시 반이라는 말이 오간 자리가 이 경우다.
+- 고치는 것은 시각뿐이다. 날짜·내용·주인이 달라졌으면 여기 넣지 않는다.
+- 이미 적힌 시각과 같거나 대화에서 시각이 안 나온 줄은 넣지 않는다. 고칠 줄이 없으면 빈 배열.
+- time_hint는 14:30처럼 시각으로 적을 수 있으면 시각으로, 아니면 대화에 나온 말 그대로 적는다.`;
 };
 
 // ── 선톡 문안 — 대화와 같은 3층 프롬프트(buildSystemBlocks)에 상황 문단만 얹는다 ──
