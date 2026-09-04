@@ -47,7 +47,13 @@ const columnNames = (table: string): string[] =>
   );
 
 test("빈 DB는 최신 버전으로 선다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 6);
+  assert.equal(db.pragma("user_version", { simple: true }), 7);
+});
+
+test("새로 만든 DB에도 호출 관측 칸 둘이 있다", () => {
+  const calls = columnNames("llm_calls");
+  for (const c of ["stop_reason", "block_types"])
+    assert.ok(calls.includes(c), `llm_calls.${c}이 없다`);
 });
 
 test("지운 표는 새로 만든 DB에도 없다", () => {

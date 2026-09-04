@@ -284,6 +284,10 @@ const TABLES: Record<string, string> = {
   // purpose에는 CHECK를 두지 않는다. 호출 자리가 하나 늘 때마다 스키마 이관이 따라붙고,
   // CHECK에 걸린 INSERT는 기록을 통째로 잃는다. 값은 labels.ts의 CallPurpose 타입이
   // 컴파일 시점에 막는다.
+  //
+  // stop_reason·block_types는 응답이 왜 멈췄고 어떤 블록으로 왔는지다. 저장하는 본문은
+  // 텍스트 블록뿐이라 생각 과정으로 나간 몫은 출력 토큰에만 잡히는데, 그 차이를 며칠에 걸쳐
+  // 보려면 로그가 아니라 여기에 있어야 한다 — 컨테이너를 다시 만들면 로그는 지워진다(#218).
   llm_calls: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER REFERENCES characters(id),
@@ -300,6 +304,8 @@ const TABLES: Record<string, string> = {
   cache_read_tokens INTEGER,
   output_tokens INTEGER,
   latency_ms INTEGER,
+  stop_reason TEXT,
+  block_types TEXT,
   error TEXT,
   context_json TEXT,
   code_version TEXT,
@@ -363,7 +369,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -750,9 +756,30 @@ const migrateToV6 = (): void => {
   console.log(`[db] 스키마를 v6으로 옮겼다`);
 };
 
+// v7: 모델 호출에 중단 사유와 응답 블록 종류 칸을 더한다(#218).
+//
+// 지금까지 이 둘은 호출 로그 한 줄에만 있었다. 컨테이너를 다시 만드는 배포가 그 로그를 함께
+// 버리므로, 며칠에 걸쳐 분포를 봐야 하는 값이 배포 한 번에 끊겼다. 본문 보관 기간이 지나도
+// 남는 메타 쪽에 두어 90일 뒤에도 어느 호출이 상한에서 잘렸는지 셀 수 있게 한다.
+const migrateToV7 = (): void => {
+  const cols = db.prepare(`PRAGMA table_info(llm_calls)`).all() as {
+    name: string;
+  }[];
+
+  db.transaction(() => {
+    for (const column of ["stop_reason", "block_types"])
+      if (!cols.some((c) => c.name === column))
+        db.exec(`ALTER TABLE llm_calls ADD COLUMN ${column} TEXT`);
+    db.pragma(`user_version = 7`);
+  })();
+
+  console.log(`[db] 스키마를 v7로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < 5) migrateToV5();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV6();
+if (schemaVersion() < 6) migrateToV6();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV7();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를
@@ -1546,6 +1573,10 @@ export interface LlmCallInput {
   latencyMs: number;
   error?: string;
   codeVersion?: string;
+  /** 응답이 왜 멈췄는지(end_turn·max_tokens 등). 호출이 실패한 행은 값이 없다. */
+  stopReason?: string;
+  /** 응답이 어떤 블록으로 왔는지 종류별 개수(예: `thinking:1,text:1`). */
+  blockTypes?: string;
 }
 
 /** 호출 한 건을 남기고 행 번호를 돌려준다. 뒤에 판단 근거를 붙일 때 이 번호를 쓴다. */
@@ -1560,8 +1591,8 @@ export const recordLlmCall = (call: LlmCallInput): number => {
          (character_id, chat_id, purpose, model, max_tokens, attempt,
           system_hashes, turns_hash, output_hash,
           input_tokens, cache_write_tokens, cache_read_tokens, output_tokens,
-          latency_ms, error, code_version, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          latency_ms, stop_reason, block_types, error, code_version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       call.characterId ?? null,
@@ -1578,6 +1609,8 @@ export const recordLlmCall = (call: LlmCallInput): number => {
       call.usage?.cacheRead ?? null,
       call.usage?.output ?? null,
       call.latencyMs,
+      call.stopReason ?? null,
+      call.blockTypes ?? null,
       call.error ? call.error.slice(0, 500) : null,
       call.codeVersion ?? null,
       stampNow(),
