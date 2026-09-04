@@ -146,7 +146,6 @@ const relationships = all<{
   speech_level: string | null;
   updated_at: string | null;
   filled: string;
-  legacy: number;
 }>(
   `SELECT character_id, speech_level, updated_at,
      (CASE WHEN stage IS NOT NULL THEN '사이 ' ELSE '' END) ||
@@ -155,8 +154,7 @@ const relationships = all<{
      (CASE WHEN rapport IS NOT NULL THEN '잘통함 ' ELSE '' END) ||
      (CASE WHEN cautions IS NOT NULL THEN '조심 ' ELSE '' END) ||
      (CASE WHEN history IS NOT NULL THEN '지나온 ' ELSE '' END) ||
-     (CASE WHEN feelings IS NOT NULL THEN '마음' ELSE '' END) AS filled,
-     length(coalesce(legacy_state_json, '')) AS legacy
+     (CASE WHEN feelings IS NOT NULL THEN '마음' ELSE '' END) AS filled
    FROM relationships ORDER BY character_id`,
 );
 
@@ -401,7 +399,7 @@ for (const r of relationships) {
   line(
     `  #${r.character_id} 말투 ${r.speech_level ?? "-"} · 갱신 ${r.updated_at ?? "없음"} · 채워진 항목 ${
       r.filled.trim() || "없음"
-    } · 옛 JSON ${r.legacy}자`,
+    }`,
   );
 }
 

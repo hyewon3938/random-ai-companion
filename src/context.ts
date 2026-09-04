@@ -229,8 +229,8 @@ const basicFacts = (name: string): string =>
     .filter(Boolean)
     .join("\n");
 
-// 관계 일곱 항목 — 전부 항상 주입, 빈 값은 줄 생략. last_contact_at은 넣지 않는다:
-// 매 답장마다 갱신되는 값이라 이 층의 캐시를 죽인다. speech_level은 꼬리의 말투 판정이 쓴다.
+// 관계 일곱 항목 — 전부 항상 주입, 빈 값은 줄 생략. 마지막으로 연락한 시각은 넣지 않는다:
+// 매 답장마다 바뀌는 값이라 이 층의 캐시를 죽인다. speech_level은 꼬리의 말투 판정이 쓴다.
 const relationshipSection = (rel: RelationshipRow | undefined): string => {
   if (!rel) return "";
   const items: [string, string | null][] = [
