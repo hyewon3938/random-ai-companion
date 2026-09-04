@@ -15,7 +15,7 @@
 // 무엇이 바꾼 것인지 가릴 수 없다.
 import "./guard-db.js"; // db.js보다 먼저 — 운영 DB로 도는 것을 막는다
 import { db, type CharacterRow } from "../db.js";
-import { createDaepyoCharacter } from "../character.js";
+import { createFixtureCharacter } from "./fixture-character.js";
 import { buildSystemBlocks } from "../context.js";
 import { chat } from "../llm.js";
 import { config } from "../config.js";
@@ -80,8 +80,7 @@ const activeCharacter = (): { id: number; chatId: string } => {
     )
     .get() as CharacterRow | undefined;
   if (row) return { id: row.id, chatId: row.chat_id };
-  const made = createDaepyoCharacter(EVAL_CHAT_ID);
-  return { id: made.id, chatId: EVAL_CHAT_ID };
+  return { id: createFixtureCharacter(EVAL_CHAT_ID), chatId: EVAL_CHAT_ID };
 };
 
 interface Result {

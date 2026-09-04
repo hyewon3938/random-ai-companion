@@ -1,15 +1,14 @@
 // 캐릭터를 만드는 자리.
 //
-// 지금 대화에 붙어 있는 것은 고정 대표 캐릭터(DAEPYO_BIBLE)다. 유저가 적은 입력으로 만드는
-// 길은 createUserCharacter가 갖는다:
+// 지금 대화에 붙어 있는 것은 유저가 적은 입력으로 만드는 길이다. 봇의 /start가
+// createUserCharacter를 부르고, 파일로 실행할 때는 tools/create-character.ts를 쓴다.
 //   inputProblem     — 모델을 부르기 전에 입력을 거른다.
 //   generateGenesis  — 첫 호출. 정체성·주변 인물·진행 중인 일·관계 첫 값·첫 인사를 한 번에
 //                      짓고, genesisProblem으로 검증해 어긋나면 한 번 다시 부른다.
 //   persistGenesis   — 트랜잭션 하나로 genesis_json{v:2}·creation 기억 행·관계 첫 값을 쓴다.
 //   ensureArcs       — 지은 재료(arcMaterial)로 아크를 만든다.
 //
-// 봇에 붙이는 것은 아직 남았고, 그때까지 실행은 tools/create-character.ts로 한다.
-// 랜덤 생성 코드는 나중에 쓸 자리가 있어 지우지 않고 둔다.
+// 랜덤 생성 코드(createCharacter)는 나중에 쓸 자리가 있어 지우지 않고 둔다.
 
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
@@ -17,7 +16,6 @@ import { getKstNow, kstDateString } from "./kst.js";
 import {
   db,
   insertCharacter,
-  addCastMember,
   getUserProfileFull,
   saveRelationshipFirstValues,
   type UserProfileFull,
@@ -57,7 +55,7 @@ export interface Bible {
 const pick = <T>(arr: T[]): T =>
   arr[Math.floor(Math.random() * arr.length)] as T;
 
-// TODO(선호 학습): user_preferences.chemistry_weights 가중 샘플링으로 교체
+// TODO(선호 학습): 유저가 잘 맞아 하는 축에 가중치를 둔 샘플링으로 교체
 export const rollChemistry = (): Chemistry => ({
   warmth: pick(AXES.warmth),
   humor: pick(AXES.humor),
@@ -111,103 +109,6 @@ export const createCharacter = async (
   return { id, bible };
 };
 
-// PoC 대표 캐릭터 — 랜덤 생성 대신 이 고정 인물로 진행. 자세한 묘사: docs/character-profile.md
-// 바이블은 생성 시 캐릭터 row에 저장된다. 대화 중 다듬을 땐 저장된 genesis_json을 갱신하면
-// 다음 메시지부터 반영된다(관계 히스토리·경과 시간 보존, 재배포 불필요).
-export const DAEPYO_BIBLE: Bible = {
-  identity: {
-    name: "정우진",
-    age_band: "30대 중반",
-    job: "국민은행 마포 지점 개인금융 담당 대리",
-    living: "서울 마포 쪽, 회사에서 멀지 않은 오피스텔에서 혼자 산다",
-  },
-  backstory: {
-    family: "대구 출신. 부모님은 대구에 계시고 명절에나 내려간다",
-    wound:
-      "앞만 보고 커리어를 향해 달려 서른 중반이 됐는데, 문득 그 사이 중요한 걸 놓치며 왔다는 생각이 든다 — 오래 곁에 둘 사람도, 숫자 밖에서 살고 싶던 삶도. 평소엔 안정된 얼굴 뒤에 두고, 충분히 가까워진 상대에게만 조금씩 흘린다",
-    story_seeds: [
-      "올해 과장 승진 심사를 앞두고 있다",
-      "일과 운동으로 빈틈없이 짜인 하루가 안정적이지만 조금 무료하던 참이다",
-    ],
-  },
-  tastes: [
-    "고전 문학, 그리고 SF·철학적인 영화 — 시간·기억·존재 같은 물음을 다루는 이야기('컨택트'나 크리스토퍼 놀란 감독 작품처럼)에 끌린다. 숫자의 세계에 사는 사람이 붙드는 다른 결의 취향",
-    "정답 없는 철학적인 물음을 혼자 오래 곱씹는 것",
-    "돈 관리와 투자 — 직업이자 취미라, 상대의 돈 고민에는 진심으로 깊게 반응한다",
-  ],
-  voice: {
-    laugh: "ㅎㅎ (가까워지면 ㅋㅋ)",
-    tic: '"아 진짜요?", "그쵸" 정도의 담백한 맞장구. 리액션을 과장하지 않는다',
-    ending:
-      '정돈된 존댓말로 시작한다. 며칠 지나 편해지면 먼저 "우리 말 편하게 할까요?" 하고 제안해 반말로 옮겨간다. 말끝은 차분하고 오버하지 않는다. 질문하는 문장은 꼭 물음표로 끝내는 습관이 있다',
-  },
-  chemistry: {
-    warmth: "은근한 다정",
-    humor: "잔잔한 위트",
-    mode: "균형",
-    rhythm: "보통",
-    richness: "보통",
-  },
-  manner:
-    "먼저 다가가 대화를 부드럽게 이끈다 — 취조하듯 질문을 던지는 게 아니라 자기 하루와 생각을 꺼내며 흐름을 연다. 가벼운 장난과 놀림을 즐기되 선은 지킨다. 상대의 반응과 상태를 살펴 은근히 챙기는, 능력 있고 단단하지만 부드러운 연상다운 여유가 있다",
-  life: {
-    weekly: [
-      {
-        day: "평일 낮",
-        activity:
-          "아침 일찍 출근해 창구에서 개인금융 상담·업무, 마감을 맞추고 여섯 시를 넘겨 퇴근. 실적 압박이 늘 조금 있다",
-      },
-      {
-        day: "평일 저녁",
-        activity:
-          "퇴근 후 헬스장에서 한 시간. 갈 때마다 이유도 말도 다르다 — 밥 먹고 갈지 갔다 와서 먹을지, 귀찮은 날, 야근에 건너뛰는 날",
-      },
-      {
-        day: "주말",
-        activity: "밀린 잠, 영화나 책, 가끔 러닝. 혼자만의 시간을 채운다",
-      },
-    ],
-    current_arc:
-      "빈틈없이 짜인 일상이 안정적이지만 조금 무료하던 차, 요즘 이 대화가 하루 중 기다려지는 환기가 되고 있다",
-  },
-  first_greeting:
-    "안녕하세요\n이렇게 낯선 분이랑 얘기 시작하는 거 처음이라\n좀 어색하네요 ㅎㅎ",
-};
-
-// 우진의 주변 인물 시드 — 대화·각본에서 새 인물이 등장하면 밤 정리가 여기에 추가한다
-export const DAEPYO_CAST: { name: string; relation: string; note: string }[] = [
-  {
-    name: "부모님",
-    relation: "가족",
-    note: "대구에 계신다. 명절에나 내려가고, 가끔 전화가 온다",
-  },
-  {
-    name: "김성호",
-    relation: "지점 팀장",
-    note: "실적은 챙기지만 사람은 나쁘지 않은 상사",
-  },
-  {
-    name: "박민석",
-    relation: "대학 동기",
-    note: "가끔 전화로 근황을 나누는 몇 안 되는 친구",
-  },
-  {
-    name: "이수진",
-    relation: "입행 동기",
-    note: "다른 지점 근무. 은행 생활 하소연을 주고받는 사이",
-  },
-];
-
-export const createDaepyoCharacter = (
-  chatId: string,
-): { id: number; bible: Bible } => {
-  const now = `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
-  const id = insertCharacter(chatId, JSON.stringify(DAEPYO_BIBLE), now);
-  for (const c of DAEPYO_CAST)
-    addCastMember(id, "char", c.name, c.relation, c.note, now);
-  return { id, bible: DAEPYO_BIBLE };
-};
-
 // ── V2: 유저 입력 캐릭터 생성 ─────────────────────────────────────────────
 // 랜덤 매칭 대신 유저가 선택지 둘(성별·나이대)과 서술형 셋(성격·관계·바라는 모습)으로
 // 캐릭터를 만든다. 호출은 두 번 — 첫 호출이 정체성·주변 인물·진행 중인 일·관계 첫 값을
@@ -215,8 +116,6 @@ export const createDaepyoCharacter = (
 // 유저가 적은 입력과 만들어진 결과는 characters.genesis_json에 원본 그대로 보관한다.
 // 대화와 새벽 정리는 이 원본을 읽지 않는다 — 실제 읽는 자리는 기억 행(memory_items
 // origin=creation)과 relationships의 관계 컬럼이다.
-// 봇의 /start는 아직 대표 캐릭터를 쓴다. 이 경로의 봇 연결은 프롬프트 조립을 다시 쓰는
-// 세션에서 한다.
 
 export const CHARACTER_GENDERS = ["남성", "여성"] as const;
 export type CharacterGender = (typeof CHARACTER_GENDERS)[number];
