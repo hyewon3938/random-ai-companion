@@ -7,7 +7,7 @@
 // 이전 값과 새 값을 나란히 보여주려고, 트랜잭션을 부르기 전에 출력이 쓸 키의 행을 미리 읽어 둔다.
 //
 //   본문   — 반영 요약, 그날 오늘 메모, 각본과 달라진 하루, 관계 갱신(이전→새 값),
-//            상대 프로필 갱신, 새 일정
+//            상대 프로필 갱신, 새 일정, 일정 시각 고침
 //   스레드 — 기억 신규·덮어쓰기, 일기 전문, 오늘 선톡 문안과 발송 창, 새벽 정리가 부른 호출 원문
 //
 // 게시를 위한 모델 호출은 없다. 전부 DB 값과 코드 계산이다.
@@ -17,6 +17,7 @@ import {
   getBlob,
   getMemoryItemById,
   getRelationship,
+  getScheduleById,
   getTags,
   getUserProfile,
   listMemoryItems,
@@ -123,6 +124,8 @@ export interface NightlySnapshot {
   memories: Map<string, MemorySnap>;
   // 진행 반영 대상 행의 이전 값 — 반영 뒤에는 값이 바뀌고 끝난 것은 사실 행으로 옮겨져 번호가 바뀐다.
   progress: Map<number, { label: string; value: string }>;
+  // 시각을 고칠 일정 줄의 이전 값 — 고친 뒤에는 앞의 시각이 남지 않는다.
+  scheduleTimes: Map<number, { label: string; timeHint: string | null }>;
   relationship: RelationshipRow | undefined;
   profile: StoredUserProfile;
 }
@@ -165,9 +168,24 @@ export const beforeNightlyTrace = (
           value: r.value,
         });
     }
+    const scheduleTimes = new Map<
+      number,
+      { label: string; timeHint: string | null }
+    >();
+    for (const u of out.extract?.schedule_updates ?? []) {
+      const id = Number(u?.id);
+      if (!Number.isInteger(id) || id <= 0) continue;
+      const r = getScheduleById(g.characterId, id);
+      if (r)
+        scheduleTimes.set(id, {
+          label: `${r.date} ${r.content}`,
+          timeHint: r.time_hint,
+        });
+    }
     return {
       memories,
       progress,
+      scheduleTimes,
       relationship: getRelationship(g.characterId),
       profile: getUserProfile(g.chatId),
     };
@@ -309,6 +327,16 @@ const headText = (
     );
   const sched = listSection("새 일정", schedules);
   if (sched) parts.push(sched);
+  // 이전 값이 없는 번호는 반영 자리에서 걸러진 것이다(남의 캐릭터·없는 줄·접힌 일정).
+  const timeFixes = (out.extract?.schedule_updates ?? [])
+    .filter((u) => Number.isInteger(Number(u?.id)) && u?.time_hint?.trim())
+    .map((u) => {
+      const before = snap.scheduleTimes.get(Number(u.id));
+      if (!before) return `[${u.id}] 반영 대상이 아니라 건너뜀`;
+      return `${before.label} · ${before.timeHint ?? "시각 없음"} → ${u.time_hint.trim()}`;
+    });
+  const times = listSection("일정 시각 고침", timeFixes);
+  if (times) parts.push(times);
   return parts.join("\n\n");
 };
 
