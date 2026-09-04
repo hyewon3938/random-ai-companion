@@ -22,7 +22,6 @@ erDiagram
     characters ||--o{ schedules : ""
     characters ||--o{ diary_entries : ""
     characters ||--o{ today_notes : ""
-    characters ||--o{ cast_members : "옛 주변 인물 표"
     memory_items ||--o{ tags : "kind=memory"
     diary_entries ||--o{ tags : "kind=diary"
     schedules ||--o{ tags : "kind=schedule"
@@ -67,11 +66,6 @@ erDiagram
         INTEGER character_id FK
         TEXT date "캐릭터 안 유일"
     }
-    cast_members {
-        INTEGER id PK
-        INTEGER character_id FK
-        TEXT name "캐릭터 안 유일"
-    }
     user_profile {
         TEXT chat_id PK
     }
@@ -99,7 +93,6 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 | --- | --- | --- | --- |
 | character_id | INTEGER | O | PK, FK characters.id |
 | met_at | TEXT | O | 만난 날 |
-| last_contact_at | TEXT | | 마지막으로 주고받은 시각. 지금은 채우는 코드가 없다 |
 | stage | TEXT | | 사이 정의 — 친구 · 썸처럼 지금 어떤 사이인지 짧은 서술 |
 | speech_level | TEXT | | 지금 말투 — `polite` 존댓말 · `casual` 반말 |
 | speech_note | TEXT | | 상대에게 쓰는 말투 — 장난스러운 반말처럼 값으로 담기지 않는 부분 |
@@ -109,11 +102,12 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 | history | TEXT | | 만나 온 이야기 — 어떻게 만났고 사이가 어떻게 변해 왔는지 |
 | feelings | TEXT | | 마음 상태 — 캐릭터가 유저에게 가지는 마음 |
 | updated_at | TEXT | | 갱신 시각 |
-| legacy_state_json | TEXT | | 관계 전체를 한 덩어리로 담던 옛 JSON |
 
 관계를 담는 항목은 일곱이다(사이 정의부터 마음 상태까지, 말투는 값과 서술이 한 항목). 프롬프트에는 이 일곱이 항상 전부 들어간다. 초기값은 캐릭터를 만들 때 유저가 적은 관계 설정에서 생성 배치가 채우고, 잘 통하는 것과 조심할 것은 비워 두고 시작해 새벽 정리가 대화에서 채운다.
 
-캐릭터 번호와 만난 날 말고는 전부 비워둘 수 있다. 프롬프트를 조립할 때 빈 항목은 줄째로 빼도록 만들어 둬서, 아직 채우지 못한 항목이 있어도 그대로 돌아간다. legacy_state_json에는 관계 전체를 한 덩어리 JSON으로 담던 옛 값이 들어간다. 생성 배치가 캐릭터를 만들면서 빈 값을 한 번 넣고, 그 뒤로는 개발 도구만 읽는다.
+캐릭터 번호와 만난 날 말고는 전부 비워둘 수 있다. 프롬프트를 조립할 때 빈 항목은 줄째로 빼도록 만들어 둬서, 아직 채우지 못한 항목이 있어도 그대로 돌아간다.
+
+마지막으로 주고받은 시각은 컬럼으로 두지 않는다. 답장 파이프라인이 갱신하도록 만들어 뒀다가 값을 채우지 않은 채로 남아 있어서, 무응답 일수를 대화 기록에서 세는 지금 방식에 맞춰 지웠다.
 
 캐릭터가 유저를 어떻게 대하는지는 이 표에 두지 않고 memory_items의 `태도` 영역에 `creation` 행으로 넣는다(2026-08-29 변경). 이 표의 항목은 새벽 정리가 매일 다시 쓰기 때문에, 유저가 캐릭터를 만들며 적어 낸 태도를 여기에 두면 며칠 대화에 밀려 흐려진다. 생성 때 정한 값은 저장 함수가 고치지 않아 그 자리라야 유지된다. 사이가 어떻게 변해 왔는지는 만나 온 이야기가 계속 담는다.
 
@@ -257,33 +251,11 @@ parent_kind와 parent_id는 이 일정을 만든 항목을 가리킨다. 토요�
 | birth_year | INTEGER | | 출생연도 |
 | job | TEXT | | 하는 일 |
 | region | TEXT | | 사는 지역 |
-| age_band | TEXT | | 나이대. birth_year로 옮길 옛 컬럼 |
 | updated_at | TEXT | | |
 
 이 표를 채우는 코드는 새벽 정리 하나로, 대화에서 하는 일과 사는 지역이 분명히 드러나면 그 둘을 채우고 빈 값은 이미 아는 값을 덮지 않는다. 부르는 이름과 출생연도는 가입할 때 받을 자리인데, 가입 절차를 아직 만들지 않아 넣는 코드도 없다.
 
-나이대를 담는 자리는 age_band와 birth_year 둘로 나뉘어 있다. 캐릭터가 자기 나이를 말할 때는 정체성 기억의 생년월일에서 계산하므로 이 표를 보지 않지만, 유저를 어떻게 부를지 정하는 프롬프트 블록이 유저 나이대를 아직 age_band에서 읽어서 두 컬럼을 함께 둔다. 성별과 나이대는 환경변수로 지정하면 저장값 대신 그 값이 프롬프트에 들어간다.
-
-**cast_members** — 주변 인물을 담던 옛 표
-
-| 컬럼 | 타입 | 필수 | 설명 |
-| --- | --- | --- | --- |
-| id | INTEGER | O | PK |
-| character_id | INTEGER | O | FK characters.id |
-| owner | TEXT | O | 누구 쪽 사람인가 — `char` 캐릭터 · `user` 유저. 기본값 `char` |
-| name | TEXT | O | 이름 |
-| relation_label | TEXT | O | 어떤 사이인가 |
-| area | TEXT | | 영역 |
-| meet_pattern | TEXT | | 만나는 주기 |
-| place | TEXT | | 만나는 곳 |
-| recent_note | TEXT | | 최근 이야기 |
-| user_knows | TEXT | O | 유저가 아는 사람인가 — `unknown` · `known` · `waiting`. 기본값 `unknown` |
-| last_mentioned_at | TEXT | | 마지막으로 언급된 시각 |
-| created_at | TEXT | O | |
-
-키·인덱스: PK `id`, UNIQUE `(character_id, name)`
-
-주변 인물은 memory_items의 `person` 행에 저장한다. 이 표에는 미리 정해둔 캐릭터 하나로 시작하는 경로에서만 생성 배치가 행을 넣고, 프롬프트는 이 표를 읽지 않는다. 남은 행은 관리 대시보드와 옛 데이터를 옮기는 도구가 읽는다.
+유저 나이대는 저장하지 않고 출생연도에서 계산한다. 나이대를 따로 적어 두면 해가 바뀌어도 그 값이 그대로 남아 실제 나이와 어긋난다. 캐릭터가 자기 나이를 말할 때도 이 표가 아니라 정체성 기억의 생년월일에서 계산한다. 성별과 나이대는 환경변수로 지정하면 저장값 대신 그 값이 프롬프트에 들어간다.
 
 ## 관계도 2 — 캐릭터의 삶
 
@@ -404,9 +376,6 @@ erDiagram
     send_failures {
         INTEGER id PK
     }
-    user_preferences {
-        TEXT chat_id PK
-    }
     llm_usage {
         TEXT date PK
         TEXT model PK
@@ -513,15 +482,6 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | kind | TEXT | O | `away` · `catchup` · `goodnight` · `mend` |
 | error | TEXT | O | |
 | failed_at | TEXT | O | |
-
-**user_preferences** — 캐릭터와 무관한 유저 자체의 선호를 담을 자리. 지금은 쓰기·읽기 모두 없이 자리만 유지
-
-| 컬럼 | 타입 | 필수 | 설명 |
-| --- | --- | --- | --- |
-| chat_id | TEXT | O | PK |
-| pref_json | TEXT | O | |
-
-캐릭터마다 다른 선호는 relationships의 잘 통하는 것이 담고, 이 테이블은 캐릭터를 여럿 두는 구조가 생겼을 때 유저가 어떤 캐릭터와 잘 맞는지 같은 유저 단위의 선호를 담는다. 읽는 코드가 없는 값을 미리 쌓으면 기준이 바뀔 때 버리게 되어서 지금은 자리와 뜻만 정해 두고, 채울 때가 오면 대화 원문과 카드 반응, 관계가 얼마나 이어졌는지의 기록에서 뽑는다.
 
 **llm_usage** — 모델 호출량과 캐시 재사용 집계
 
@@ -638,7 +598,6 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | schedules | 새벽 정리, 월 리듬 | 프롬프트 조립, 각본 생성, 선톡 모듈 |
 | diary_entries | 새벽 정리 | 프롬프트 조립(최근 며칠 항상, 지난 것은 태그 일치), 새벽 정리, 아크 갱신 |
 | user_profile | 새벽 정리(하는 일 · 사는 지역) | 프롬프트 조립, 생성 배치, 각본 생성, 선톡 모듈 |
-| cast_members | 생성 배치(미리 정해둔 캐릭터로 시작할 때만) | 관리 대시보드 |
 | arcs | 새벽 정리(달력 경계) | 프롬프트 조립, 각본 생성, 월 리듬 |
 | day_seeds | 월 리듬 | 각본 생성, 새벽 정리 |
 | day_plans | 새벽 정리, 각본 생성(임시) | 답장 파이프라인(텀 결정), 프롬프트 조립, 선톡 모듈, 새벽 정리 |
@@ -648,7 +607,6 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | scheduled_messages | 새벽 정리 | 선톡 모듈 |
 | recovery_marks | 답장 파이프라인 | 답장 파이프라인(부팅 복구) |
 | send_failures | 선톡 모듈 | 운영 점검 |
-| user_preferences | 없음 (자리만) | 없음 |
 | llm_usage | llm 래퍼 | 운영 점검 |
 | llm_calls | llm 래퍼(호출할 때), 답장 파이프라인(판단 근거) | 운영 점검 |
 | prompt_blobs | llm 래퍼 | 운영 점검(llm_calls의 해시로 찾아 읽음) |

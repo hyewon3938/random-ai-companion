@@ -93,7 +93,8 @@ const build = (db: Database.Database, file: string): string => {
   // 자리만 만들어 두고 읽거나 쓰는 코드가 없는 표·컬럼을 손으로 적어 둔다.
   // 코드에서 자동으로 뽑지 않는 이유는 판정 기준이 "런타임에서 부르는 곳이 있는가"라서다 —
   // 정의는 남아 있고 부르는 곳만 없는 경우가 대부분이라 정적 분석으로는 구분되지 않는다.
-  // 옛 경로를 정리할 때 이 표에서도 같이 지운다.
+  // 옛 경로를 정리할 때 이 표에서도 같이 지운다. 옛 자리는 이슈 #156에서 다 지워 지금은
+  // 비어 있고, 표시하는 machinery는 다음 구조 변경 때 다시 쓰려고 남겨 둔다.
 
   type Mark = "old" | "idle";
 
@@ -118,36 +119,8 @@ const build = (db: Database.Database, file: string): string => {
     "가입할 때 받기로 한 값. 가입 절차가 아직 없어서 넣는 코드도 없고, 지금 값은 손으로 넣은 것이다.";
 
   const NOTES: Record<string, TableNote> = {
-    cast_members: {
-      mark: "old",
-      note: "같은 인물을 memory_items의 person 행이 담는다. 여기에 넣는 함수는 옛 고정 캐릭터 생성 경로에만 남아 있고, 그 경로를 부르는 곳이 없다.",
-    },
-    attention_override: {
-      mark: "old",
-      note: "붙잡혀서 취소하거나 미룬 일정은 day_actuals에 적는다. 읽고 쓰는 코드는 지웠고 표만 남아 있다.",
-    },
-    capture_marks: {
-      mark: "old",
-      note: "대화 중에 남길 내용은 today_notes에 적는다. 읽고 쓰는 코드는 지웠고 표만 남아 있다.",
-    },
-    user_preferences: {
-      mark: "idle",
-      note: "캐릭터와 무관한 유저 단위 선호를 담을 자리로 다시 정했고, 읽거나 쓰는 코드는 아직 없다.",
-    },
-    relationships: {
-      cols: {
-        legacy_state_json: {
-          mark: "old",
-          note: "관계 일곱 항목 컬럼(stage부터 feelings까지)이 대신한다. 읽는 코드가 없다.",
-        },
-      },
-    },
     user_profile: {
       cols: {
-        age_band: {
-          mark: "old",
-          note: "birth_year로 바꿀 컬럼. 상대를 부르는 법 블록이 아직 이 값을 읽는다.",
-        },
         preferred_name: { mark: "idle", note: SIGNUP },
         gender: { mark: "idle", note: SIGNUP },
         birth_year: { mark: "idle", note: SIGNUP },
@@ -167,6 +140,13 @@ const build = (db: Database.Database, file: string): string => {
   const allMarks = tables.flatMap((t) => marksOf(t.name));
   const oldCount = allMarks.filter((m) => m === "old").length;
   const idleCount = allMarks.filter((m) => m === "idle").length;
+  // 없는 표시는 줄에서 뺀다 — 0곳이라고 적으면 무엇을 세는 줄인지가 오히려 흐려진다.
+  const markSummary = [
+    oldCount ? `옛 자리 ${oldCount}곳` : "",
+    idleCount ? `안 쓰는 자리 ${idleCount}곳` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   // ── 조판 ──────────────────────────────────────────────────────────────────
 
@@ -587,10 +567,14 @@ ${rail}
         <div><dt>표</dt><dd>${num(tables.length)}개</dd></div>
         <div><dt>행 합계</dt><dd>${num(totalRows)}건</dd></div>
         <div><dt>만든 시각</dt><dd>${esc(now)}</dd></div>
-        <div><dt>표시</dt><dd>옛 자리 ${oldCount}곳 · 안 쓰는 자리 ${idleCount}곳</dd></div>
+${
+          markSummary
+            ? `        <div><dt>표시</dt><dd>${markSummary}</dd></div>`
+            : ""
+        }
       </dl>
       <p>표 하나가 한 구획이고, 컬럼은 저장된 그대로입니다. 컬럼 머리글을 누르면 그 열로 정렬하고, 접힌 칸을 누르면 전체 값이 펼쳐집니다. 기억 표는 태그가 따로 저장되어 있어서 마지막 열에 조인해 붙였고, 태그를 누르면 오른쪽에서 태그 검색이 열립니다.
-      대신할 자리가 생겨 지울 표와 컬럼은 옛 자리로, 값을 넣는 코드가 없어 비어 있는 자리는 안 쓰는 자리로 표시했습니다.</p>
+      대신할 자리가 생겨 지울 표와 컬럼은 옛 자리로, 값을 넣는 코드가 없어 비어 있는 자리는 안 쓰는 자리로 표시했습니다. 표시가 하나도 없으면 그 줄은 나오지 않습니다.</p>
     </div>
 
 ${tables.map(section).join("\n\n")}

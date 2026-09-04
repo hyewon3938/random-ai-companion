@@ -44,13 +44,12 @@ const TABLES: Record<string, string> = {
   created_at TEXT NOT NULL`,
 
   // 캐릭터와 유저의 관계. 일곱 항목을 컬럼으로 나눠 두고 프롬프트에 항상 넣는다.
-  // 말투 값과 last_contact_at은 답장 경로가, 나머지는 새벽 정리가 갱신한다.
-  // 새 컬럼은 전부 NULL을 허용한다 — 초기값을 채우는 것은 데이터 이관 회차 몫이고,
-  // legacy_state_json을 지울 때 같이 NOT NULL로 조인다.
+  // 말투 값은 답장 경로가, 나머지는 새벽 정리가 갱신한다.
+  // 일곱 항목은 전부 NULL을 허용한다 — 캐릭터 행을 넣은 다음 관계 첫 값을 쓰는 두 단계라
+  // 그 사이에는 비어 있고, 잘 통하는 것과 조심할 것은 대화가 쌓여야 알 수 있어 비운 채 시작한다.
   relationships: `
   character_id INTEGER PRIMARY KEY REFERENCES characters(id),
   met_at TEXT NOT NULL,
-  last_contact_at TEXT,
   stage TEXT,
   speech_level TEXT CHECK (speech_level IN ('polite','casual')),
   speech_note TEXT,
@@ -59,8 +58,7 @@ const TABLES: Record<string, string> = {
   cautions TEXT,
   history TEXT,
   feelings TEXT,
-  updated_at TEXT,
-  legacy_state_json TEXT`,
+  updated_at TEXT`,
 
   // 기억 한 건 = 저장 항목(item_type) + 누구 쪽(owner) + 영역(area) + 무엇(subject) + 출처(origin)가 키.
   // 같은 키로 다시 들어오면 값을 덮어쓴다. 저장 항목 셋과 주인 둘이 만드는 여섯 조합이 전부 유효하다.
@@ -121,12 +119,7 @@ const TABLES: Record<string, string> = {
   note TEXT NOT NULL,
   message_id INTEGER`,
 
-  user_preferences: `
-  chat_id TEXT PRIMARY KEY,
-  pref_json TEXT NOT NULL`,
-
-  // age_band는 옛 컬럼이다. 지금 프롬프트가 나이대를 여기서 읽고 있어 birth_year로
-  // 옮기는 온보딩을 고칠 때까지 함께 둔다.
+  // 나이대는 birth_year 하나로만 다룬다 — 상대를 부르는 법 블록이 이 값에서 나이대를 계산한다.
   user_profile: `
   chat_id TEXT PRIMARY KEY,
   preferred_name TEXT,
@@ -134,7 +127,6 @@ const TABLES: Record<string, string> = {
   birth_year INTEGER,
   job TEXT,
   region TEXT,
-  age_band TEXT,
   updated_at TEXT`,
 
   diary_entries: `
@@ -143,21 +135,6 @@ const TABLES: Record<string, string> = {
   date TEXT NOT NULL,
   entry_json TEXT NOT NULL,
   UNIQUE (character_id, date)`,
-
-  cast_members: `
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  character_id INTEGER NOT NULL REFERENCES characters(id),
-  owner TEXT NOT NULL DEFAULT 'char' CHECK (owner IN ('char','user')),
-  name TEXT NOT NULL,
-  relation_label TEXT NOT NULL,
-  area TEXT,
-  meet_pattern TEXT,
-  place TEXT,
-  recent_note TEXT,
-  user_knows TEXT NOT NULL DEFAULT 'unknown' CHECK (user_knows IN ('unknown','known','waiting')),
-  last_mentioned_at TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE (character_id, name)`,
 
   arcs: `
   character_id INTEGER NOT NULL REFERENCES characters(id),
@@ -361,9 +338,6 @@ const TABLES: Record<string, string> = {
   removed_at TEXT`,
 };
 
-// attention_override·capture_marks는 정의에서 뺐다 — 붙잡힌 상태는 day_actuals가, 세션 중 사실
-// 포착은 오늘 메모가 대신한다. 쓰던 DB에 남은 행은 읽는 코드가 없어 그대로 두고, 새 DB에는 만들지 않는다.
-
 const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_characters_chat ON characters (chat_id)`,
   `CREATE INDEX IF NOT EXISTS idx_memory_items_type ON memory_items (character_id, item_type)`,
@@ -389,7 +363,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -446,27 +420,21 @@ const migrateToV1 = (): void => {
       "id, chat_id, status, genesis_json, created_at",
       "id, chat_id, status, bible_json, created_at",
     );
-    rebuild(
-      "relationships",
-      "character_id, met_at, last_contact_at, legacy_state_json",
-      "character_id, met_at, last_contact_at, state_json",
-    );
+    // 관계를 한 덩어리로 담던 state_json과 마지막 연락 시각은 v6이 지우는 자리라 옮기지 않는다.
+    rebuild("relationships", "character_id, met_at", "character_id, met_at");
+    // 나이대도 마찬가지다 — v6이 age_band를 지우고 birth_year 하나만 남긴다.
     rebuild(
       "user_profile",
-      "chat_id, preferred_name, gender, birth_year, job, region, age_band, updated_at",
-      `chat_id, ${preferredName}, gender, NULL, NULL, NULL, age_band, updated_at`,
+      "chat_id, preferred_name, gender, birth_year, job, region, updated_at",
+      `chat_id, ${preferredName}, gender, NULL, NULL, NULL, updated_at`,
     );
     rebuild(
       "diary_entries",
       "id, character_id, date, entry_json",
       "id, character_id, date, entry_json",
     );
-    // 요즘 어떻게 지내는지 적어 두던 note가 recent_note 자리로 간다.
-    rebuild(
-      "cast_members",
-      "id, character_id, owner, name, relation_label, recent_note, created_at",
-      "id, character_id, who, name, relation, note, created_at",
-    );
+    // 주변 인물을 담던 cast_members는 옮기지 않는다 — memory_items의 person 행이 대신하고,
+    // 옛 표는 v6이 지운다.
     rebuild(
       "arcs",
       "character_id, period, content",
@@ -738,8 +706,53 @@ const migrateToV5 = (): void => {
   console.log(`[db] 스키마를 v5로 옮겼다`);
 };
 
+// v6: 대신할 자리가 생긴 표 다섯과 컬럼 셋을 지운다(#156).
+//
+// cast_members는 memory_items의 person 행이, attention_override는 day_actuals가,
+// capture_marks는 today_notes가, relationships.legacy_state_json은 관계 일곱 항목 컬럼이,
+// user_profile.age_band는 birth_year가 대신한다. memory_items_legacy는 v2 데이터 이관이
+// 다 읽고 끝난 표다. user_preferences와 relationships.last_contact_at은 읽는 자리도
+// 쓰는 자리도 없어진 채 남아 있었다.
+const migrateToV6 = (): void => {
+  const hasColumn = (table: string, column: string): boolean =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(
+      (c) => c.name === column,
+    );
+
+  db.pragma("foreign_keys = OFF");
+
+  db.transaction(() => {
+    for (const table of [
+      "cast_members",
+      "attention_override",
+      "capture_marks",
+      "user_preferences",
+      "memory_items_legacy",
+    ])
+      db.exec(`DROP TABLE IF EXISTS ${table}`);
+
+    for (const [table, column] of [
+      ["relationships", "legacy_state_json"],
+      ["relationships", "last_contact_at"],
+      ["user_profile", "age_band"],
+    ] as const)
+      if (hasColumn(table, column))
+        db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+
+    const broken = db.pragma("foreign_key_check") as unknown[];
+    if (broken.length)
+      throw new Error(
+        `[db] 마이그레이션 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
+      );
+    db.pragma(`user_version = 6`);
+  })();
+
+  console.log(`[db] 스키마를 v6으로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV5();
+if (schemaVersion() < 5) migrateToV5();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV6();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를
@@ -922,31 +935,6 @@ export interface MessageRow {
   sent_at: string;
 }
 
-// 관계 상태. 교체 시 이 레이어가 통째로 죽는다 — 스위칭 코스트의 실체
-export interface RelationshipState {
-  user_facts: { fact: string; learned_at: string }[];
-  // 누적 정체성: 캐릭터가 이 관계에서 자기에 대해 새로 말한 사실 (한번 나오면 일관 유지)
-  char_facts?: { fact: string; learned_at: string }[];
-  frames: { frame: string; note: string }[];
-  open_loops: {
-    id: number;
-    content: string;
-    due_hint: string | null;
-    status: "open" | "asked" | "resolved";
-    created_at: string;
-  }[];
-  our_dict: { expression: string; origin: string; first_used: string }[];
-  farewell: { date: string; type: "작별" | "잠수" } | null;
-}
-
-export const emptyRelationshipState = (): RelationshipState => ({
-  user_facts: [],
-  frames: [],
-  open_loops: [],
-  our_dict: [],
-  farewell: null,
-});
-
 export const getActiveCharacter = (chatId: string): CharacterRow | undefined =>
   db
     .prepare(
@@ -966,42 +954,9 @@ export const insertCharacter = (
     .run(chatId, genesisJson, now);
   const characterId = Number(result.lastInsertRowid);
   db.prepare(
-    `INSERT INTO relationships (character_id, met_at, legacy_state_json) VALUES (?, ?, ?)`,
-  ).run(characterId, now, JSON.stringify(emptyRelationshipState()));
+    `INSERT INTO relationships (character_id, met_at) VALUES (?, ?)`,
+  ).run(characterId, now);
   return characterId;
-};
-
-export const getRelationshipState = (
-  characterId: number,
-): RelationshipState => {
-  const row = db
-    .prepare(
-      `SELECT legacy_state_json FROM relationships WHERE character_id = ?`,
-    )
-    .get(characterId) as { legacy_state_json: string | null } | undefined;
-  if (!row?.legacy_state_json) return emptyRelationshipState();
-  try {
-    return JSON.parse(row.legacy_state_json) as RelationshipState;
-  } catch (e) {
-    // 손상된 state_json 하나가 실시간 응답 경로 전체(buildSystemPrompt)를 죽이지 않게 빈 상태로
-    // 강등한다. 원본 행은 건드리지 않지만, 이 상태에서 밤 정리·캡처가 save하면 빈 상태로 덮어써질
-    // 수 있다 — 그래서 조용히 넘기지 않고 크게 로그를 남긴다(발견 즉시 행 복구가 우선).
-    console.error(
-      `[db] 관계 상태 파싱 실패 — 빈 상태로 강등 (character=${characterId}, len=${row.legacy_state_json.length}):`,
-      e instanceof Error ? e.message : String(e),
-    );
-    return emptyRelationshipState();
-  }
-};
-
-export const saveRelationshipState = (
-  characterId: number,
-  state: RelationshipState,
-  now: string,
-): void => {
-  db.prepare(
-    `UPDATE relationships SET legacy_state_json = ?, last_contact_at = ? WHERE character_id = ?`,
-  ).run(JSON.stringify(state), now, characterId);
 };
 
 export const getMetAt = (characterId: number): string | undefined => {
@@ -1055,7 +1010,6 @@ export interface RelationshipRow {
   history: string | null;
   feelings: string | null;
   met_at: string | null;
-  last_contact_at: string | null;
   updated_at: string | null;
 }
 
@@ -1066,7 +1020,7 @@ export const getRelationship = (
     .prepare(
       `SELECT stage, speech_level, speech_note, address_terms,
               rapport, cautions, history, feelings,
-              met_at, last_contact_at, updated_at
+              met_at, updated_at
          FROM relationships WHERE character_id = ?`,
     )
     .get(characterId) as RelationshipRow | undefined;
@@ -1189,44 +1143,6 @@ export const recentUserGaps = (chatId: string, limit = 80): number[] => {
   return gaps;
 };
 
-// 주변 인물 관계도: 캐릭터의 사람들(owner='char', 씨앗 정체성 + 등장 인물)과
-// 유저가 언급한 유저의 사람들(owner='user')을 한 테이블에 소유자 구분으로 쌓는다
-export interface CastMember {
-  name: string;
-  relation_label: string;
-  recent_note: string | null;
-}
-
-export const getCast = (
-  characterId: number,
-  owner: "char" | "user" = "char",
-): CastMember[] =>
-  db
-    .prepare(
-      `SELECT name, relation_label, recent_note FROM cast_members WHERE character_id = ? AND owner = ? ORDER BY id`,
-    )
-    .all(characterId, owner) as CastMember[];
-
-export const addCastMember = (
-  characterId: number,
-  owner: "char" | "user",
-  name: string,
-  relationLabel: string,
-  recentNote: string | null,
-  now: string,
-): void => {
-  // 이름이 곧 키다 — 같은 이름이 캐릭터 쪽과 유저 쪽에 따로 서지 않게 소유자를 빼고 본다.
-  const dup = db
-    .prepare(
-      `SELECT 1 FROM cast_members WHERE character_id = ? AND name = ? LIMIT 1`,
-    )
-    .get(characterId, name);
-  if (dup) return;
-  db.prepare(
-    `INSERT INTO cast_members (character_id, owner, name, relation_label, recent_note, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(characterId, owner, name, relationLabel, recentNote, now);
-};
-
 // 지금 이 관계가 반말인지 존댓말인지 — 최근 캐릭터 발화의 종결어미로 판정한다.
 // 반말 전환이 명시 상태로 저장돼 있지 않아, 선톡·팔로업 등 최근 대화를 안 보는 경로가
 // 씨앗 말투(존댓말)로 되돌아가는 회귀를 막기 위한 힌트. 표본이 적으면 null(판단 보류).
@@ -1260,16 +1176,6 @@ export const currentSpeechLevel = (
   }
   if (jon + ban < 3) return null;
   return ban > jon ? "반말" : "존댓말";
-};
-
-// 선톡·팔로업 프롬프트용 말투 지시. 그 프롬프트들엔 존댓말 예시가 많아, 반말인데도 예시를 베껴
-// 존댓말이 나오는 문제가 있었다. 예시를 이기도록 강하게 못 박는다.
-export const speechGuard = (chatId: string): string => {
-  const lv = currentSpeechLevel(chatId);
-  if (lv === "반말")
-    return " [말투 — 반드시 지킴: 지금 서로 반말이다. 반말로 쓴다. 아래에 존댓말로 적힌 예시가 있어도 전부 반말로 바꿔 말한다. 존댓말로 되돌아가지 않는다. 단 '야' 호명·'했냐'처럼 '냐'로 끝나는 거친 반말은 안 씀.]";
-  if (lv === "존댓말") return " (지금은 존댓말 사이 — 존댓말 유지)";
-  return " (최근 대화의 말투를 그대로 따른다 — 아래 예시 말투에 얽매이지 말 것)";
 };
 
 // 삶의 큰 흐름: 연/계절/월/주 단위 이벤트 아크. 하루 각본이 이를 참고한다
@@ -1616,8 +1522,7 @@ export const putBlob = (text: string): string => {
 export const getBlob = (hash: string): string | null =>
   (
     db.prepare(`SELECT text FROM prompt_blobs WHERE hash = ?`).get(hash) as
-      | { text: string }
-      | undefined
+      { text: string } | undefined
   )?.text ?? null;
 
 export interface LlmCallInput {
@@ -1795,8 +1700,7 @@ export const lastMessage = (
       `SELECT sent_at, role, meta_json FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
     )
     .get(chatId) as
-    | { sent_at: string; role: string; meta_json: string | null }
-    | undefined;
+    { sent_at: string; role: string; meta_json: string | null } | undefined;
 
 // 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸 선톡 수 — 하루 총량 상한을 지키는 데 쓴다.
 // followup·dispatch가 공유한다. 채널별 상한만 있으면 합이 통제되지 않아서, 각자 자기 몫을
@@ -1855,49 +1759,14 @@ export const awayNoticeCountToday = (chatId: string, since: string): number =>
       .get(chatId, since) as { c: number }
   ).c;
 
-// 유저 선호(매칭 전용, 캐릭터에 비주입). 밤 정리가 대화 내용으로 뽑아 누적한다.
-// topics = 유저가 몰입하는 소재(영화·투자…), facets = 캐릭터의 어떤 성향에 반응이 좋은지(태도·위트·직업·취미…).
-export interface UserPreferences {
-  topics: { topic: string; note: string; learned_at: string }[];
-  facets: {
-    facet: string;
-    response: string;
-    note: string;
-    learned_at: string;
-  }[];
-}
-
-export const getUserPreferences = (chatId: string): UserPreferences => {
-  const row = db
-    .prepare(`SELECT pref_json FROM user_preferences WHERE chat_id = ?`)
-    .get(chatId) as { pref_json: string } | undefined;
-  if (!row) return { topics: [], facets: [] };
-  try {
-    const p = JSON.parse(row.pref_json) as Partial<UserPreferences>;
-    return { topics: p.topics ?? [], facets: p.facets ?? [] };
-  } catch {
-    return { topics: [], facets: [] };
-  }
-};
-
-export const saveUserPreferences = (
-  chatId: string,
-  prefs: UserPreferences,
-): void => {
-  db.prepare(
-    `INSERT OR REPLACE INTO user_preferences (chat_id, pref_json) VALUES (?, ?)`,
-  ).run(chatId, JSON.stringify(prefs));
-};
-
-// 캐릭터 프롬프트에 들어가는 유저 프로필. user_preferences(매칭 전용·비주입)와 달리 이건
-// 캐릭터가 상대를 대하는 데 쓰는 공개 정보다. 값이 들어오는 길은 둘로 갈린다 —
-// 성별·나이대는 env(USER_GENDER/USER_AGE_BAND)나 가입 때 받고, 하는 일·사는 지역은
-// 대화에서 분명히 드러나면 새벽 정리가 채운다(nightly.ts 추출 출력의 user_profile).
+// 캐릭터 프롬프트에 들어가는 유저 프로필. 캐릭터가 상대를 대하는 데 쓰는 공개 정보다.
+// 값이 들어오는 길은 둘로 갈린다 — 성별은 env(USER_GENDER)나 가입 때 받고, 하는 일·사는
+// 지역은 대화에서 분명히 드러나면 새벽 정리가 채운다(nightly.ts 추출 출력의 user_profile).
 // chat_id 기준(교체돼도 유지) — 유저의 정체는 어떤 캐릭터를 만나든 그대로다.
-// 이름은 다루지 않는다 — 호칭을 시스템이 강제하면 자리 잡은 반말을 격식체로 되돌리는 회귀가 났다(2026-07-12).
+// 나이대는 여기서 다루지 않는다 — 가입 때 받는 birth_year 하나에서 계산한다(getUserProfileFull).
+// 이름도 다루지 않는다 — 호칭을 시스템이 강제하면 자리 잡은 반말을 격식체로 되돌리는 회귀가 났다(2026-07-12).
 export interface StoredUserProfile {
   gender?: string;
-  ageBand?: string;
   job?: string;
   region?: string;
 }
@@ -1905,12 +1774,11 @@ export interface StoredUserProfile {
 export const getUserProfile = (chatId: string): StoredUserProfile => {
   const row = db
     .prepare(
-      `SELECT gender, age_band, job, region FROM user_profile WHERE chat_id = ?`,
+      `SELECT gender, job, region FROM user_profile WHERE chat_id = ?`,
     )
     .get(chatId) as
     | {
         gender: string | null;
-        age_band: string | null;
         job: string | null;
         region: string | null;
       }
@@ -1918,7 +1786,6 @@ export const getUserProfile = (chatId: string): StoredUserProfile => {
   if (!row) return {};
   return {
     gender: row.gender ?? undefined,
-    ageBand: row.age_band ?? undefined,
     job: row.job ?? undefined,
     region: row.region ?? undefined,
   };
@@ -1966,28 +1833,19 @@ export const saveUserProfile = (
 ): void => {
   const cur = getUserProfile(chatId);
   const gender = p.gender?.trim() || cur.gender;
-  const ageBand = p.ageBand?.trim() || cur.ageBand;
   const job = p.job?.trim() || cur.job;
   const region = p.region?.trim() || cur.region;
   db.prepare(
     // 이 함수가 맡은 컬럼만 고친다 — REPLACE로 행을 다시 넣으면 가입 때 받는
     // 이름·생년이 같이 지워진다.
-    `INSERT INTO user_profile (chat_id, gender, age_band, job, region, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO user_profile (chat_id, gender, job, region, updated_at)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(chat_id) DO UPDATE SET
        gender = excluded.gender,
-       age_band = excluded.age_band,
        job = excluded.job,
        region = excluded.region,
        updated_at = excluded.updated_at`,
-  ).run(
-    chatId,
-    gender ?? null,
-    ageBand ?? null,
-    job ?? null,
-    region ?? null,
-    at,
-  );
+  ).run(chatId, gender ?? null, job ?? null, region ?? null, at);
 };
 
 // 마지막 유저 발화 이후 구간의 시작. 유저가 한 번도 말한 적이 없으면 대화 전체를 본다.

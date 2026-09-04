@@ -4,7 +4,8 @@
 // 환경변수의 기본 프로필로 메운다.
 
 import { config } from "./config.js";
-import { getUserProfile } from "./db.js";
+import { getUserProfileFull } from "./db.js";
+import { getKstNow } from "./kst.js";
 
 // 상대(유저)를 '어떻게 알고, 어떻게 부르는지' — 전 캐릭터 공통 규칙. 네 발화 표면 모두에 주입한다:
 // 실시간 대화(context.ts) + 아침 안부(nightly.ts) + 침묵 팔로업(followup.ts) + 자리 비움 예고(presence.ts).
@@ -14,8 +15,11 @@ import { getUserProfile } from "./db.js";
 // 부르는 회귀가 났다(2026-07-12). 이름·호칭은 대화 흐름에서 자연스럽게 자리 잡게 두고, 시스템은
 // 거기 끼어들지 않는다.
 //
-// 값이 들어오는 길은 둘로 갈린다 — 성별·나이대는 env(USER_GENDER/USER_AGE_BAND)나 가입 때 받고,
+// 값이 들어오는 길은 둘로 갈린다 — 성별·생년은 env(USER_GENDER/USER_AGE_BAND)나 가입 때 받고,
 // 하는 일·사는 지역은 대화에서 분명히 드러나면 새벽 정리가 채운다(db.ts saveUserProfile).
+//
+// 나이대는 저장하지 않고 가입 때 받는 생년에서 계산한다. 나이대를 따로 적어 두면 해가 바뀌어도
+// 그 값이 그대로 남아 실제 나이와 어긋난다.
 // 모르는 값은 줄 자체를 넣지 않는다 — 성별을 넘겨짚지 않고(여성 유저에게 "그럼 내가 형이네" 방지)
 // 대화로 알아간다. 하는 일·사는 지역은 연락이 닿을 시간대와 거리 감각을 가늠하는 자리다.
 
@@ -26,14 +30,28 @@ export interface UserProfile {
   region?: string;
 }
 
+// 생년으로 나이대를 만든다. 태어난 달을 모르니 연 나이로 세고, 끝자리 0~3을 초반,
+// 4~6을 중반, 7~9를 후반으로 나눈다. 캐릭터 나이대 선택지(CHARACTER_AGE_BANDS)와 같은 모양이다.
+export const ageBandOf = (
+  birthYear: number | undefined,
+  now: Date = getKstNow(),
+): string | undefined => {
+  if (!birthYear) return undefined;
+  const age = now.getFullYear() - birthYear;
+  if (age < 10 || age > 119) return undefined;
+  const tail = age % 10;
+  const part = tail <= 3 ? "초반" : tail <= 6 ? "중반" : "후반";
+  return `${Math.floor(age / 10) * 10}대 ${part}`;
+};
+
 // 성별·나이대는 env(수동 지정)가 우선, 없으면 저장된 per-chat 값. 하는 일·사는 지역은 env가
 // 없으므로 저장된 값뿐이다. 없는 값은 미상으로 둔다.
 export const effectiveProfile = (chatId?: string): UserProfile => {
   const env = config.userProfile;
-  const stored = chatId ? getUserProfile(chatId) : {};
+  const stored = chatId ? getUserProfileFull(chatId) : {};
   return {
     gender: env.gender ?? stored.gender,
-    ageBand: env.ageBand ?? stored.ageBand,
+    ageBand: env.ageBand ?? ageBandOf(stored.birthYear),
     job: stored.job,
     region: stored.region,
   };
