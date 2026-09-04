@@ -2,6 +2,7 @@
 // 입력 형식: {"characterId": n, "output": {"entry": {...},
 //            "extract": {"memories":[...], "relationship":{...}|null,
 //                        "user_profile":{"job"?,"region"?}|null, "schedules":[...]}|null,
+//            "progress": [{"id","value","done"?}]|null,
 //            "plan": {...}|null, "send": {"window_start","window_end","text","kind"?}|null,
 //            "arcs": {...}|null, "rhythm": [...]|null}}
 // 사용: cat out.json | docker exec -i random-ai-companion npx tsx src/tools/nightly-write.ts

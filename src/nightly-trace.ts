@@ -15,6 +15,7 @@
 import {
   db,
   getBlob,
+  getMemoryItemById,
   getRelationship,
   getTags,
   getUserProfile,
@@ -120,6 +121,8 @@ interface MemorySnap {
 
 export interface NightlySnapshot {
   memories: Map<string, MemorySnap>;
+  // 진행 반영 대상 행의 이전 값 — 반영 뒤에는 값이 바뀌고 끝난 것은 사실 행으로 옮겨져 번호가 바뀐다.
+  progress: Map<number, { label: string; value: string }>;
   relationship: RelationshipRow | undefined;
   profile: StoredUserProfile;
 }
@@ -152,8 +155,19 @@ export const beforeNightlyTrace = (
           tags: getTags("memory", r.id),
         });
       }
+    const progress = new Map<number, { label: string; value: string }>();
+    for (const p of out.progress ?? []) {
+      if (typeof p.id !== "number") continue;
+      const r = getMemoryItemById(p.id);
+      if (r)
+        progress.set(p.id, {
+          label: `${r.area}/${r.subject}`,
+          value: r.value,
+        });
+    }
     return {
       memories,
+      progress,
       relationship: getRelationship(g.characterId),
       profile: getUserProfile(g.chatId),
     };
@@ -401,6 +415,36 @@ const memoryChild = (
   pushChunks(g.characterId, parentKey, "nightly_memory", "기억", body);
 };
 
+// 진행 중인 일의 어제 몫 — 이전 값과 새 값을 나란히, 끝난 것은 사실로 옮겼다고 적는다.
+// 이전 값이 없는 번호는 반영 자리에서 걸러진 것이라(남의 행·사실 행) 그대로 표시한다.
+const progressChild = (
+  g: NightlyGathered,
+  out: NightlyOutput,
+  snap: NightlySnapshot,
+  parentKey: string,
+): void => {
+  const items = (out.progress ?? []).filter(
+    (p) => typeof p.id === "number" && p.value?.trim(),
+  );
+  if (!items.length) return;
+  const lines = items.map((p) => {
+    const before = snap.progress.get(p.id);
+    if (!before) return `:warning: [${p.id}] 반영 대상이 아니라 건너뜀`;
+    return [
+      `*${esc(before.label)}*${p.done ? " · 끝나서 사실로 옮김" : ""}`,
+      `이전: ${esc(before.value)}`,
+      `새 값: ${esc(p.value.trim())}`,
+    ].join("\n");
+  });
+  pushChunks(
+    g.characterId,
+    parentKey,
+    "nightly_progress",
+    "진행 중인 일",
+    lines.join("\n\n"),
+  );
+};
+
 const diaryChild = (g: NightlyGathered, parentKey: string): void => {
   const row = db
     .prepare(
@@ -601,6 +645,7 @@ export const afterNightlyTrace = (
         text: headText(g, out, snap, after, afterProfile, result),
       });
       memoryChild(g, out, snap, parentKey);
+      progressChild(g, out, snap, parentKey);
       diaryChild(g, parentKey);
       sendChild(g, parentKey);
       callChildren(g, parentKey);

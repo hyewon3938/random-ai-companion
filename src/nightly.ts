@@ -44,6 +44,8 @@ import {
   clearTodayNotes,
   getDayActuals,
   listMemoryItems,
+  getMemoryItemById,
+  getTags,
   listTagNames,
   getUserProfile,
   saveUserProfile,
@@ -55,9 +57,14 @@ import {
 import { buildSystemBlocks } from "./context.js";
 import { isSameScheduleContent } from "./schedule-dedupe.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
-import { ensureTodayPlan, normalizePlan } from "./day-plan.js";
+import {
+  ensureTodayPlan,
+  normalizePlan,
+  planOngoingLines,
+} from "./day-plan.js";
 import {
   saveMemory,
+  moveMemory,
   keyProblem,
   existingKeys,
   existingAreas,
@@ -102,6 +109,11 @@ import {
 // 실행 경로는 둘이다. 기본은 외부 scheduled task(구독)가 수집(gatherNightlyInput)→생성(자체 지능)
 // →적용(applyNightlyOutput)을 수행하고, 이 파일의 runNightly는 그게 안 돌았을 때의 API 폴백이다.
 // 두 경로 모두 일기 중복 체크로 이중 실행이 방지된다.
+//
+// 진행 중인 일(며칠에 걸쳐 하는 일)은 대화가 없던 날에도 어제 각본을 따라 한 걸음 옮긴다(이슈 #276).
+// 어제 각본에서 source "ongoing" 블록을 찾아 그 일의 지금 값과 실제 기록을 같이 넘기고,
+// 생성이 돌려준 새 값을 저장한다. 끝났다고 하면 사실 항목으로 옮긴다. 각본에 안 들어간 일은
+// 대화로만 바뀐다 — 유저가 모르는 일까지 굴리면 관리할 것만 는다.
 
 export interface DiaryOutput {
   diary: string;
@@ -172,9 +184,23 @@ export interface SendDraft {
   kind?: "morning" | "checkin";
 }
 
+// 진행 중인 일 한 건의 어제 몫. id는 각본 블록의 source_id(기억 행 번호), value는 새 값,
+// done이 참이면 끝나는 조건이 채워진 것이라 사실 항목으로 옮긴다.
+export interface OngoingProgress {
+  id: number;
+  value: string;
+  done?: boolean;
+}
+
+export interface ProgressOutput {
+  progress: OngoingProgress[];
+}
+
 export interface NightlyOutput {
   entry: DiaryOutput;
   extract?: ExtractOutput | null;
+  progress?: OngoingProgress[] | null; // 어제 각본에 들어간 진행 중인 일의 새 값
+
   plan?: DayPlan | null; // 외부 경로가 오늘 각본까지 만들어 보낼 때
   send?: SendDraft | null; // 오늘의 선톡 문안 (근거 있을 때만)
   arcs?: {
@@ -200,6 +226,12 @@ export interface NightlyGathered {
   identity: string; // 정체성 사실 줄들 (creation + conversation, 같은 키는 최신이 이김)
   people: string; // 주변 인물 줄들 (캐릭터 쪽·유저 쪽 모두)
   ongoing: string; // 진행 중인 일 줄들
+  // 오늘 각본에 넣을 진행 중인 일 — 유저가 아는 캐릭터 쪽 것만, 줄 앞에 행 번호. 외부 생성
+  // 경로가 각본 블록의 source_id에 이 번호를 적는다(day-plan.ts planOngoingLines와 같은 목록).
+  ongoingForPlan: string;
+  // 어제 각본에 source "ongoing"으로 들어간 일 — 지금 값과 그 블록이 실제로 어떻게 됐는지.
+  // 비어 있으면 어제 손댄 일이 없어 진행 반영을 만들 필요가 없다.
+  ongoingTouched: string[];
   // 상대 쪽 사실 중 그날 대화·메모에 태그가 걸린 것의 지금 값. identity가 캐릭터 쪽 사실을
   // 전부 싣는 것과 달리 상대 쪽은 키만 들어가서, 같은 키를 다시 쓸 때 모델이 앞 값을 못 보고
   // 그날 들은 것만 적었다(이슈 #264). 전부 싣지 않고 겹치는 것만 EXTRACT_USER_FACT_MAX까지.
@@ -281,6 +313,50 @@ const ongoingLine = (r: MemoryRow): string =>
 // 갱신 날짜를 함께 적는다 — 앞 값이 언제 것인지 알아야 한 번 있었던 일과 이어지는 상태를 가른다.
 const userFactLine = (r: MemoryRow): string =>
   `- ${r.area}/${r.subject}: ${r.value} (${r.updated_at.slice(0, 10)} 갱신)`;
+
+// 어제 각본에서 진행 중인 일로 펼친 블록을 그 일의 기억 행에 맞춰 한 줄씩. 같은 일이 블록
+// 두 개로 들어갔으면 한 줄에 이어 적는다. 실제 기록(day_actuals)은 블록 시작 시각으로 맞춘다 —
+// 취소·미룸이면 그날 몫은 없던 것이라 생성이 값을 옮기지 않는다.
+const touchedOngoingLines = (
+  characterId: number,
+  diaryDate: string,
+): string[] => {
+  const raw = getDayPlan(characterId, diaryDate);
+  if (!raw) return [];
+  let blocks: PlanBlock[];
+  try {
+    blocks = normalizePlan(JSON.parse(raw) as DayPlan).blocks;
+  } catch {
+    return [];
+  }
+  const actuals = getDayActuals(characterId, diaryDate);
+  const byId = new Map<number, { row: MemoryRow; how: string[] }>();
+  for (const b of blocks) {
+    if (b.source !== "ongoing" || typeof b.source_id !== "number") continue;
+    let cur = byId.get(b.source_id);
+    if (!cur) {
+      const row = getMemoryItemById(b.source_id);
+      if (
+        !row ||
+        row.character_id !== characterId ||
+        row.item_type !== "ongoing" ||
+        row.owner !== "char"
+      )
+        continue;
+      cur = { row, how: [] };
+      byId.set(b.source_id, cur);
+    }
+    const hit = actuals.filter((a) => a.block_start === b.start);
+    const outcome = hit.length
+      ? `달라짐: ${hit.map((a) => `${a.outcome}${a.reason ? `(${a.reason})` : ""}`).join(", ")}`
+      : "각본대로";
+    cur.how.push(`${clockLabel(b.start)} ${b.activity} → ${outcome}`);
+  }
+  return [...byId.values()].map(
+    ({ row, how }) =>
+      `- [${row.id}] ${row.area}/${row.subject}: ${row.value}${row.end_condition ? ` (끝나는 조건: ${row.end_condition})` : ""} — 어제 각본: ${how.join(" / ")}`,
+  );
+};
 
 /**
  * 상대 쪽 사실 중 그날 대화·메모에 태그가 걸린 것을 지금 값과 함께 줄로 만든다.
@@ -415,6 +491,8 @@ export const gatherNightlyInput = (
     ongoing: listMemoryItems(character.id, "ongoing")
       .map(ongoingLine)
       .join("\n"),
+    ongoingForPlan: planOngoingLines(character.id),
+    ongoingTouched: touchedOngoingLines(character.id, diaryDate),
     touchedUserFacts: touchedUserFactLines(
       character.id,
       [convo, ...todayNotes].join("\n"),
@@ -495,6 +573,9 @@ const applyNightlyTxn = db.transaction(
 
     const ex = out.extract;
     let memCount = 0;
+    // 기억 정리가 이번에 쓴 캐릭터 쪽 키 — 진행 반영이 같은 키를 또 덮지 않게 한다.
+    // 대화에서 그 일을 어디까지 했다고 말한 날은 그 말로 정리한 값이 각본에서 짐작한 값보다 앞선다.
+    const extractTouched = new Set<string>();
     let schedTagCount = 0;
     let schedSkipped = 0;
     let profileFilled: string[] = [];
@@ -539,6 +620,10 @@ const applyNightlyTxn = db.transaction(
           interest: m.interest ?? prev?.interest ?? undefined,
         });
         memCount++;
+        if (m.owner === "char")
+          extractTouched.add(
+            `${m.area.trim().replace(/\s+/g, " ")}/${m.subject.trim().replace(/\s+/g, " ")}`,
+          );
       }
       if (skippedKeys.length)
         console.warn(
@@ -639,6 +724,45 @@ const applyNightlyTxn = db.transaction(
         if (out.arcs[h]) saveArc(g.characterId, h, out.arcs[h]);
     }
 
+    // 진행 중인 일의 어제 몫. 행이 이 캐릭터의 캐릭터 쪽 진행 중인 일일 때만 받는다 —
+    // 생성이 번호를 잘못 적어도 남의 행이나 사실 행을 덮지 않게. 태그는 그대로 잇는다:
+    // saveMemory가 태그를 통째로 갈아 끼우므로 안 넘기면 검색에서 빠진다.
+    let progressCount = 0;
+    let progressDone = 0;
+    let progressYielded = 0;
+    for (const p of out.progress ?? []) {
+      if (typeof p.id !== "number" || !p.value?.trim()) continue;
+      const row = getMemoryItemById(p.id);
+      if (
+        !row ||
+        row.character_id !== g.characterId ||
+        row.item_type !== "ongoing" ||
+        row.owner !== "char"
+      )
+        continue;
+      if (extractTouched.has(`${row.area}/${row.subject}`)) {
+        progressYielded += 1;
+        continue;
+      }
+      const savedId = saveMemory({
+        characterId: g.characterId,
+        itemType: "ongoing",
+        owner: "char",
+        area: row.area,
+        subject: row.subject,
+        value: p.value.trim(),
+        tags: getTags("memory", row.id),
+        userKnows: row.user_knows,
+        endCondition: row.end_condition,
+        interest: row.interest,
+      });
+      progressCount += 1;
+      if (p.done) {
+        moveMemory(savedId, "fact");
+        progressDone += 1;
+      }
+    }
+
     if (out.rhythm)
       for (const r of out.rhythm)
         if (r.ym) applyMonthPlan(g.characterId, r.ym, r);
@@ -679,7 +803,7 @@ const applyNightlyTxn = db.transaction(
       `${nextDate(g.diaryDate)} 05:00:00`,
     );
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
@@ -793,6 +917,25 @@ tags 규칙: 한 일·간 곳·만난 사람 이름을 낱말로 적는다. [이
 // 기억과 일정이 같은 어휘로 묶이도록 태그 규칙은 한 문장을 두 자리에 쓴다 — 규칙이 갈라지면
 // 같은 주제가 다른 낱말로 적혀 함께 찾아지지 않는다.
 const TAG_RULE = `내용과 관련된 말을 넉넉히 붙인다. 사람 이름은 반드시 태그로. [이미 쓰는 태그]에 같은 뜻이 있으면 그 표기를 재사용한다.`;
+
+const PROGRESS_SYSTEM = `너는 캐릭터가 며칠에 걸쳐 하는 일이 어제 얼마나 나아갔는지 적는 정리자다. 어제 각본에 그 일을 하는 시간이 있었고 실제로 그대로 지냈으면 한 걸음만 옮긴다. 지어내지 말고 그 일의 결에 맞는 만큼만 적는다.`;
+
+// 진행 반영 프롬프트. 어제 각본에 들어간 일마다 지금 값·끝나는 조건·실제 기록을 넘기고
+// 새 값을 받는다. 어제 대화가 있으면 같이 넘긴다 — 대화에서 이미 어디까지 갔다고 말했으면
+// 그 말과 어긋난 값을 적지 않게.
+export const progressPrompt = (g: NightlyGathered): string => `[어제 각본에 들어간 진행 중인 일 — [번호] 영역/무엇: 지금 값 (끝나는 조건) — 어제 각본: 시각 활동 → 각본대로 / 달라짐]
+${g.ongoingTouched.join("\n")}
+${g.convo ? `\n[어제 대화 — ${g.diaryDate}]\n${g.convo}\n` : ""}
+규칙:
+- 각본대로 지낸 블록마다 그 일을 한 걸음만 옮긴다. 책이면 몇 장 더, 준비하는 일이면 그 다음 단계. 며칠치를 한 번에 옮기지 않는다.
+- 새 값은 한두 문장으로, 앞 값에 있던 구체(제목·상대·수치)는 그대로 둔다. 어디까지 왔는지가 드러나게 쓴다.
+- "달라짐"으로 취소되거나 미뤄진 블록은 그날 몫이 없던 것이다. 그 일은 목록에 넣지 않는다.
+- 어제 대화에서 그 일을 어디까지 했다고 말했으면 그 말과 어긋나지 않게 적는다.
+- 끝나는 조건이 채워졌으면 done을 true로 하고, value에는 끝난 상태(${g.diaryDate}에 끝났다는 것과 무엇으로 끝났는지)를 적는다. 그렇지 않으면 done은 false.
+- 옮길 것이 없으면 빈 배열을 준다.
+
+출력(JSON만):
+{"progress":[{"id":61,"value":"새 값 한두 문장","done":false}]}`;
 
 const EXTRACT_SYSTEM = `너는 캐릭터의 하루에서 다음 대화에 필요한 기억을 정리하는 정리자다. 대화에 나온 확실한 사실만 담고, 남길 것이 없으면 빈 배열을 준다.`;
 
@@ -1278,6 +1421,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   let entry: DiaryOutput;
   let extract: ExtractOutput | null = null;
   let send: SendDraft | null = null;
+  let progress: OngoingProgress[] | null = null;
 
   if (g.msgsCount) {
     entry = await chatJson<DiaryOutput>(
@@ -1304,6 +1448,25 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
     );
   }
 
+  // 어제 각본에 진행 중인 일이 있었으면 대화가 없던 날에도 한 걸음 옮긴다. 실패해도 일기와
+  // 기억 정리는 그대로 반영한다 — 이 값은 다음 각본이 다시 손댈 때 따라잡는다.
+  if (g.ongoingTouched.length)
+    progress = await chatJson<ProgressOutput>(
+      PROGRESS_SYSTEM,
+      progressPrompt(g),
+      800,
+      config.modelDeep,
+      { purpose: "progress", characterId: g.characterId, chatId: g.chatId },
+    )
+      .then((r) => r.progress ?? null)
+      .catch((e) => {
+        console.error(
+          "[nightly] 진행 중인 일 반영 실패:",
+          e instanceof Error ? e.message : String(e),
+        );
+        return null;
+      });
+
   // 오늘 무엇을 미리 만들어 둘지는 관제탑이 정한다 — 아침 한 통 / 점심 한 통 / 저녁 안부 /
   // 없음. 반영 직전과 발송 직전에도 같은 판정을 다시 거친다.
   const plan = dailySendPlan(g.chatId, g.characterId, g.today);
@@ -1314,12 +1477,12 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   if (g.silenceTier === "quiet" || g.silenceTier === "dormant") {
     if (plan.kind === "morning")
       send = await draftPrepared(g, "morning", entry.tomorrow ?? [], null);
-    return `${applyNightlyOutput(g, { entry, extract, send })} (침묵 ${g.silenceDays}일 — ${plan.reason})`;
+    return `${applyNightlyOutput(g, { entry, extract, progress, send })} (침묵 ${g.silenceDays}일 — ${plan.reason})`;
   }
   // 재연결 단계: 아침 인사 대신 저녁 안부 1통만 준비한다
   if (g.silenceTier === "checkin") {
     send = await draftReconnect(g);
-    return applyNightlyOutput(g, { entry, extract, send });
+    return applyNightlyOutput(g, { entry, extract, progress, send });
   }
 
   // 오늘 각본을 먼저 만들고, 아침 선톡의 발송 시점을 그 각본의 삶(기상·첫 일과)과 연동한다.
@@ -1336,6 +1499,6 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   if (plan.kind === "morning" || plan.kind === "lunch")
     send = await draftPrepared(g, plan.kind, entry.tomorrow ?? [], style);
 
-  const result = applyNightlyOutput(g, { entry, extract, send });
+  const result = applyNightlyOutput(g, { entry, extract, progress, send });
   return result;
 };
