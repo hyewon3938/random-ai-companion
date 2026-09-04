@@ -20,6 +20,10 @@
 // 이미 시작했으면 그 시작 시각까지 넓힌다 — 구간 끝 몰아 답장이 이미 같은 전환을 알린
 // 뒤라서, 그 답장 자리에서 다음 일정까지 함께 말하고 예고는 나가지 않는다.
 //
+// 이렇게 접은 자리는 사유와 함께 트레이스 게시함에 남긴다(traceAwaySkip). 예고가 안 나가는
+// 것 자체는 정상이지만 사유가 로그에만 있으면 배포 한 번에 지워지고, 문안까지 만들어 놓고
+// 접은 날은 채널에 문안만 남아 나간 것으로 읽힌다(#218).
+//
 // 다녀온 뒤는 이 모듈 몫이 아니다. 구간 끝의 깨우기 처리(bot.ts)가 몰아 답장과 복귀 인사를
 // 한 자리에서 한다.
 
@@ -43,7 +47,7 @@ import {
   takeHeldDraft,
   type HeldDraft,
 } from "./proactive-policy.js";
-import { traceProactiveFail } from "./reply-trace.js";
+import { traceAwaySkip, traceProactiveFail } from "./reply-trace.js";
 import { buildSystemBlocks } from "./context.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory, isAwayUnavail } from "./day-plan.js";
@@ -272,9 +276,17 @@ const presenceTickBody = async (): Promise<void> => {
     const lc = lastCharTs(c.chat_id);
     const quietMin = Math.max(AWAY_QUIET_MIN, nowMin - toMin(target.start));
     if (lc && ageMin(lc) < quietMin) {
+      const detail = `${Math.round(ageMin(lc))}분 전에 이미 말했다, 기준 ${Math.round(quietMin)}분`;
       console.log(
-        `[presence] ${c.chat_id} @ ${target.activity} 접음 — ${Math.round(ageMin(lc))}분 전에 이미 말했다(기준 ${Math.round(quietMin)}분)`,
+        `[presence] ${c.chat_id} @ ${target.activity} 접음 — ${detail}`,
       );
+      traceAwaySkip({
+        characterId: c.id,
+        reason: "just_spoke",
+        activity: target.activity,
+        block: target.start,
+        detail,
+      });
       continue;
     }
 
@@ -321,6 +333,13 @@ const presenceTickBody = async (): Promise<void> => {
           console.log(
             `[presence] ${c.chat_id} @ ${target.activity} 접음 — 문안에 자리를 비우는 일이 없다`,
           );
+          traceAwaySkip({
+            characterId: c.id,
+            reason: "no_away",
+            activity: target.activity,
+            block: target.start,
+            callId: meta.callId,
+          });
         } else if (draft.send && draft.text) {
           outgoing = {
             kind: "away",
@@ -331,7 +350,18 @@ const presenceTickBody = async (): Promise<void> => {
         }
       }
       // 발송 직전 재확인 — LLM을 기다리는 사이 대화 상태가 바뀌었으면(유저 추가 발화·다른 발송) 접는다
-      if (outgoing && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+      if (outgoing && lastMessage(c.chat_id)?.sent_at !== last.sent_at) {
+        console.log(
+          `[presence] ${c.chat_id} @ ${target.activity} 접음 — 문안을 만드는 사이 마지막 메시지가 바뀌었다`,
+        );
+        traceAwaySkip({
+          characterId: c.id,
+          reason: "conversation_moved",
+          activity: target.activity,
+          block: target.start,
+          callId: meta.callId,
+        });
+      } else if (outgoing) {
         await sendProactive(c.chat_id, c.id, outgoing.text, "away", {
           block: target.start,
         });

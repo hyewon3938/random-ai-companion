@@ -4,7 +4,8 @@
 // - 프롬프트 앞 두 층 끝에 cache_control을 붙여 1시간 캐시를 태운다. 층을 안정도 순으로
 //   쌓아 둔 이유가 여기서 값을 낸다(context.ts).
 // - 호출 정보(meta)를 받으면 프롬프트와 응답 원문을 llm_calls에 적고 행 번호를 돌려준다.
-//   트레이스와 피드백 수집이 그 번호로 호출을 되짚는다.
+//   트레이스와 피드백 수집이 그 번호로 호출을 되짚는다. 응답이 왜 멈췄고 어떤 블록으로
+//   왔는지도 같은 행에 적는다 — 로그에만 두면 배포 한 번에 지워져 며칠치를 못 본다.
 // - 응답 토큰과 캐시 적중(cw/cr)을 로그에 남긴다.
 //
 // JSON을 받아야 하는 자리는 chatJson을 쓴다.
@@ -131,6 +132,8 @@ export const chat = async (
       output: number;
     };
     error?: string;
+    stopReason?: string;
+    blockTypes?: string;
   }): void => {
     if (!meta) return;
     try {
@@ -173,11 +176,16 @@ export const chat = async (
   // 로그와 별개로 논리일 단위 DB 누적(llm_usage) — 사람이 로그를 뒤지지 않아도 확인 가능하게.
   const u = response.usage;
   const out = textOf(response.content).trim();
+  const shape = {
+    stopReason: response.stop_reason ?? undefined,
+    blockTypes: blockTypes(response.content),
+  };
   // 출력 토큰이 저장된 글자 수보다 훨씬 크게 잡히는 호출이 있어(08-30 관측: 답장 1,200토큰에
   // 144자, 판정 16토큰에 0자) 그 몫이 어디로 갔는지 같은 줄에서 보이게 한다 — 블록 종류와
   // 멈춘 이유, 저장되는 글자 수. purpose를 앞에 적어 어느 호출인지 바로 찾게 한다.
+  // 같은 두 값을 llm_calls에도 적는다(아래 keep) — 로그는 배포 한 번에 지워진다(#218).
   console.log(
-    `[llm] ${meta?.purpose ?? "unknown"} ${model} in=${u.input_tokens} cw=${u.cache_creation_input_tokens ?? 0} cr=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens} chars=${[...out].length} blocks=${blockTypes(response.content)} stop=${response.stop_reason ?? "none"}`,
+    `[llm] ${meta?.purpose ?? "unknown"} ${model} in=${u.input_tokens} cw=${u.cache_creation_input_tokens ?? 0} cr=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens} chars=${[...out].length} blocks=${shape.blockTypes} stop=${shape.stopReason ?? "none"}`,
   );
   try {
     recordLlmUsage(
@@ -191,6 +199,7 @@ export const chat = async (
     /* 사용량 기록 실패가 대화를 막지 않는다 */
   }
   keep({
+    ...shape,
     output: out,
     usage: {
       input: u.input_tokens,

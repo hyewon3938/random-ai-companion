@@ -13,6 +13,10 @@
 //
 // 선톡도 문안 호출이 같은 길로 올라간다. 나간 뒤에는 발송 행이 따로 붙고, 재시도를 다 쓰고
 // 끝내 못 나가면 그 문안 스레드에 발송 포기가 달린다 — 문안만 보고 나간 것으로 읽지 않게.
+// 자리 비움 예고를 코드가 접은 자리도 사유와 함께 같은 게시함에 쌓는다(traceAwaySkip).
+//
+// 본문의 *응답* 줄은 호출이 어떤 블록으로 왔고 왜 멈췄는지다. 저장하는 본문은 텍스트 블록
+// 뿐이라, 출력 토큰이 글자 수보다 클 때 그 몫이 생각 과정으로 갔는지 이 줄에서 가른다.
 //
 // 새벽 정리 쪽 호출(diary·extract·arc·day_plan·life_plan)은 여기서 건너뛴다 —
 // 구간 3이 이전 값과 함께 올린다. 두 곳이 같은 호출을 올리면 채널이 두 벌로 찬다.
@@ -36,7 +40,7 @@ import {
   type CallPurpose,
   type SpeechLevel,
 } from "./labels.js";
-import { getKstNow, logicalDateOf, clockLabel } from "./kst.js";
+import { getKstNow, kstLogicalDate, logicalDateOf, clockLabel } from "./kst.js";
 import { PARSE_NAME, type ReplyParse } from "./reply-signal.js";
 
 // 저장된 문자열이 지금 아는 길 이름인지 대조해 이름을 붙인다 — 옛 기록·모르는 값은 그대로 적는다.
@@ -87,6 +91,8 @@ interface CallRow {
   cache_read_tokens: number | null;
   output_tokens: number | null;
   latency_ms: number | null;
+  stop_reason: string | null;
+  block_types: string | null;
   error: string | null;
   context_json: string | null;
   created_at: string;
@@ -311,6 +317,27 @@ const tokenLine = (row: CallRow): string | null => {
   return bits.length ? `*토큰* ${bits.join(" · ")}` : null;
 };
 
+// 아는 중단 사유는 한글로 옮기고, 모르는 값은 그대로 적는다.
+const STOP_REASON_NAME: Record<string, string> = {
+  end_turn: "할 말을 마쳤다",
+  max_tokens: "상한에서 잘렸다",
+  stop_sequence: "멈춤 문자열을 만났다",
+  refusal: "모델이 답하기를 거절했다",
+};
+
+// 응답이 어떤 블록으로 왔고 왜 멈췄는지. 저장하는 본문은 텍스트 블록뿐이라, 출력 토큰이
+// 글자 수보다 훨씬 클 때 그 몫이 생각 과정으로 갔는지 여기서 가른다. 이 값이 없는 옛 행은
+// 줄을 만들지 않는다.
+const shapeLine = (row: CallRow): string | null => {
+  const bits: string[] = [];
+  if (row.block_types) bits.push(`블록 ${esc(row.block_types)}`);
+  if (row.stop_reason)
+    bits.push(
+      `멈춤 ${STOP_REASON_NAME[row.stop_reason] ?? esc(row.stop_reason)}`,
+    );
+  return bits.length ? `*응답* ${bits.join(" · ")}` : null;
+};
+
 const headLine = (row: CallRow, icon: string, label: string): string => {
   const bits = [
     `호출 #${row.id}`,
@@ -519,6 +546,8 @@ const renderReply = (row: CallRow, ctx: CallContext | null): string => {
     const calls = callsLine(row, ctx);
     if (calls) lines.push(calls);
   }
+  const shape = shapeLine(row);
+  if (shape) lines.push(shape);
   const tokens = tokenLine(row);
   if (tokens) lines.push(tokens);
   return lines.join("\n");
@@ -532,6 +561,8 @@ const renderRetry = (row: CallRow, parent: number): string => {
   const out = row.output_hash ? getBlob(row.output_hash) : null;
   if (out) lines.push(quote(clip(out, 500)));
   if (row.error) lines.push(`:x: *호출 실패* ${esc(row.error)}`);
+  const shape = shapeLine(row);
+  if (shape) lines.push(shape);
   const tokens = tokenLine(row);
   if (tokens) lines.push(tokens);
   return lines.join("\n");
@@ -558,6 +589,10 @@ const renderHold = (row: CallRow, ctx: CallContext | null): string => {
   lines.push(`*판정* ${out ? esc(out.trim()) : "(없음)"}${meant}`);
   if (row.error)
     lines.push(`:x: *호출 실패* ${esc(row.error)} — 일정을 그대로 둔다`);
+  // 판정은 상한이 16토큰이라 생각 과정이 켜지면 그것만으로 상한을 다 쓴다 — 답이 비었을 때
+  // 왜 비었는지가 이 줄에서 갈린다.
+  const shape = shapeLine(row);
+  if (shape) lines.push(shape);
   return lines.join("\n");
 };
 
@@ -580,6 +615,8 @@ const renderDraft = (row: CallRow): string => {
     if (!shown) lines.push(quote(clip(raw, 500)));
   }
   if (row.error) lines.push(`:x: *호출 실패* ${esc(row.error)}`);
+  const shape = shapeLine(row);
+  if (shape) lines.push(shape);
   const tokens = tokenLine(row);
   if (tokens) lines.push(tokens);
   return lines.join("\n");
@@ -924,5 +961,43 @@ export const traceProactiveFail = (p: {
     kind: "proactive_fail",
     parentKey: p.callId ? callKey(p.callId) : undefined,
     text: `:x: *${name} 발송 포기* · ${clock()} — ${esc(clip(p.error, 300))}`,
+  });
+};
+
+/** 자리 비움 예고를 접은 사유. 값은 kind에 그대로 실어 나중에 사유별로 셀 수 있게 한다. */
+export type AwaySkipReason = "just_spoke" | "no_away" | "conversation_moved";
+
+const AWAY_SKIP_NAME: Record<AwaySkipReason, string> = {
+  just_spoke: "캐릭터가 방금 말했다",
+  no_away: "문안에 자리를 비우는 일이 없다",
+  conversation_moved: "문안을 만드는 사이 마지막 메시지가 바뀌었다",
+};
+
+/**
+ * 자리 비움 예고를 접은 자리(presence.ts). 예고가 안 나가는 것 자체는 정상이지만 왜 안
+ * 나갔는지가 어디에도 없으면, 문안까지 만들어 놓고 접은 날 채널에는 문안만 남아 나간 것으로
+ * 읽힌다. 문안 호출 번호를 알면 그 문안 스레드에 달고, 부르기 전에 접은 자리는 독립 행이다.
+ *
+ * 같은 블록에 같은 사유는 하루 한 번만 쌓는다 — 10분 틱이 같은 창을 두 번 지나기 때문이다.
+ */
+export const traceAwaySkip = (p: {
+  characterId: number;
+  reason: AwaySkipReason;
+  activity: string;
+  /** 예고하려던 블록의 시작 시각. 하루 안에서 이 예고를 가리키는 이름이다. */
+  block: string;
+  detail?: string;
+  /** 문안을 만든 호출 번호. 부르기 전에 접었으면 없다. */
+  callId?: number;
+}): void => {
+  if (!traceEnabled()) return;
+  recordTraceEvent({
+    characterId: p.characterId,
+    kind: `away_skip_${p.reason}`,
+    dedupeKey: `away_skip:${p.characterId}:${kstLogicalDate()}:${p.block}:${p.reason}`,
+    parentKey: p.callId ? callKey(p.callId) : undefined,
+    text:
+      `:mute: *자리비움 예고 접음* · ${clock()} — ${clockLabel(p.block)} ${esc(p.activity)}` +
+      `\n${AWAY_SKIP_NAME[p.reason]}${p.detail ? ` (${esc(p.detail)})` : ""}`,
   });
 };
