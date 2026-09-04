@@ -8,6 +8,10 @@
 //
 // 문안은 대화와 같은 3층(buildSystemBlocks)에 상황 문단을 더해 만든다 — 앞 두 층 캐시를
 // 대화와 함께 쓴다. 경과 시간은 Date.now()로 잰다(getKstNow().getTime()은 9시간 어긋난다).
+//
+// 발송이 실패하면 만든 문안을 버리지 않고 proactive-policy의 보관함에 넣어 둔다. 다음 틱이
+// 같은 자리에 다시 오면 — 여기까지 온 것 자체가 창·침묵 조건이 아직 맞다는 뜻이라 — 모델을
+// 다시 부르지 않고 그 문안부터 보낸다.
 
 import { chatJson, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
@@ -31,7 +35,12 @@ import {
   logErr,
 } from "./bot.js";
 import { buildSystemBlocks, currentBlock } from "./context.js";
-import { proactiveAllowed } from "./proactive-policy.js";
+import {
+  holdFailedDraft,
+  proactiveAllowed,
+  takeHeldDraft,
+  type HeldDraft,
+} from "./proactive-policy.js";
 import { traceProactiveFail } from "./reply-trace.js";
 import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
 import {
@@ -167,21 +176,29 @@ const followupTickBody = async (): Promise<void> => {
         characterId: c.id,
         chatId: c.chat_id,
       };
+      // 앞 틱에서 못 나간 문안이 있으면 모델을 다시 부르지 않고 그것부터 보낸다 — 여기까지
+      // 온 것이 곧 밤 인사 창과 침묵 조건이 아직 맞다는 뜻이다(이슈 #269).
+      let outgoing: HeldDraft | null = takeHeldDraft(c.chat_id, "goodnight");
       try {
-        const g = await chatJson<{ text: string }>(
-          buildSystemBlocks(c.id, c.chat_id, {
-            recent: PROACTIVE_RECENT_LINES,
-            situation: goodnightSituation(),
-          }),
-          "위 상황 문단대로 문안을 만들어.",
-          300,
-          config.model,
-          meta,
-        );
+        if (!outgoing) {
+          const g = await chatJson<{ text: string }>(
+            buildSystemBlocks(c.id, c.chat_id, {
+              recent: PROACTIVE_RECENT_LINES,
+              situation: goodnightSituation(),
+            }),
+            "위 상황 문단대로 문안을 만들어.",
+            300,
+            config.model,
+            meta,
+          );
+          if (g.text)
+            outgoing = { kind: "goodnight", text: g.text, madeAt: Date.now() };
+        }
         // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 굿나잇은 필요 없다)
         // 다른 경로가 뭔가 보냈으면(마지막 메시지가 바뀜) 접는다.
-        if (g.text && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
-          await sendProactive(c.chat_id, c.id, g.text, "goodnight");
+        if (outgoing && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+          await sendProactive(c.chat_id, c.id, outgoing.text, "goodnight");
+          outgoing = null; // 나갔으니 들고 있지 않는다
           console.log(`[followup] goodnight to ${c.chat_id}`);
         }
       } catch (e) {
@@ -194,6 +211,8 @@ const followupTickBody = async (): Promise<void> => {
           error: msg,
           callId: meta.callId,
         });
+        // 한 통도 못 나갔으면 문안을 들고 있는다 — 다음 틱이 창 안이면 그대로 다시 보낸다.
+        if (outgoing) holdFailedDraft(c.chat_id, outgoing);
       } finally {
         releaseProactive(c.chat_id);
       }
@@ -222,21 +241,29 @@ const followupTickBody = async (): Promise<void> => {
         characterId: c.id,
         chatId: c.chat_id,
       };
+      // 앞 틱에서 못 나간 달래기 문안이 있으면 그것부터 보낸다 — 여기까지 온 것이 서운함 표시와
+      // 침묵이 아직 그대로라는 뜻이다.
+      let outgoing: HeldDraft | null = takeHeldDraft(c.chat_id, "mend");
       try {
-        const m = await chatJson<{ text: string }>(
-          buildSystemBlocks(c.id, c.chat_id, {
-            recent: PROACTIVE_RECENT_LINES,
-            situation: mendSituation(),
-          }),
-          "위 상황 문단대로 문안을 만들어.",
-          300,
-          config.model,
-          meta,
-        );
+        if (!outgoing) {
+          const m = await chatJson<{ text: string }>(
+            buildSystemBlocks(c.id, c.chat_id, {
+              recent: PROACTIVE_RECENT_LINES,
+              situation: mendSituation(),
+            }),
+            "위 상황 문단대로 문안을 만들어.",
+            300,
+            config.model,
+            meta,
+          );
+          if (m.text)
+            outgoing = { kind: "mend", text: m.text, madeAt: Date.now() };
+        }
         // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 달래기는 필요 없다)
         // 다른 경로가 뭔가 보냈으면 접는다.
-        if (m.text && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
-          await sendProactive(c.chat_id, c.id, m.text, "mend");
+        if (outgoing && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+          await sendProactive(c.chat_id, c.id, outgoing.text, "mend");
+          outgoing = null; // 나갔으니 들고 있지 않는다
           console.log(`[followup] mend to ${c.chat_id}`);
         }
       } catch (e) {
@@ -249,6 +276,7 @@ const followupTickBody = async (): Promise<void> => {
           error: msg,
           callId: meta.callId,
         });
+        if (outgoing) holdFailedDraft(c.chat_id, outgoing);
       } finally {
         releaseProactive(c.chat_id);
       }
@@ -279,25 +307,29 @@ const followupTickBody = async (): Promise<void> => {
       characterId: c.id,
       chatId: c.chat_id,
     };
+    // 앞 틱에서 못 나간 근황 문안이 있으면 그것부터 보낸다 — 위 검사를 다 지나온 것이 네 시간
+    // 침묵도, 하루 한 통 상한도, 답할 수 있는 블록도 그대로라는 뜻이다.
+    let outgoing: HeldDraft | null = takeHeldDraft(c.chat_id, "catchup");
     try {
-      const draft = await chatJson<{ send: boolean; text?: string }>(
-        buildSystemBlocks(c.id, c.chat_id, {
-          recent: PROACTIVE_RECENT_LINES,
-          situation: catchupSituation(),
-        }),
-        "위 상황 문단대로 문안을 만들어.",
-        500,
-        config.model, // 실시간성이라 대화 모델(sonnet)
-        meta,
-      );
+      if (!outgoing) {
+        const draft = await chatJson<{ send: boolean; text?: string }>(
+          buildSystemBlocks(c.id, c.chat_id, {
+            recent: PROACTIVE_RECENT_LINES,
+            situation: catchupSituation(),
+          }),
+          "위 상황 문단대로 문안을 만들어.",
+          500,
+          config.model, // 실시간성이라 대화 모델(sonnet)
+          meta,
+        );
+        if (draft.send && draft.text)
+          outgoing = { kind: "catchup", text: draft.text, madeAt: Date.now() };
+      }
       // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 말을 걸었으면(답장이 담당) 근황톡을 접고,
       // 다른 경로가 이미 보냈으면(마지막 메시지가 바뀜) 겹쳐 보내지 않는다.
-      if (
-        draft.send &&
-        draft.text &&
-        lastMessage(c.chat_id)?.sent_at === last.sent_at
-      ) {
-        await sendProactive(c.chat_id, c.id, draft.text, "catchup");
+      if (outgoing && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
+        await sendProactive(c.chat_id, c.id, outgoing.text, "catchup");
+        outgoing = null; // 나갔으니 들고 있지 않는다
         console.log(`[followup] sent to ${c.chat_id} @ ${block.activity}`);
       }
     } catch (e) {
@@ -310,6 +342,7 @@ const followupTickBody = async (): Promise<void> => {
         error: msg,
         callId: meta.callId,
       });
+      if (outgoing) holdFailedDraft(c.chat_id, outgoing);
     } finally {
       releaseProactive(c.chat_id);
     }

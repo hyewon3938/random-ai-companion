@@ -206,8 +206,14 @@ const splitBubbles = (text: string): string[] => {
 
 // 순간 네트워크 오류로 전송이 통째로 실패하지 않게 재시도한다(VM↔텔레그램 API 일시 단절 대비).
 // 나쁜 구간은 수 분~수십 분씩 이어지므로 촘촘히 조르기보다 간격을 넓게 잡는다.
-// 매 시도는 sendTimeout()(20초)으로 끊기니 최악 ~100초. 호출부(틱)는 이 시간만큼 붙잡힌다.
-const RETRY_BACKOFF_MS = [2_000, 5_000, 12_000];
+// 매 시도는 sendTimeout()(20초)으로 끊기니 최악 ~130초. 호출부(틱)는 이 시간만큼 붙잡힌다.
+//
+// 여기서 더 늘리지 않는 이유는 한 통을 붙잡는 시간이 곧 틱이 쉬는 시간이기 때문이다. 가장 짧은
+// 틱이 3분(dispatch)이고, 그보다 오래 붙잡으면 다음 틱이 재진입 가드에 막혀 통째로 건너뛴다 —
+// 창 안에서 여러 번 두드리려고 틱을 3분으로 줄인 것이 무의미해진다. 몇 분씩 끊기는 구간은
+// 여기서 버티는 대신 만든 것을 남겨 두고 다음 틱에 다시 보내 넘긴다(pending.ts의 RETRY_MS,
+// followup·presence의 실패 문안 보관).
+const RETRY_BACKOFF_MS = [5_000, 15_000, 30_000];
 
 const sendWithRetry = async (chatId: string, text: string): Promise<void> => {
   const tries = RETRY_BACKOFF_MS.length + 1;
