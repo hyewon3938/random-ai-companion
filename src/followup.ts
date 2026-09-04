@@ -1,7 +1,8 @@
 // 침묵 팔로업 — 답이 끊긴 자리에 한 통 보낸다(15분 틱).
 //
 // 관제탑을 통과할 때만 보낸다. 셋이다.
-//   낮 근황   — 유저 발화 기준 4시간 무응답이면 하루 1통. 보낸 뒤에도 답이 없으면 그날은 물러난다.
+//   낮 근황   — 유저의 마지막 말도 캐릭터의 마지막 말도 4시간 넘게 지났으면 하루 1통. 보낸 뒤에도
+//               답이 없으면 그날은 물러난다.
 //   밤 인사   — 자정~새벽 5시에 유저가 잔다는 말 없이 1시간 넘게 조용하면 1회.
 //   달래기    — 답장이 유저의 서운함을 표시했는데(reply-signal의 userUpset) 그 뒤로 답이 끊기면
 //               30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다.
@@ -72,8 +73,26 @@ import {
 const dayStart = (): string => logicalDayStartTs();
 // 경과 분: 저장된 ts는 KST 벽시계(+09:00으로 파싱하면 실제 epoch)이므로 실제 현재(Date.now)와 뺀다.
 // getKstNow()는 실제 시각+9시간이라 여기 쓰면 경과가 540분 부풀려져 침묵 조건을 늘 통과하는 버그가 났었다.
-const minutesSince = (ts: string): number =>
-  (Date.now() - new Date(ts.replace(" ", "T") + "+09:00").getTime()) / 60000;
+const minutesBetween = (ts: string, nowMs: number): number =>
+  (nowMs - new Date(ts.replace(" ", "T") + "+09:00").getTime()) / 60000;
+const minutesSince = (ts: string): number => minutesBetween(ts, Date.now());
+
+// 근황 선톡의 침묵 조건 — 유저의 마지막 말도, 캐릭터의 마지막 말도 네 시간은 지났어야 한다.
+//
+// 유저 발화만 재면 자리 비움 예고와 복귀 인사가 방금 나간 위에 근황이 겹쳐, 답 없는 말이 한
+// 시간 안에 셋 쌓였다(이슈 #274). 캐릭터가 무슨 말이든 했으면 상대가 그 말에 답할 네 시간을
+// 먼저 준다. 조건은 여전히 하나(네 시간 침묵)이고, 재는 자리가 누구 말이든 마지막 말로 바뀐 것뿐이다.
+export const catchupSilenceOk = (
+  lastUserTs: string,
+  lastAssistantTs: string,
+  nowMs = Date.now(),
+): boolean => {
+  const need = RECENT_USER_MS / 60_000;
+  return (
+    minutesBetween(lastUserTs, nowMs) >= need &&
+    minutesBetween(lastAssistantTs, nowMs) >= need
+  );
+};
 
 const goodnightSituation = (): string =>
   [
@@ -284,10 +303,11 @@ const followupTickBody = async (): Promise<void> => {
     }
 
     // (이하 근황 선톡)
-    // 유저가 네 시간 답이 없을 때 한 통. 조건을 이 하나로 두는 건, 각본 전환점까지 겹쳐 보면
-    // 언제 오는 말인지 설명할 수 없고 두 시간은 낮에 흔한 간격이라 답이 늦은 것과 대화가 끝난
-    // 것을 가르지 못해서다.
-    if (minutesSince(lu) < RECENT_USER_MS / 60_000) continue;
+    // 네 시간 조용할 때 한 통. 조건을 이 하나로 두는 건, 각본 전환점까지 겹쳐 보면 언제 오는
+    // 말인지 설명할 수 없고 두 시간은 낮에 흔한 간격이라 답이 늦은 것과 대화가 끝난 것을 가르지
+    // 못해서다. 네 시간은 유저의 마지막 말과 캐릭터의 마지막 말 둘 다에서 잰다 — 예고·복귀 인사가
+    // 방금 나갔으면 그 말에 답할 시간을 먼저 준다(이슈 #274). last는 위에서 캐릭터 차례로 확인했다.
+    if (!catchupSilenceOk(lu, last.sent_at)) continue;
     // 오늘 시작 이후에 유저가 말한 적이 있어야 (어제 끊긴 건 아침 선톡이 담당)
     if (lu < dayStart()) continue;
     // 근황은 하루 한 통. 보낸 뒤에도 답이 없으면 그날은 더 보내지 않고 다음 날 아침으로 넘긴다.
