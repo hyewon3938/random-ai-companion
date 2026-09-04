@@ -95,6 +95,7 @@ yarn dev        # 로컬 기동 (long polling)
 - `src/reply-signal.ts` — 답장 객체 — 모델이 코드에 신호를 넘기는 통로.
 - `src/reply-timing.ts` — 답장 텀을 정하는 자리 — 두 태그 표 한 장.
 - `src/reply-trace.ts` — 답장 트레이스 — 답장 한 건이 무엇을 보고 나왔는지 슬랙 채널에 올린다.
+- `src/schedule-dedupe.ts` — 같은 일정인지 가리는 자리 — 공백·기호를 지운 내용으로 견준다.
 - `src/tag-pick.ts` — 이번 발화로 무엇을 검색할지 주제 태그를 고르는 자리.
 - `src/thresholds.ts` — 숫자로 관리하는 기준값.
 - `src/trace.ts` — 슬랙 트레이스 채널 — 캐릭터 파이프라인이 안에서 내린 판단을 슬랙에 게시한다.

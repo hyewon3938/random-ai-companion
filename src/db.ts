@@ -1424,6 +1424,23 @@ export const addSchedule = (
   );
 };
 
+// 같은 주인·날짜에 지금 살아 있는 일정들. 새벽 정리가 대화에서 뽑은 일정을 넣기 전에
+// 이 목록과 견줘 같은 일이면 넣지 않는다(nightly.ts). status를 active로 거르는 것은
+// 취소·미룸으로 표시된 줄과는 겹쳐도 막지 않으려는 것이다 — 접혔던 일이 다시 잡히면 그건
+// 새로 적을 일정이다.
+export const getActiveSchedulesOn = (
+  characterId: number,
+  owner: "char" | "user",
+  date: string,
+): ScheduleRow[] =>
+  db
+    .prepare(
+      `SELECT id, owner, date, time_hint, content FROM schedules
+       WHERE character_id = ? AND owner = ? AND date = ? AND status = 'active'
+       ORDER BY id`,
+    )
+    .all(characterId, owner, date) as ScheduleRow[];
+
 // 새벽 정리 추출에 '이미 저장된 일정'으로 보여줄 행들.
 // getUpcomingSchedules와 두 가지가 다르다. status를 거르지 않는다 — 취소·미룸으로 표시된
 // 일정을 감추면 모델이 그것을 못 보고 새 일정으로 다시 적는다. 그리고 상한이 훨씬 크다 —

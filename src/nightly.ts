@@ -13,6 +13,10 @@
 // 지금 값도 싣는다. 캐릭터 쪽 사실·인물·진행 중인 일은 값까지 다 실리는데 상대 쪽 사실은 키만
 // 들어가서, 같은 키를 다시 쓸 때 앞 값의 세부가 지워졌다(이슈 #264).
 //
+// 대화에서 뽑은 일정은 이미 저장된 행과 견줘 같은 일이면 넣지 않는다. 프롬프트가 [이미 저장된
+// 일정] 목록을 보여주고 다시 적지 말라고 하는데도 같은 일이 날마다 한 줄씩 쌓여서(이슈 #267),
+// 저장하는 자리에서도 한 번 막는다.
+//
 // 유저가 오래 조용하면 gather가 침묵 단계를 노출하고 apply가 게이트를 강제한다 — quiet·
 // dormant면 일기와 시드와 리듬만 만들고 각본과 선톡은 건너뛰고, reconnect면 저녁 재연결
 // 문안만 만든다. 밖에서 부르는 경로가 백오프를 몰라도 안전하게 두려는 것이다.
@@ -28,6 +32,7 @@ import {
   getRelationship,
   updateRelationshipNotes,
   addSchedule,
+  getActiveSchedulesOn,
   getArcs,
   saveArc,
   saveDayPlan,
@@ -48,6 +53,7 @@ import {
   type RelationshipRow,
 } from "./db.js";
 import { buildSystemBlocks } from "./context.js";
+import { isSameScheduleContent } from "./schedule-dedupe.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { ensureTodayPlan, normalizePlan } from "./day-plan.js";
 import {
@@ -490,6 +496,7 @@ const applyNightlyTxn = db.transaction(
     const ex = out.extract;
     let memCount = 0;
     let schedTagCount = 0;
+    let schedSkipped = 0;
     let profileFilled: string[] = [];
     const skippedKeys: string[] = [];
     if (ex) {
@@ -575,11 +582,25 @@ const applyNightlyTxn = db.transaction(
 
       // 일정도 기억·일기와 같은 태그로 찾는다 — 이 줄이 없으면 지난 일정을 주제로 꺼내는
       // 경로(context.ts)가 늘 빈손으로 돌아온다.
+      //
+      // 넣기 전에 같은 주인·날짜에 살아 있는 행과 내용을 견주고, 같은 일이면 건너뛴다.
+      // 공백·기호 차이만 지우고 견주므로 같은 일을 다르게 적은 줄은 그대로 들어온다 — 그건
+      // 프롬프트의 [이미 저장된 일정] 목록이 막는 몫이다(schedule-dedupe.ts).
+      // 건너뛴 줄의 태그는 붙이지 않는다: 남아 있는 행에 이미 그 자리의 태그가 붙어 있고,
+      // 여기서 다시 붙이면 그 행의 태그가 이번 회차 것으로 통째로 갈아 끼워진다.
       for (const s of ex.schedules ?? [])
         if (s.date && s.content) {
+          const owner = s.who === "user" ? "user" : "char";
+          const already = getActiveSchedulesOn(g.characterId, owner, s.date);
+          if (
+            already.some((r) => isSameScheduleContent(r.content, s.content))
+          ) {
+            schedSkipped += 1;
+            continue;
+          }
           const schedId = addSchedule(
             g.characterId,
-            s.who === "user" ? "user" : "char",
+            owner,
             s.date,
             s.time_hint ?? null,
             s.content,
@@ -591,6 +612,10 @@ const applyNightlyTxn = db.transaction(
             setTags(g.characterId, "schedule", schedId, schedTagList);
           schedTagCount += schedTagList.length;
         }
+      if (schedSkipped)
+        console.log(
+          `[nightly] 이미 있는 일정 ${schedSkipped}건은 다시 넣지 않음 (캐릭터 ${g.characterId}, ${g.diaryDate})`,
+        );
     }
 
     // 그날 각본: 없으면 저장하고, 있어도 새벽 대화가 만든 lazy 각본이면 정식 각본으로 교체한다.
@@ -654,7 +679,7 @@ const applyNightlyTxn = db.transaction(
       `${nextDate(g.diaryDate)} 05:00:00`,
     );
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
