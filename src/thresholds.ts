@@ -128,6 +128,12 @@ export const PROACTIVE_RECENT_LINES = 6;
  * 비운 구간처럼 간격이 이보다 짧아도 표시가 필요한 자리는 toTurns의 markFrom으로 따로 준다. */
 export const TIME_MARKER_GAP_MS = 60 * 60 * 1000;
 
+/** 유저 연락이 이만큼 만에 왔을 때 답장 프롬프트에 그 텀을 적는다. 캐릭터의 마지막 말과 그 뒤
+ * 처음 온 유저 말 사이를 재고, 같은 논리일 안일 때만 쓴다 — 날짜가 바뀐 자리는 직전 대화 절이
+ * 다룬다(이슈 #284). 시간 표시 간격(1시간)보다 길게 잡는 이유는 밥 먹고 온 정도의 틈까지
+ * 화제로 삼으면 매번 보고받는 느낌이 나기 때문이다. */
+export const CONTACT_GAP_NOTICE_MS = 3 * 60 * 60 * 1000;
+
 /** 한 답장에 나눠 보내는 말풍선 상한. */
 export const MAX_BUBBLES = 6;
 
