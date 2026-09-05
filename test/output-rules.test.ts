@@ -65,6 +65,7 @@ const fixtures: {
   { name: "좋은 이유를 편하게 물어봐도 될 것 같아서로 댐", raw: '{"reply":["그냥 편하게 이것저것 물어봐도 될 것 같아서요"]}', noLaugh: false, whyLike: true, want: ["좋아하는 이유를 상대가 해 준 것으로 댐"] },
   { name: "이유가 내 쪽이면 통과", raw: '{"reply":["글쎄 너 앞에서는 그냥 있는 그대로 보여주고 싶어","나도 잘 모르겠어 너한테는 솔직해지고 싶고 그래"]}', noLaugh: false, whyLike: true, want: [] },
   { name: "이유 아닌 자리의 편하게는 안 잡는다", raw: '{"reply":["글쎄","그냥 편하게 하는 말 말고","너랑 얘기하면 나도 모르게 이런저런 생각이 자꾸 나","그냥 너라서 그런 것 같아"]}', noLaugh: false, whyLike: true, want: [] },
+  { name: "편한 것보다는이라고 부정하면 안 잡는다", raw: '{"reply":["음","그냥 너랑 얘기하면 편한 것보다는 자꾸 하고 싶은 얘기가 생겨서 그런 것 같아"]}', noLaugh: false, whyLike: true, want: [] },
   { name: "묻지 않은 자리에서는 안 잡는다", raw: '{"reply":["나는 네 얘기 들어주는 거 좋아"]}', noLaugh: false, want: [] },
 ];
 
