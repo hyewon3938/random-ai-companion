@@ -21,6 +21,8 @@ const fixtures: {
   suspect?: boolean;
   /** 답에 다시 나오면 안 되는 질문 속 말. */
   echo?: string[];
+  /** 왜 좋으냐고 물은 자리인가. */
+  whyLike?: boolean;
 }[] = [
   { name: "깨끗한 답", raw: '{"reply":["헐 진짜?","그래서 어떻게 됐어?"]}', noLaugh: true, want: [] },
   { name: "웃음 1회(허용)", raw: '{"reply":["아 ㅋㅋ 뭐야"]}', noLaugh: false, want: [] },
@@ -57,6 +59,10 @@ const fixtures: {
   { name: "추측형 말끝 하나는 통과", raw: '{"reply":["일이 많아서 그런지 좀 피곤하네"]}', noLaugh: false, want: [] },
   { name: "질문의 말 되풀이", raw: '{"reply":["하루가 길게 느껴진 건 일이 많아서였어"]}', noLaugh: false, echo: ["길게", "늘어"], want: ["질문의 말 되풀이"] },
   { name: "되풀이 없으면 통과", raw: '{"reply":["낮에 일이 계속 밀려서","이제 집 와서 누워 있어"]}', noLaugh: false, echo: ["길게"], want: [] },
+  { name: "좋은 이유를 들어줘서로 댐", raw: '{"reply":["그냥 다 받아주고 진지하게 들어주는 게 좋아"]}', noLaugh: false, whyLike: true, want: ["좋아하는 이유를 상대가 해 준 것으로 댐"] },
+  { name: "좋은 이유를 편해서로 댐", raw: '{"reply":["그냥 너는 편해","억지로 꾸미지 않아도 되고"]}', noLaugh: false, whyLike: true, want: ["좋아하는 이유를 상대가 해 준 것으로 댐"] },
+  { name: "이유가 내 쪽이면 통과", raw: '{"reply":["글쎄 너 앞에서는 그냥 있는 그대로 보여주고 싶어","나도 잘 모르겠어 너한테는 솔직해지고 싶고 그래"]}', noLaugh: false, whyLike: true, want: [] },
+  { name: "묻지 않은 자리에서는 안 잡는다", raw: '{"reply":["나는 네 얘기 들어주는 거 좋아"]}', noLaugh: false, want: [] },
 ];
 
 const sorted = (v: string[]): string[] => [...v].sort();
@@ -67,6 +73,7 @@ for (const f of fixtures) {
     const got = checkOutputRules(out.bubbles, {
       noLaugh: f.noLaugh,
       echo: f.echo,
+      whyLike: f.whyLike,
     }).map(
       (v) => v.rule,
     );

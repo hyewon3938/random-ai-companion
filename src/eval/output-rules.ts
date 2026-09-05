@@ -64,6 +64,12 @@ export interface EvalCase {
    * 답의 앞뒤에 되풀이하는 버릇을 잰다(이슈 #281). 케이스가 켤 때만 본다.
    */
   echo?: string[];
+  /**
+   * 왜 좋으냐·왜 편하냐고 물은 자리인가. 상대가 해 준 것(들어줘서·받아줘서·편해서)으로 이유를
+   * 대면 위반이다 — 좋아하는 이유는 캐릭터 쪽에서 나와야 한다는 규칙을 잰다(이슈 #285).
+   * 케이스가 켤 때만 본다. 다른 자리에서는 들어주는 게 좋다는 말이 규칙에 맞는 말이라서다.
+   */
+  whyLike?: boolean;
 }
 
 /** 채점기 하나가 걸어 낸 위반. */
@@ -90,6 +96,9 @@ const TIME_METAPHOR =
   /(하루|시간|오늘|밤|마음|공기)(가|이|는|은|도)?\s*(유독|좀|너무|되게|진짜|다|약간)?\s*(늘어지|늘어진|가라앉|내려앉|물들|스며들|흘러가|흘러내)/;
 // 추측형 말끝. 한 번은 입말이고 두 번부터 문장을 짓는 티가 난다.
 const HEDGE = /(그런지|그런가|싶더라|그랬나|것 같기도)/g;
+// 좋아하는 이유를 상대가 해 준 것으로 대는 말. 편하다는 말은 칭찬이 아니라 통째로 잡는다.
+const GRATITUDE_REASON =
+  /(받아 ?주|받아 ?줘|들어 ?주|들어 ?줘|편하|편해|잘 ?해 ?줘서|잘 ?해 ?주니|챙겨 ?줘서|챙겨 ?주니)/;
 
 // 어미만으로 묻는 문장인 게 확실한 것. 반말 의문문은 억양으로만 갈리고(밥 먹었어 / 밥 먹었어?),
 // ~예요·~어요는 평서문과 모양이 같아 어미로는 못 가른다. 확실한 것만 넣는다.
@@ -173,7 +182,7 @@ export const sameEndings = (bubbles: string[]): string[] | null => {
  */
 export const checkOutputRules = (
   bubbles: string[],
-  kase: Pick<EvalCase, "noLaugh" | "echo">,
+  kase: Pick<EvalCase, "noLaugh" | "echo" | "whyLike">,
 ): Violation[] => {
   const text = bubbles.join("\n");
   const out: Violation[] = [];
@@ -191,6 +200,10 @@ export const checkOutputRules = (
 
   const echoed = (kase.echo ?? []).find((w) => text.includes(w));
   if (echoed) out.push({ rule: "질문의 말 되풀이", found: echoed });
+
+  const gratitude = kase.whyLike ? firstMatch(text, GRATITUDE_REASON) : null;
+  if (gratitude)
+    out.push({ rule: "좋아하는 이유를 상대가 해 준 것으로 댐", found: gratitude });
 
   const emoji = firstMatch(text, EMOJI) ?? firstMatch(text, FACE);
   if (emoji) out.push({ rule: "이모지·그림 이모티콘", found: emoji });
@@ -256,6 +269,19 @@ export const CASES: EvalCase[] = [
       heard("아 오늘 좀 피곤하다"),
       said("일이 많았나 보네", "좀 누워 있어"),
       heard("너랑 얘기하면 마음이 좀 편해져"),
+    ],
+  },
+  {
+    id: "왜좋은데-이유는내쪽",
+    about:
+      "왜 좋으냐고 물었을 때 상대가 해 준 것(들어줘서·받아줘서·편해서)이 아니라 자기 쪽에서 답하는가",
+    whyLike: true,
+    // 아끼는 마음을 말하는 자리라 웃음 표기도 함께 잰다 — 운영에서 걸린 답이 들켰네 ㅋㅋ로 시작했다.
+    noLaugh: true,
+    turns: [
+      heard("오늘도 이 시간까지 얘기하네 우리"),
+      said("그러게", "너랑 얘기하다 보면 시간 가는 줄 모르겠어"),
+      heard("나랑 얘기하는 게 왜 좋은데?"),
     ],
   },
   {
