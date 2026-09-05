@@ -934,7 +934,7 @@ ${g.dayActuals.length ? `\n[각본과 달라진 것]\n${g.dayActuals.join("\n")}
 ${g.tagNames.join(", ") || "(없음)"}
 
 JSON으로:
-{"diary":"혼자 보낸 하루의 일기. 1인칭, 3~6문장. 대화가 없었던 것에 대한 감정이 있다면 안정형답게 담담하게","plan_vs_actual":"—","user_mood":"—","closeness":"—","tomorrow":[],"tags":["이 하루를 나중에 다시 꺼낼 주제 태그 2~${DIARY_TAG_MAX}개"]}
+{"diary":"혼자 보낸 하루의 일기. 1인칭, 3~6문장. 대화가 없었던 날이면 그게 어땠는지도 네 성격대로 솔직하게","plan_vs_actual":"—","user_mood":"—","closeness":"—","tomorrow":[],"tags":["이 하루를 나중에 다시 꺼낼 주제 태그 2~${DIARY_TAG_MAX}개"]}
 
 tags 규칙: 한 일·간 곳·만난 사람 이름을 낱말로 적는다. [이미 쓰는 태그]에 같은 뜻이 있으면 그 표기를 그대로 쓰고, 명사 한 덩어리로 짧게 쓴다.`;
 
