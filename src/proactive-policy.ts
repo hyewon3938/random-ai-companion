@@ -28,7 +28,7 @@ import { QUIET_AFTER_DAYS, RECONNECT_AT_DAYS } from "./thresholds.js";
 //   dormant   안부에도 무응답 — 유저가 돌아올 때까지 완전 침묵
 //
 // 유저 메시지가 오는 순간 어느 단계든 normal로 돌아간다(매번 새로 계산하므로 자동).
-// 캐릭터 서사와도 맞다: 안정형·매달리지 않음 stance의 자연스러운 행동.
+// 캐릭터 서사와도 맞다: 매달리지 않는다는 공통 선(ADR-0012)의 자연스러운 행동.
 
 export type SilenceTier = "normal" | "quiet" | "checkin" | "dormant";
 
