@@ -15,7 +15,7 @@
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
 | 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, prompts/reply, turns, reply-signal, reply-ask, reply-compose, relationship-update, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 3개, 크론표 | index, bot, pending, presence, followup, dispatch |
-| 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
+| 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
 | 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, reply-trace, feedback, tools/*, eval/* |
 
 7번에는 `src/` 밖의 `test/`·`scripts/`·`.github/`도 들어간다. 4번에 reply-timing과 proactive-policy를 넣은 이유는 둘 다 보낼지와 언제 보낼지를 정하는 판단이고 실제로 보내는 코드가 아니어서다. 이렇게 두면 5번과 6번이 4번을 같이 쓰면서 서로는 import하지 않는다.
@@ -71,9 +71,10 @@
 - `src/followup.ts` — 침묵 팔로업 — 답이 끊긴 자리에 한 통 보낸다(15분 틱).
 - `src/dispatch.ts` — 아침·점심·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 
-### 6. 새벽 정리 · 2,206줄
+### 6. 새벽 정리 · 2,233줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
+- `src/prompts/nightly.ts` — 새벽 정리가 모델에 넘기는 문안 — 일기·기억 정리·진행 반영 프롬프트와 선톡 상황 문단을 한 파일에 둔다.
 - `src/nightly-trace.ts` — 새벽 정리 트레이스 — 하루를 닫은 새벽 정리가 무엇을 바꿨는지 게시함에 쌓는다.
 - `src/tools/nightly-read.ts` — 새벽 정리 수집 도구: 활성 캐릭터의 새벽 정리 입력(어제 대화·기억·관계·각본·아크 등)을 JSON으로 출력한다.
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
@@ -120,14 +121,13 @@
 
 지금 코드에서 규칙에 어긋난 선은 없다. character.ts가 아크를 만들려고 nightly.ts를 가져오던 선이 하나 있었는데, 아크 코드를 arcs.ts로 옮기면서 없앴다(#294).
 
-같은 영역 안의 순환도 1개다. nightly.ts와 nightly-trace.ts가 서로 import하는데, nightly-trace 쪽은 타입 4개만 가져가서 실행 순환은 아니다. 길이 5까지 확인한 순환은 이것뿐이다.
+같은 영역 안의 순환은 2개다. nightly.ts와 nightly-trace.ts, nightly.ts와 prompts/nightly.ts가 서로 import하는데, nightly-trace는 타입 4개만, prompts/nightly는 NightlyGathered 타입 하나만 가져가서 실행 순환은 아니다. 길이 5까지 확인한 순환은 이 둘뿐이다.
 
 ## 한 파일이 두 영역에 걸친 자리
 
-영역은 파일 단위로 나눴지만 파일 4개는 안에서 책임이 갈린다. 같이 바뀐 횟수가 높은 쌍은 대부분 이 자리에서 나온다. 줄 번호는 2026-09-06 기준이다.
+영역은 파일 단위로 나눴지만 파일 3개는 안에서 책임이 갈린다. 같이 바뀐 횟수가 높은 쌍은 대부분 이 자리에서 나온다. 줄 번호는 2026-09-06 기준이다.
 
 - **bot.ts** 1,001줄. 전송 인프라 96-303, 온보딩 305-467, 수신 디바운스 477-520과 891-953, 답장 텀과 예약·깨우기 588-889는 5번이다. 답장을 만드는 순서는 4번 reply-compose.ts로 나갔고(#296), 상황 문단 3종 527-586만 4번의 결로 남아 있다. context.ts와 같이 바뀐 횟수가 20회로 모든 쌍 중 가장 많았던 파일인데, 이제 그 변경은 reply-compose.ts로 간다.
-- **nightly.ts** 1,464줄. 수집 450-562와 반영 568-860, runNightly 1317-1464는 6번이다. 프롬프트 문안 8종 892-1131은 4번의 결이다.
 - **trace.ts** 400줄. 게시함 적재와 슬랙 발송 틱은 7번의 기반인데, 아침 각본 게시 enqueueMorningPlans 391-400이 같은 파일에 있어서 관측이 3번과 4번을 읽는 이유가 된다.
 - **db.ts** 2,558줄. 정책 함수 4개가 저장 함수 사이에 있다. currentSpeechLevel 1196-1226, recentUserGaps 1175-1191, TRACE_EVENT_KEEP 1721-1728, 선제 발화 카운터의 LIKE 패턴 1784-1833은 4번이나 7번의 판단이다.
 
@@ -196,14 +196,13 @@ bot.ts가 텔레그램과 주고받고, pending.ts가 만들어 둔 답장을 �
 
 ### 6. 새벽 정리
 
-nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 450-562, 반영 applyNightlyTxn 568-860, 프롬프트 4종 892-1056, 선톡 상황 4종 1062-1131, 발송 시각 계산 1133-1315, runNightly 1317-1464다. 봇 안의 05:40 크론과 봇 밖의 외부 스케줄러 경로가 수집·반영 함수를 공유하므로 쓰기 코드는 한 벌이다. nightly-trace.ts가 무엇을 바꿨는지 게시함에 쌓는다.
+nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 applyNightlyTxn 579-867, 발송 시각 계산 903-1085, runNightly 1087-1234다. 모델에 넘기는 문안은 prompts/nightly.ts에 있다. 일기·대화 없던 날 일기·진행 반영·기억 정리 프롬프트 4종과 선톡 상황 문단 4종이 수집 결과를 받아 글자만 만든다. 4번의 prompts/reply.ts와 같은 꼴이지만 새벽 정리 규칙과 함께 바뀌어서 6번이다. 봇 안의 05:40 크론과 봇 밖의 외부 스케줄러 경로가 수집·반영 함수를 공유하므로 쓰기 코드는 한 벌이다. nightly-trace.ts가 무엇을 바꿨는지 게시함에 쌓는다.
 
 고칠 때 같이 보는 곳은 네 군데로, 추출 결과가 memory_items로 가므로 2번, 진행 중인 일과 일정 시각을 옮기고 아크를 이어 쓰라고 부르므로 3번, 선톡 문안이 buildSystemBlocks를 쓰므로 4번, 만들어 둔 예약 발송 행을 내보내는 5번 dispatch다. 여기에 repo 밖의 외부 스케줄러 지시서가 더해진다. 지시서의 프롬프트 규칙은 이 영역의 문안과 맞춰야 한다.
 
-검사는 nightly-extract·nightly-progress·schedule-time-update·schedule-dedupe 4개다. nightly-trace는 테스트가 없다. 설계 원본은 time-and-memory.md와 ADR 0006이다.
+검사는 nightly-extract·nightly-progress·nightly-prompts·schedule-time-update·schedule-dedupe 5개다. nightly-trace는 테스트가 없다. 설계 원본은 time-and-memory.md와 ADR 0006이다.
 
 손볼 자리
-- nightly.ts 1,464줄에서 문안 8종 892-1131을 prompts/nightly.ts로 떼면 오케스트레이션만 남는다.
 - 외부 지시서와 코드 안 프롬프트가 두 벌이 될 수 있어서 어느 쪽이 원본인지 정한다.
 
 ### 7. 관측과 운영
@@ -233,7 +232,7 @@ trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다.
 
 1. 아크를 3번으로 옮기고 WAIT 상수 중복을 지우고 도구 4개를 보관 폴더로 옮긴다. 9/6에 끝났다(#294).
 2. bot.ts의 답장 파이프라인 2벌을 1벌로 합쳐 밖으로 뺀다. 4번과 5번의 경계가 확정된다. 9/6에 끝났다(#296).
-3. nightly.ts에서 문안을 뗀다.
+3. nightly.ts에서 문안을 뗀다. 9/6에 끝났다(#298).
 4. 선톡 한 통을 보내는 공통 함수를 만들어 followup·presence를 줄인다.
 5. db.ts를 표 묶음으로 나누고 밖의 raw SQL과 안의 정책 함수를 제자리로 보낸다. 임포터가 24개라 가장 넓지만, 재내보내기 파일을 남기면 임포터는 안 건드린다.
 6. trace.ts와 reply-trace.ts를 나누고 context.ts의 읽기와 조립을 나눈다. 테스트를 붙이며 한다.

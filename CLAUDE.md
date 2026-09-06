@@ -12,7 +12,7 @@
 
 ### 남은 작업
 
-- [ ] **코드 영역별 리팩토링 (09-06 착수)** — 영역 7개와 원칙, 6단계 순서는 areas.md에 있다. 1·2단계(아크 이동·대기 상수 중복·도구 보관, 답장 파이프라인을 reply-compose.ts로)는 9/6에 끝났다(#294·#296). 다음은 3단계로 nightly.ts의 문안 8종을 prompts/nightly.ts로 떼는 일이다. 동작을 바꾸지 않는 정리라 배포·확인 대기 항목과 같이 가되, 단계마다 이슈를 만들어 열고 같은 영역의 기능 작업과 한 시점에 열지 않는다.
+- [ ] **코드 영역별 리팩토링 (09-06 착수)** — 영역 7개와 원칙, 6단계 순서는 areas.md에 있다. 1~3단계(아크 이동·대기 상수 중복·도구 보관, 답장 파이프라인을 reply-compose.ts로, 새벽 정리 문안을 prompts/nightly.ts로)는 9/6에 끝났다(#294·#296·#298). 다음은 4단계로 선톡 한 통을 보내는 공통 함수를 만들어 followup·presence를 줄이는 일이다. 동작을 바꾸지 않는 정리라 배포·확인 대기 항목과 같이 가되, 단계마다 이슈를 만들어 열고 같은 영역의 기능 작업과 한 시점에 열지 않는다.
 - [ ] **프롬프트·기억 구조 재설계** (08-19 착수) — 프롬프트 조립과 기억의 write/read/update 정책을 다시 설계한다. 설계 원본은 repo 루트 `time-and-memory.md`, 설계 허브는 `docs/data-map.html`(gitignored). 구현은 세션 하나에 단계 하나로 나누고 세션마다 이슈와 브랜치를 하나씩 둔다 — 범위·참조 절·모델은 time-and-memory.md 「작업 세션 나누기」 표에 있고, **새 세션은 그 표의 몇 번 줄인지 지정받아야 한다**(지정 없이 문서만 읽으면 여러 단계를 한꺼번에 손댄다). **9번까지 끝났고 10번(새 구조로 읽은 대화 확인, Fable)을 9/4에 열었다(이슈 #262)** — 여는 조건은 채워졌고 범위는 표의 10번 줄과 docs/session-10-plan.md에 있다. 사람이 대화해 확인하는 자리라 PR은 확인 뒤에 올린다. 11번(옛 경로 삭제, #156)은 9/4에 PR #272로 끝나 같은 날 배포했다. 12번(마무리, Fable)은 10번의 대화 확인이 끝난 뒤 연다. 날짜별 설계 기록과 1~9번·11번 세션 결과는 time-and-memory.md 「날짜별 설계 기록」·「세션별 결과」로 옮겼다.
 - [ ] **V2 — 유저 생성 캐릭터·기억 통합 (확정 08-27, 이슈 #28)**: 랜덤 매칭을 없애고 유저가 선택지와 서술형 입력으로 캐릭터를 만든다. 기억은 `memory_items` 세 항목(fact·ongoing·person) × 주인 둘, 관계는 `relationships` 컬럼 일곱 항목. 설계 원본은 time-and-memory.md 「V2」 절과 ADR 0002~0004, 저장 구조는 erd.md, 모듈 배치는 modules.md. 확정 뒤 덧붙인 세부(생성 호출 두 번·전용 컬럼 여섯·테이블 개명·구현 세션 재편·프롬프트 고유값 제거)는 time-and-memory.md 「확정 뒤에 덧붙인 것」으로 옮겼다.
 - [ ] **실제 작품의 없는 장면을 말하지 않게 하기 (09-05, 이슈 #287)** — 각본에 실제 작품 블록이 들어갈 때 답장 경로 밖에서 작품마다 한 번 검색해 짧은 사실 카드를 만들고, FACT_CARE에 적힌 것만 말하라는 규칙을 더한다. 말투 작업 뒤에 한다
@@ -58,7 +58,7 @@ yarn dev        # 로컬 기동 (long polling)
 - **코드**: TypeScript strict + ESM(import에 `.js` 확장자), named export, kebab-case 파일명, any 금지. 커밋은 Conventional Commits 한글. `src/*.ts`는 파일 맨 위 주석으로 시작한다 — 첫 줄이 한 문장 요약이고, 빈 주석 줄을 두고 그 아래에 자세한 설명을 적는다. 그 파일을 고치면 이 주석도 같은 커밋에서 고친다.
 - **작업 단위**: 새 작업은 이슈부터 만들고 main에서 브랜치를 판다(`타입/이슈번호-영문요약`). 끝나면 PR 본문에 `Closes #이슈번호`를 넣어 올리고 `gh pr merge <번호> --merge --delete-branch`로 머지·브랜치 삭제까지 한 세션에서 끝낸다. 커밋 메시지의 `(#번호)`는 링크만 걸고 이슈를 닫지 않는다. 끝난 작업은 이 파일에 남기지 않는다 — 무엇을 했는지는 닫힌 이슈로 찾으므로, 이슈 없이 작업하면 그 기록이 사라진다. 머지 전 사람 확인이 필요한 자리는 time-and-memory.md 「작업 세션 나누기」에 적혀 있다.
 - **이 파일 크기**: 세션마다 컨텍스트에 통째로 들어가는 지시서라 짧게 유지한다. 상태 절에는 아직 볼 것이 남은 항목만 두고, 무엇을 왜 그렇게 했는지는 이슈·PR 본문에 남긴다. 배포 기록은 서버 경로가 들어가서 공개 repo에 두지 않고 LOCAL-HISTORY.md에 적는다. 상한 12,000자는 `.githooks/pre-commit`이 강제하고 10,000자를 넘으면 경고한다. 새 작업 디렉터리에서는 `git config core.hooksPath .githooks`를 한 번 실행해 켠다. 막히면 상한을 올리지 말고 상태 절을 먼저 줄인다.
-- **자동 검사**: main 푸시와 PR마다 GitHub Actions가 `yarn typecheck`·`yarn test`를 돌린다(`.github/workflows/ci.yml`). 모델을 부르는 표기 규칙 평가(`yarn eval`)는 호출 비용이 붙고 통과율이 그날 응답에 따라 흔들려서 자동으로 돌리지 않는다. `src/prompts/`·`src/eval/`·`src/reply-signal.ts`를 고친 PR에는 `eval` 라벨을 붙여 평가를 돌리고 통과율을 확인한 뒤 머지한다(`.github/workflows/eval.yml`). 테스트 파일은 `test/`에 둔다. `scripts/gen-modules.mjs`가 `src/` 아래 `.ts` 전부를 색인으로 훑는다.
+- **자동 검사**: main 푸시와 PR마다 GitHub Actions가 `yarn typecheck`·`yarn test`를 돌린다(`.github/workflows/ci.yml`). 모델을 부르는 표기 규칙 평가(`yarn eval`)는 호출 비용이 붙고 통과율이 그날 응답에 따라 흔들려서 자동으로 돌리지 않는다. `src/prompts/reply.ts`·`src/eval/`·`src/reply-signal.ts`를 고친 PR에는 `eval` 라벨을 붙여 평가를 돌리고 통과율을 확인한 뒤 머지한다(`.github/workflows/eval.yml`). 테스트 파일은 `test/`에 둔다. `scripts/gen-modules.mjs`가 `src/` 아래 `.ts` 전부를 색인으로 훑는다.
 - **설계 일관성**: 캐릭터 stance(프레임 존중·신경 쓰는 티·무근거 핑 금지)는 character-design.md §5가 원본. 코드의 stance 문자열과 문서가 어긋나면 문서 기준으로 맞춘다.
 - **출력 규칙 단일 소스**: 캐릭터가 내보내는 모든 글에 공통으로 적용할 규칙(태도·대화 규칙·표기·말의 결)은 `src/prompts/reply.ts`의 고정 문안에서만 관리한다 — PERSON·SPEECH·EXEMPLARS·OUTPUT_FORMAT·FACT_CARE·NOTE_RULE. EXEMPLARS는 캐릭터 고유값이 없는 목표 말투 예시로, 금지 목록만으로는 안 잡히는 결(말풍선 끝 어미·추측형 말끝·반응어)을 보여준다. 캐릭터마다 다른 값으로 두면 생성 결과에 따라 규칙이 흔들리므로 정체성 항목에 넣지 않는다. 선톡 문안 프롬프트 7곳(nightly 아침·안부, followup 근황·굿나잇·달래기, presence 자리비움·복귀)도 전부 `buildSystemBlocks`(3층+상황 문단)를 타므로 같은 규칙이 자동으로 들어간다. 큰 결을 바꿀 일이 생기면 이 블록들을 고친다. 다만 답장이 내보내는 **형식**(JSON 객체)은 규칙층이 아니라 `src/reply-signal.ts`가 갖는다 — 선톡 문안 6곳은 같은 3층을 쓰되 자기 형식으로 답하므로, 규칙층에 넣으면 두 형식이 부딪힌다.
 - **영역 표와 파일 색인**: 어느 파일이 어느 영역인지는 areas.md의 영역 표가 단일 소스다. `node scripts/gen-modules.mjs`가 그 표를 아키텍처 요약에 옮겨 적고, 각 파일 맨 위 주석의 첫 줄로 areas.md의 파일 색인을 다시 쓴다. 손으로 고치지 않고, 요약 주석을 고치거나 파일을 새로 만들면 표에 넣은 뒤 이 명령을 돌려 함께 커밋한다. 색인이 밀렸거나 요약 주석이 없거나 표에 없는 파일이 있으면 커밋 훅이 막는다.
@@ -81,7 +81,7 @@ yarn dev        # 로컬 기동 (long polling)
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
 | 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, prompts/reply, turns, reply-signal, reply-ask, reply-compose, relationship-update, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 3개, 크론표 | index, bot, pending, presence, followup, dispatch |
-| 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
+| 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
 | 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, reply-trace, feedback, tools/*, eval/* |
 
 <!-- modules:end -->

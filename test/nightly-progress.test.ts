@@ -23,8 +23,9 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 const { db, saveDayPlan, recordDayActual, getMemoryItemById, getTags } =
   await import("../src/db.js");
 const { saveMemory } = await import("../src/memory.js");
-const { gatherNightlyInput, applyNightlyOutput, progressPrompt } =
+const { gatherNightlyInput, applyNightlyOutput } =
   await import("../src/nightly.js");
+const { progressPrompt } = await import("../src/prompts/nightly.js");
 
 const DIARY_DATE = "2026-09-03";
 
