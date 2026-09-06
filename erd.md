@@ -101,9 +101,15 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 | cautions | TEXT | | 조심할 것 |
 | history | TEXT | | 만나 온 이야기 — 어떻게 만났고 사이가 어떻게 변해 왔는지 |
 | feelings | TEXT | | 마음 상태 — 캐릭터가 유저에게 가지는 마음 |
+| user_state | TEXT | | 상대의 지금 상태 — 답장이 판정해 둔 짧은 문장 |
+| user_state_cause | TEXT | | 그 상태의 원인 — `char` 나 때문 · `other` 상대의 다른 일 |
+| user_state_tone | TEXT | | 그 상태의 좋고 나쁨 — `good` 좋음 · `neutral` 보통 · `bad` 안 좋음 |
+| user_state_since | TEXT | | 그 상태가 언제부터인지 |
 | updated_at | TEXT | | 갱신 시각 |
 
 관계를 담는 항목은 일곱이다(사이 정의부터 마음 상태까지, 말투는 값과 서술이 한 항목). 프롬프트에는 이 일곱이 항상 전부 들어간다. 초기값은 캐릭터를 만들 때 유저가 적은 관계 설정에서 생성 배치가 채우고, 잘 통하는 것과 조심할 것은 비워 두고 시작해 새벽 정리가 대화에서 채운다.
+
+상대의 지금 상태 컬럼 4개는 관계 항목이 아니라 그날 안에서만 쓰는 값이다. 답장을 만들 때마다 짧은 판정 호출이 최근 대화를 읽어 상대가 지금 어떤 상태인지 적고, 앞서 저장한 값과 다를 때만 덮어쓴다. 프롬프트에는 캐시 밖 꼬리에 한 줄로 들어가고, 새벽 정리가 그날 값을 마음 상태와 조심할 것에 녹인 뒤 비운다. 이 4개를 쓸 때는 갱신 시각을 바꾸지 않는다.
 
 캐릭터 번호와 만난 날 말고는 전부 비워둘 수 있다. 프롬프트를 조립할 때 빈 항목은 줄째로 빼도록 만들어 둬서, 아직 채우지 못한 항목이 있어도 그대로 돌아간다.
 
@@ -626,6 +632,8 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | memory_items.origin 어디서 생긴 값인가 | `creation` 캐릭터를 만들 때 쓴 값, 수정 거부 · `conversation` 새벽 정리가 대화에서 추가 |
 | memory_items.interest 관심도 | `high` 많음 · `medium` 보통 · `low` 적음 |
 | relationships.speech_level 지금 말투 | `polite` 존댓말 · `casual` 반말 |
+| relationships.user_state_cause 상대 상태의 원인 | `char` 나 때문 · `other` 상대의 다른 일 |
+| relationships.user_state_tone 상대 상태의 좋고 나쁨 | `good` 좋음 · `neutral` 보통 · `bad` 안 좋음 |
 | memory_items · schedules의 user_knows 유저가 아는가 | `unknown` 모름 · `known` 앎 · `waiting` 기다림, 유저가 결과를 기다리고 있어 캐릭터가 결과를 먼저 알린다 |
 | schedules.origin 출처 | `conversation` 대화 · `rhythm` 월 리듬 · `ongoing` 진행 중인 일 |
 | schedules.parent_kind 이 일정을 만든 항목 | `memory` 기억 데이터(진행 중인 일 · 의향) · `schedule` 앞선 일정 |

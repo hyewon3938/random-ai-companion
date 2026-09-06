@@ -19,3 +19,4 @@
 | [0011](0011-json-reply-envelope.md) | 답장 본문과 신호를 JSON 한 덩이로 받기 | Accepted |
 | [0012](0012-drop-secure-stance-show-caring.md) | 안정형 stance를 빼고 신경 쓰는 티를 공통 규칙으로 두기 | Accepted |
 | [0013](0013-code-areas.md) | 코드를 영역 7개로 나눠 표로 관리하기 | Accepted |
+| [0014](0014-user-state-line.md) | 상대의 지금 상태를 답장마다 판정해 관계 행에 한 줄로 갖기 | Accepted |
