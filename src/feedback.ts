@@ -28,7 +28,7 @@ import {
   restoreFeedback,
   traceEventBySlackTs,
 } from "./db.js";
-import { getKstNow } from "./kst.js";
+import { kstStamp } from "./kst.js";
 import { toFeedbackKind, type FeedbackKind } from "./labels.js";
 
 // 슬랙에는 "최근에 리액션이 달린 글"을 묻는 방법이 없어서, 최근 며칠치를 다시 읽어 지금 붙어
@@ -40,13 +40,10 @@ const MAX_PAGES = 5;
 // 이유는 한두 줄로 적는 자리라 길이 상한은 사고 방지용이다.
 const REPLY_TEXT_MAX = 2000;
 
-const nowIso = (): string =>
-  getKstNow().toISOString().replace("T", " ").slice(0, 19);
-
 // 슬랙 ts(에포크 초)를 KST 벽시계 문자열로 — 답글은 적힌 시각을 그대로 쓴다.
 const kstStampOf = (slackTs: string): string => {
   const sec = Number(slackTs.split(".")[0]);
-  if (!Number.isFinite(sec)) return nowIso();
+  if (!Number.isFinite(sec)) return kstStamp();
   return new Date(sec * 1000 + 9 * 3600_000)
     .toISOString()
     .replace("T", " ")
@@ -152,7 +149,7 @@ export const syncReactions = (
   if (live.length) {
     const target = resolveTarget(slackTs);
     if (!target) return { added: 0, restored: 0, removed: 0 };
-    const stamp = nowIso();
+    const stamp = kstStamp();
     for (const r of live) {
       const dedupeKey = reactionKey(slackTs, r);
       seen.add(dedupeKey);
@@ -174,7 +171,7 @@ export const syncReactions = (
   }
 
   let removed = 0;
-  const stamp = nowIso();
+  const stamp = kstStamp();
   for (const row of stored) {
     if (seen.has(row.dedupe_key)) continue;
     removeFeedback(row.id, stamp);

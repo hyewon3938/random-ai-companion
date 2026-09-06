@@ -2,7 +2,7 @@
 
 코드를 고칠 때 어느 파일을 열어야 하고 그 변경이 어디까지 번지는지 답하는 문서다. 실행 시점 순서로 모듈을 훑는 그림은 [modules.md](modules.md)에, 표와 컬럼의 뜻은 [erd.md](erd.md)에 있고, 이 문서는 그 둘과 축이 다르다. `src/` 아래 파일을 같이 바뀌는 정도와 의존 방향을 기준으로 영역 7개로 묶고, 영역마다 어떤 변경이 여기로 오는지, 고치면 같이 봐야 할 자리가 어디인지, 지금 보이는 손볼 자리가 무엇인지 적는다.
 
-영역을 나눈 근거는 세 가지다. 파일끼리 import하는 방향, 2026-08-01 이후 커밋에서 같이 바뀐 횟수, 그리고 파일 하나 안에서 책임이 갈리는 자리다. 영역은 폴더가 아니라 이 문서의 표로만 존재하며, 파일을 나누는 작업이 생길 때 그 영역 이름의 폴더를 만든다. 영역을 이렇게 정한 판단은 [ADR-0013](docs/adr/0013-code-areas.md)에 있다.
+영역을 나눈 근거는 세 가지다. 파일끼리 import하는 방향, 2026-08-01 이후 커밋에서 같이 바뀐 횟수, 그리고 파일 하나 안에서 책임이 갈리는 자리다. 영역은 폴더가 아니라 이 문서의 표로만 존재하며, 파일을 나누는 작업이 생길 때 나누는 파일의 이름으로 폴더를 만든다. src/db/·src/context/·src/trace/가 그렇게 생겼다. 영역을 이렇게 정한 판단은 [ADR-0013](docs/adr/0013-code-areas.md)에 있다.
 
 ## 영역 7개
 
@@ -13,10 +13,10 @@
 | 1. 기반과 저장 | 기준값·이름표·시각 계산, 표와 컬럼, 모델 호출 방식 | config, kst, labels, thresholds, db, db/*, llm |
 | 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-pick, user-profile |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
-| 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, prompts/reply, turns, reply-signal, reply-ask, reply-compose, relationship-update, speech-level, reply-timing, proactive-policy |
+| 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, context/*, prompts/reply, turns, reply-signal, reply-ask, reply-compose, relationship-update, speech-level, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 3개, 크론표 | index, bot, pending, presence, followup, dispatch, proactive-send |
 | 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
-| 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, reply-trace, feedback, tools/*, eval/* |
+| 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, trace/*, reply-trace, feedback, tools/*, eval/* |
 
 7번에는 `src/` 밖의 `test/`·`scripts/`·`.github/`도 들어간다. 4번에 reply-timing과 proactive-policy를 넣은 이유는 둘 다 보낼지와 언제 보낼지를 정하는 판단이고 실제로 보내는 코드가 아니어서다. 이렇게 두면 5번과 6번이 4번을 같이 쓰면서 서로는 import하지 않는다.
 
@@ -44,14 +44,14 @@
 - `src/db/sends.ts` — 예약 발송과 대기 중인 답장 표의 저장 함수.
 - `src/db/trace-events.ts` — 게시함 표의 저장 함수와 보관 기간.
 
-### 2. 기억 · 766줄
+### 2. 기억 · 763줄
 
 - `src/memory.ts` — 기억을 저장하고 찾는 자리.
 - `src/recall.ts` — 태그로 찾은 것 중 무엇을 프롬프트에 넣을지 고르고, 넣을 줄을 만드는 자리.
 - `src/tag-pick.ts` — 이번 발화로 무엇을 검색할지 주제 태그를 고르는 자리.
 - `src/user-profile.ts` — 유저 프로필을 프롬프트 한 덩이로 만드는 자리.
 
-### 3. 캐릭터의 삶 · 1,370줄
+### 3. 캐릭터의 삶 · 1,367줄
 
 - `src/character.ts` — 캐릭터를 만드는 자리.
 - `src/arcs.ts` — 아크 — 캐릭터 삶의 큰 흐름(올해·계절·이달·이번 주)을 만들고 달력 경계에서 이어 쓴다.
@@ -59,9 +59,9 @@
 - `src/day-plan.ts` — 하루 각본 — 캐릭터가 그날 무엇을 하는지 블록으로 만든다.
 - `src/schedule-dedupe.ts` — 같은 일정인지 가리는 자리 — 공백·기호를 지운 내용으로 견준다.
 
-### 4. 대화 생성 · 2,405줄
+### 4. 대화 생성 · 2,557줄
 
-- `src/context.ts` — 프롬프트를 조립하는 자리 — 안정도 순 3층.
+- `src/context.ts` — 프롬프트를 조립하는 자리 — 읽기와 조립을 잇는 앞문.
 - `src/prompts/reply.ts` — 답장 프롬프트의 고정 문안 — 캐릭터를 가리지 않고 매번 같은 글자가 들어가는 층이다.
 - `src/turns.ts` — 대화 기록을 모델에 넘길 턴으로 옮기는 자리.
 - `src/reply-signal.ts` — 답장 객체 — 모델이 코드에 신호를 넘기는 통로.
@@ -71,8 +71,11 @@
 - `src/speech-level.ts` — 지금 이 관계가 반말인지 존댓말인지 — 최근 캐릭터 답장의 종결어미로 판정한다.
 - `src/reply-timing.ts` — 답장 텀을 정하는 자리 — 두 태그 표 한 장.
 - `src/proactive-policy.ts` — 선제 발화 관제탑 — 오늘 먼저 연락해도 되는지, 무엇을 보낼지 한곳에서 정한다.
+- `src/context/assemble.ts` — 프롬프트 조립 — 읽어 둔 값 묶음을 안정도 순 3층의 시스템 블록으로 만든다.
+- `src/context/day-progress.ts` — 각본 위의 지금 — 지금 시각이 각본의 어느 블록인지, 지나온 블록, 빈자리를 메우는 잠.
+- `src/context/input.ts` — 프롬프트 재료 읽기 — 조립에 필요한 것을 DB와 시계에서 한 번에 읽어 값 묶음으로 만든다.
 
-### 5. 실행과 발송 · 2,392줄
+### 5. 실행과 발송 · 2,396줄
 
 - `src/index.ts` — 봇 프로세스의 시작점.
 - `src/bot.ts` — 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
@@ -82,7 +85,7 @@
 - `src/dispatch.ts` — 아침·점심·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 - `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
-### 6. 새벽 정리 · 2,168줄
+### 6. 새벽 정리 · 2,112줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 - `src/prompts/nightly.ts` — 새벽 정리가 모델에 넘기는 문안 — 일기·기억 정리·진행 반영 프롬프트와 선톡 상황 문단을 한 파일에 둔다.
@@ -91,11 +94,15 @@
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
-### 7. 관측과 운영 · 6,632줄
+### 7. 관측과 운영 · 6,698줄
 
-- `src/trace.ts` — 슬랙 트레이스 채널 — 캐릭터 파이프라인이 안에서 내린 판단을 슬랙에 게시한다.
-- `src/reply-trace.ts` — 답장 트레이스 — 답장 한 건이 무엇을 보고 나왔는지 슬랙 채널에 올린다.
+- `src/trace.ts` — 슬랙 트레이스 게시함 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
+- `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고를 게시함에 쌓는다.
 - `src/feedback.ts` — 슬랙 트레이스 채널에 사람이 남긴 표시를 모은다.
+- `src/trace/format.ts` — 슬랙 게시 문안이 공통으로 쓰는 표기 도우미 — 이스케이프·날짜·자르기·인용·토큰 줄.
+- `src/trace/morning-plan.ts` — 아침 각본 게시 — 새벽 정리가 만든 오늘 각본을 아침에 슬랙 스레드로 올린다.
+- `src/trace/reply-post.ts` — 답장 게시 준비 — 아직 안 올린 모델 호출을 번호 순서대로 게시함(trace_events)에 쌓는다.
+- `src/trace/reply-render.ts` — 답장 게시 문안 그리기 — 호출 행과 판단 근거를 슬랙 본문 한 장으로 옮긴다.
 - `src/tools/analyze.ts` — 애착 신호 분석: messages 원시 로그에서 행동 신호를 날짜별로 집계한다 (README의 신호 표 대응).
 - `src/tools/archive/demo-send.ts` — 데모 발송 도구 (발표 시연용): 활성 캐릭터로 선톡 문안을 실제 발송 경로(sendProactive)로 보낸다.
 - `src/tools/archive/demo-undo.ts` — 데모 원복 도구 (발표 시연용): demo-send.ts가 출력한 경계 id 이후의 메시지를 삭제해 데모 전 상태로 되돌린다.
@@ -136,10 +143,9 @@
 
 ## 한 파일이 두 영역에 걸친 자리
 
-영역은 파일 단위로 나눴지만 파일 2개는 안에서 책임이 갈린다. 같이 바뀐 횟수가 높은 쌍은 대부분 이 자리에서 나온다. 줄 번호는 2026-09-06 기준이다.
+영역은 파일 단위로 나눴지만 파일 하나는 안에서 책임이 갈린다. 같이 바뀐 횟수가 높은 쌍은 대부분 이 자리에서 나온다. 줄 번호는 2026-09-06 기준이다.
 
 - **bot.ts** 1,001줄. 전송 인프라 96-303, 온보딩 305-467, 수신 디바운스 477-520과 891-953, 답장 텀과 예약·깨우기 588-889는 5번이다. 답장을 만드는 순서는 4번 reply-compose.ts로 나갔고(#296), 상황 문단 3종 527-586만 4번의 결로 남아 있다. context.ts와 같이 바뀐 횟수가 20회로 모든 쌍 중 가장 많았던 파일인데, 이제 그 변경은 reply-compose.ts로 간다.
-- **trace.ts** 400줄. 게시함 적재와 슬랙 발송 틱은 7번의 기반인데, 아침 각본 게시 enqueueMorningPlans 391-400이 같은 파일에 있어서 관측이 3번과 4번을 읽는 이유가 된다.
 
 ## 영역별 안내
 
@@ -159,7 +165,7 @@ kst는 파일 25개, config 18개, thresholds 14개, labels 14개, llm 11개, db
 
 memory.ts가 저장하고 찾고, recall.ts가 찾은 것 중 무엇을 넣을지 고르고 줄을 만든다. recall.ts는 DB를 열지 않고, memory.ts는 SQL을 직접 쓰지 않는다. tag-pick.ts는 발화마다 검색 태그를 고르는 sonnet 호출이고, user-profile.ts는 유저 절 한 덩이를 만든다.
 
-고칠 때 같이 보는 곳은 6번의 추출 프롬프트, 4번 context.ts의 검색 절, 3번 day-plan.ts의 진행 중인 일 블록, tools/db-tag-search, erd.md의 memory_items·tags·relationships다.
+고칠 때 같이 보는 곳은 6번의 추출 프롬프트, 4번 context/assemble.ts의 검색 절, 3번 day-plan.ts의 진행 중인 일 블록, tools/db-tag-search, erd.md의 memory_items·tags·relationships다.
 
 검사는 nightly-extract·day-plan-ongoing 2개다. recall·tag-pick·user-profile은 테스트가 없다. 설계 원본은 time-and-memory.md와 ADR 0003·0004·0005·0010이다.
 
@@ -169,7 +175,7 @@ memory.ts가 저장하고 찾고, recall.ts가 찾은 것 중 무엇을 넣을�
 
 character.ts는 캐릭터를 두 번 호출로 만들고, arcs.ts는 삶의 큰 흐름 네 칸을 만들어 달력 경계에서 이어 쓰고, life-plan.ts는 한 달치 이벤트와 컨디션 시드를, day-plan.ts는 하루 각본을 블록으로 만든다. schedule-dedupe.ts는 같은 일정인지 가린다. 전부 opus 호출이다.
 
-고칠 때 같이 보는 곳은 6번의 진행 중인 일 반영과 runNightly의 아크 호출, 4번 context.ts의 각본 절과 reply-timing.ts의 두 태그 표, 7번 trace.ts의 아침 각본 게시다. 도구는 tools/gen-day-plan·gen-rhythm·create-character·backfill-attitude다.
+고칠 때 같이 보는 곳은 6번의 진행 중인 일 반영과 runNightly의 아크 호출, 4번 context/day-progress.ts의 각본 위의 지금 계산과 reply-timing.ts의 두 태그 표, 7번 trace/morning-plan.ts의 아침 각본 게시다. 도구는 tools/gen-day-plan·gen-rhythm·create-character·backfill-attitude다.
 
 검사는 arcs·day-plan-ongoing·schedule-dedupe·schedule-time-update·eval-fixture-character 5개다. life-plan은 테스트가 없다. 설계 원본은 ADR 0002·0010과 time-and-memory.md의 V2 절이다.
 
@@ -178,14 +184,13 @@ character.ts는 캐릭터를 두 번 호출로 만들고, arcs.ts는 삶의 큰 
 
 ### 4. 대화 생성
 
-context.ts가 안정도 순 3층을 조립하고, prompts/reply.ts가 캐릭터가 내보내는 모든 글의 규칙층 단일 소스다. 어느 층에 어느 순서로 넣을지는 context.ts가 정한다. turns.ts는 대화 기록을 턴으로 옮기고, reply-signal.ts는 답장 객체의 형식과 파서를 한 파일에 갖는다. reply-ask.ts는 한 통을 받아 오고 relationship-update.ts는 그 신호를 관계 컬럼에 반영한다. reply-compose.ts는 답장 한 통을 만드는 순서(말투 굳히기·검색 태그·조립·호출·신호 반영·폐기 판정)를 갖고, 5번의 즉답과 몰아 답장이 상황 문단과 시간 표시 기준만 다르게 주고 둘 다 이 함수를 부른다. speech-level.ts는 최근 답장의 어미로 지금 반말인지 존댓말인지 가늠한다. reply-timing.ts는 두 태그 표와 붙잡기 판정에 유저가 이어 보내는 텀 계산까지 갖고, proactive-policy.ts는 오늘 먼저 연락해도 되는지와 무엇을 보낼지를 정하며 선톡을 종류별로 세는 meta_json 패턴도 여기서만 정한다.
+context.ts는 앞문이다. context/input.ts가 DB에서 값을 읽어 한 묶음으로 넘기면 context/assemble.ts가 안정도 순 3층을 쌓고, 각본 위의 지금(지나온 블록·지금 블록·빈자리의 잠)은 context/day-progress.ts가 DB 없이 계산한다. prompts/reply.ts가 캐릭터가 내보내는 모든 글의 규칙층 단일 소스고, 어느 층에 어느 순서로 넣을지는 assemble.ts가 정한다. turns.ts는 대화 기록을 턴으로 옮기고, reply-signal.ts는 답장 객체의 형식과 파서를 한 파일에 갖는다. reply-ask.ts는 한 통을 받아 오고 relationship-update.ts는 그 신호를 관계 컬럼에 반영한다. reply-compose.ts는 답장 한 통을 만드는 순서(말투 굳히기·검색 태그·조립·호출·신호 반영·폐기 판정)를 갖고, 5번의 즉답과 몰아 답장이 상황 문단과 시간 표시 기준만 다르게 주고 둘 다 이 함수를 부른다. speech-level.ts는 최근 답장의 어미로 지금 반말인지 존댓말인지 가늠한다. reply-timing.ts는 두 태그 표와 붙잡기 판정에 유저가 이어 보내는 텀 계산까지 갖고, proactive-policy.ts는 오늘 먼저 연락해도 되는지와 무엇을 보낼지를 정하며 선톡을 종류별로 세는 meta_json 패턴도 여기서만 정한다.
 
-고칠 때 같이 보는 곳은 5번 bot.ts가 composeReply에 넘기는 상황 문단과 호출 근거다. 선톡 문안 7곳도 같은 3층을 쓴다. presence 1곳, followup 3곳, nightly 2곳, bot 복귀 인사 1곳이다. 7번의 eval/output-rules는 이 영역을 고친 PR에 eval 라벨을 붙여 돌리고, reply-trace.ts의 렌더도 답장 형식이 바뀌면 따라온다.
+고칠 때 같이 보는 곳은 5번 bot.ts가 composeReply에 넘기는 상황 문단과 호출 근거다. 선톡 문안 7곳도 같은 3층을 쓴다. presence 1곳, followup 3곳, nightly 2곳, bot 복귀 인사 1곳이다. 7번의 eval/output-rules는 이 영역을 고친 PR에 eval 라벨을 붙여 돌리고, trace/reply-render.ts의 렌더도 답장 형식이 바뀌면 따라온다.
 
-검사는 reply-signal·reply-ask·reply-compose·output-rules·turns·held-draft·speech-level·proactive-counters 8개다. context·relationship-update는 테스트가 없고 reply-timing은 이어 보내는 텀만 있다. 설계 원본은 ADR 0011·0012와 time-and-memory.md다.
+검사는 reply-signal·reply-ask·reply-compose·output-rules·turns·held-draft·speech-level·proactive-counters·context-assemble 9개다. relationship-update는 테스트가 없고(#305) reply-timing은 이어 보내는 텀만 있다. 설계 원본은 ADR 0011·0012와 time-and-memory.md다.
 
 손볼 자리
-- context.ts가 조립만 하지 않는다. 21-37에서 db 함수 12개를 직접 불러 읽고, 각본을 시간대로 나누는 dayProgress·sleepGap 96-146도 여기 있다. 읽기와 조립을 나누면 조립 쪽에 테스트를 붙일 수 있다.
 - 답장 밖 발화 표면 6곳의 문안이 각자 파일에 있다. 옮기기 쉬운 것은 followup 87-121, bot 527-586, tag-pick 32-38, reply-timing의 붙잡기 지시문이다.
 
 ### 5. 실행과 발송
@@ -213,15 +218,13 @@ nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 app
 
 ### 7. 관측과 운영
 
-trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다. reply-trace.ts는 24-894에서 답장 호출의 게시 재료를 조립하고 896-1003에서 발송·실패·접은 결과를 스레드에 덧붙인다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 17개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 23개, scripts 3개, 워크플로 2개, 커밋 훅이 여기다.
+trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 17개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 23개, scripts 3개, 워크플로 2개, 커밋 훅이 여기다.
 
-고칠 때 같이 보는 곳은 슬랙 채널의 글 형식과 호출부 전부다. 검사는 proactive-fail-trace 하나뿐이고, trace·feedback은 테스트가 없다. 설계 원본은 ADR 0008·0009다.
+고칠 때 같이 보는 곳은 슬랙 채널의 글 형식과 호출부 전부다. 검사는 proactive-fail-trace·reply-render·morning-plan 3개고, trace·feedback·nightly-trace는 테스트가 없다(#305). 설계 원본은 ADR 0008·0009다.
 
 손볼 자리
-- trace.ts에서 아침 각본 게시를 떼면 관측이 3·4번을 읽는 선이 줄어든다.
-- reply-trace.ts의 두 역할을 나눈다. 게시 재료 조립은 렌더 함수 renderReply·timingLines·lineDiff가 무검증이라 나누면서 테스트를 붙인다.
 - backfill-attitude는 일회성이라 tools/archive/로 옮길지 그때 정한다.
-- 테스트 공백이 가장 큰 파일은 bot·context·reply-trace다.
+- 테스트 공백이 가장 큰 파일은 bot이다. 어느 단계도 건드리지 않아 테스트가 없는 파일 8개는 #305에서 붙인다.
 
 ## 리팩토링 원칙
 
@@ -241,11 +244,11 @@ trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다.
 3. nightly.ts에서 문안을 뗀다. 9/6에 끝났다(#298).
 4. 선톡 한 통을 보내는 공통 함수를 만들어 followup·presence를 줄인다. 9/6에 끝났다(#300).
 5. db.ts를 표 묶음으로 나누고 밖의 raw SQL과 안의 정책 함수를 제자리로 보낸다. 임포터가 24개라 가장 넓지만, 재내보내기 파일을 남기면 임포터는 안 건드린다. 9/6에 끝났다(#302).
-6. trace.ts와 reply-trace.ts를 나누고 context.ts의 읽기와 조립을 나눈다. 테스트를 붙이며 한다.
+6. trace.ts와 reply-trace.ts를 나누고 context.ts의 읽기와 조립을 나눈다. 테스트를 붙이며 한다. 9/6에 끝났다(#304).
 
 ## 이 문서를 관리하는 방법
 
 - 새 파일을 만들면 영역 표에 넣는다. `node scripts/gen-modules.mjs`가 이 표와 각 파일 맨 위 주석의 첫 줄로 위 파일 색인을 다시 쓰고, 같은 표를 CLAUDE.md 아키텍처 요약에도 옮겨 적는다. 표에 없는 src 파일이 있거나 색인이 밀리면 커밋 훅이 막는다.
-- 파일을 폴더로 옮기지 않는다. 분해 작업으로 새 파일이 생길 때 그 영역 이름의 폴더를 만든다. 예외는 `src/tools/archive/`로, 더 돌리지 않는 도구를 두는 자리다.
+- 파일을 폴더로 옮기지 않는다. 분해 작업으로 새 파일이 생길 때 나누는 파일의 이름으로 폴더를 만들고, 원본 파일은 앞문으로 남겨 임포터가 그대로 쓰게 한다. 예외는 `src/tools/archive/`로, 더 돌리지 않는 도구를 두는 자리다.
 - 손볼 자리는 착수할 때 이슈 번호를 달고 끝나면 여기서 지운다. 무엇을 왜 그렇게 했는지는 이슈와 PR 본문에 남긴다. 줄 번호는 적은 날짜 기준이라 착수할 때 다시 잰다.
 - 영역의 이름이나 경계를 바꾸는 판단은 ADR로 남긴다.

@@ -26,7 +26,8 @@ import { runFollowupTick } from "./followup.js";
 import { runPresenceTick } from "./presence.js";
 import { resumePendingReplies } from "./pending.js";
 import { runTraceTick } from "./trace.js";
-import { enqueueReplyTraces } from "./reply-trace.js";
+import { enqueueReplyTraces } from "./trace/reply-post.js";
+import { enqueueMorningPlans } from "./trace/morning-plan.js";
 import { runFeedbackTick } from "./feedback.js";
 
 // 이 프로세스는 실시간 대화(반응형)와 선톡 발송을 담당한다.
@@ -88,8 +89,9 @@ cron.schedule(
   { timezone: "Asia/Seoul" },
 );
 
-// 슬랙 트레이스 게시: 1분 틱. 아직 안 올린 모델 호출을 게시함(trace_events)에 쌓고(reply-trace),
-// 게시함에 있는 것을 슬랙 채널로 내보낸다(trace). 토큰·채널 설정이 없으면 둘 다 아무것도 하지 않는다.
+// 슬랙 트레이스 게시: 1분 틱. 아직 안 올린 모델 호출과 오늘 각본을 게시함(trace_events)에 쌓고
+// (trace/reply-post·trace/morning-plan), 게시함에 있는 것을 슬랙 채널로 내보낸다(trace).
+// 토큰·채널 설정이 없으면 셋 다 아무것도 하지 않는다.
 cron.schedule(
   "* * * * *",
   () => {
@@ -97,6 +99,11 @@ cron.schedule(
       enqueueReplyTraces();
     } catch (e) {
       logErr("[trace] 답장 게시 준비 실패:", e);
+    }
+    try {
+      enqueueMorningPlans();
+    } catch (e) {
+      logErr("[trace] 아침 각본 게시 준비 실패:", e);
     }
     runTraceTick().catch((e) => logErr("[trace] tick error:", e));
   },

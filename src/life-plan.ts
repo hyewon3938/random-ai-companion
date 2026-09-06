@@ -18,7 +18,7 @@ import {
 } from "./db.js";
 import { identityLines } from "./memory.js";
 import { RHYTHM_RUNWAY_DAYS } from "./thresholds.js";
-import { dayLabel, getKstNow, kstDateString } from "./kst.js";
+import { dayLabel, kstStamp } from "./kst.js";
 
 // 월 리듬(중간 지평): 한 달치 이벤트 + 매일의 컨디션/기상 시드를 미리 깔아둔다.
 // 연(아크)은 러프, 월은 디테일, 일(각본)은 구체 — 세 지평이 이 층에서 만난다.
@@ -36,9 +36,6 @@ export interface MonthPlan {
     note: string;
   }[];
 }
-
-const nowStamp = (): string =>
-  `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
 
 // "YYYY-MM"의 모든 날짜 + 요일 라벨. 정오 UTC로 만들어 롤오버·타임존 영향 없음
 export const monthDays = (ym: string): { date: string; label: string }[] => {
@@ -156,7 +153,7 @@ export const applyMonthPlan = (
   plan: MonthPlan,
 ): void => {
   if (monthHasSeeds(characterId, ym)) return;
-  const ts = nowStamp();
+  const ts = kstStamp();
   for (const e of plan.events ?? [])
     if (e.date && e.content)
       addSchedule(

@@ -69,7 +69,7 @@ const GONE_NAMES: [string, string[]][] = [
   ["legacy_state_json", [DB, ...MIGRATION_TOOLS]],
   ["last_contact_at", [DB]],
   // character.ts의 age_band는 옛 바이블 JSON의 키라 컬럼과 무관하다.
-  ["age_band", [DB, join("src", "character.ts"), join("src", "context.ts")]],
+  ["age_band", [DB, join("src", "character.ts"), join("src", "context", "assemble.ts")]],
 ];
 
 test("지운 함수·상수를 부르는 곳이 없다", () => {

@@ -95,6 +95,7 @@ import {
 import {
   getKstNow,
   kstDateString,
+  kstStamp,
   dayLabelOf,
   clockLabel,
   type NightSleep,
@@ -296,9 +297,6 @@ export interface NightlyGathered {
   sendPlan: "morning" | "lunch" | "checkin" | "none";
   sendPlanReason: string;
 }
-
-const nowStamp = (): string =>
-  `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
 
 // 하루 창의 끝을 만드는 다음 날짜. 대화·오늘 메모를 05:00~다음날 05:00로 끊는 데 쓴다.
 const nextDate = (date: string): string =>
@@ -571,7 +569,7 @@ export const gatherNightlyInput = (
 // (saveMemory 내부의 태그 트랜잭션은 better-sqlite3가 세이브포인트로 중첩 처리한다.)
 const applyNightlyTxn = db.transaction(
   (g: NightlyGathered, out: NightlyOutput): string => {
-    const ts = nowStamp();
+    const ts = kstStamp();
 
     if (hasDiaryOn(g.characterId, g.diaryDate))
       return `skip: ${g.diaryDate} 일기 이미 있음`;
@@ -1051,7 +1049,7 @@ const ensurePreparedSend = async (
       send.window_start,
       send.window_end,
       send.text,
-      nowStamp(),
+      kstStamp(),
       send.kind ?? "morning",
     );
 };

@@ -25,25 +25,27 @@ import {
   listMemoryItems,
   markLlmCallTraced,
   untracedCallsSince,
-  type LlmCallSummaryRow,
   type MemoryRow,
   type RelationshipRow,
   type StoredUserProfile,
 } from "./db.js";
+import { recordTraceChunks, recordTraceEvent, traceEnabled } from "./trace.js";
 import {
-  chunked,
+  clip,
+  clock,
   dateLabel,
   esc,
-  recordTraceEvent,
-  traceEnabled,
-} from "./trace.js";
+  purposeName,
+  quote,
+  SEND_KIND_NAME,
+  shortModel,
+  tokenLine,
+} from "./trace/format.js";
 import {
-  CALL_PURPOSE_NAME,
   INTEREST_NAME,
   MEMORY_ITEM_TYPE_NAME,
   MEMORY_OWNER_NAME,
   SPEECH_LEVEL_NAME,
-  type CallPurpose,
   type MemoryOrigin,
 } from "./labels.js";
 import { keyProblem } from "./memory.js";
@@ -68,22 +70,6 @@ const NIGHTLY_PURPOSES = [
 // 호출 원문을 이번 새벽 정리 몫으로 볼 시간 창. 생성은 언제나 반영 직전에 일어나므로
 // 뒤를 볼 필요가 없고, 창을 좁게 잡아 낮에 만든 임시 각본까지 딸려오지 않게 한다.
 const CALL_WINDOW_MS = 2 * 3600_000;
-
-const clock = (): string => getKstNow().toISOString().slice(11, 19);
-
-const clip = (s: string, n: number): string =>
-  s.length <= n ? s : `${s.slice(0, n)}… (${s.length}자)`;
-
-const quote = (s: string): string =>
-  s
-    .split("\n")
-    .map((l) => `> ${esc(l)}`)
-    .join("\n");
-
-const shortModel = (m: string): string => m.replace(/^claude-/, "");
-
-const purposeName = (p: string): string =>
-  p in CALL_PURPOSE_NAME ? CALL_PURPOSE_NAME[p as CallPurpose] : p;
 
 const stampMinusMs = (ms: number): string => {
   const t = new Date(getKstNow().getTime() - ms);
@@ -347,28 +333,6 @@ const headText = (
 
 // ── 스레드 ──────────────────────────────────────────────────────────────
 
-// 긴 본문은 게시함이 정한 한 덩이 크기로 잘라 여러 행으로 쌓는다.
-// code=true면 자른 뒤에 각 덩이를 코드 울타리로 감싼다 — 울타리째 자르면 표시가 깨진다.
-const pushChunks = (
-  characterId: number,
-  parentKey: string,
-  kind: string,
-  label: string,
-  body: string,
-  code = false,
-): void => {
-  const parts = chunked(body);
-  parts.forEach((p, i) => {
-    const head = parts.length > 1 ? `${label} (${i + 1}/${parts.length})` : label;
-    recordTraceEvent({
-      characterId,
-      kind,
-      parentKey,
-      text: code ? `${head}\n\`\`\`\n${p}\n\`\`\`` : `${head}\n${p}`,
-    });
-  });
-};
-
 const memoryChild = (
   g: NightlyGathered,
   out: NightlyOutput,
@@ -445,7 +409,7 @@ const memoryChild = (
       ? [`:warning: 키 규칙에 안 맞아 건너뜀: ${esc(skipped.join(", "))}`]
       : []),
   ].join("\n\n");
-  pushChunks(g.characterId, parentKey, "nightly_memory", "기억", body);
+  recordTraceChunks(g.characterId, parentKey, "nightly_memory", "기억", body);
 };
 
 // 진행 중인 일의 어제 몫 — 이전 값과 새 값을 나란히, 끝난 것은 사실로 옮겼다고 적는다.
@@ -469,7 +433,7 @@ const progressChild = (
       `새 값: ${esc(p.value.trim())}`,
     ].join("\n");
   });
-  pushChunks(
+  recordTraceChunks(
     g.characterId,
     parentKey,
     "nightly_progress",
@@ -503,12 +467,7 @@ const diaryChild = (g: NightlyGathered, parentKey: string): void => {
   ]
     .filter(Boolean)
     .join("\n\n");
-  pushChunks(g.characterId, parentKey, "nightly_diary", "일기", body);
-};
-
-const SEND_KIND_NAME: Record<string, string> = {
-  morning: "아침 선톡",
-  checkin: "안부 선톡",
+  recordTraceChunks(g.characterId, parentKey, "nightly_diary", "일기", body);
 };
 
 const sendChild = (g: NightlyGathered, parentKey: string): void => {
@@ -522,20 +481,7 @@ const sendChild = (g: NightlyGathered, parentKey: string): void => {
       ].join("\n"),
     )
     .join("\n\n");
-  pushChunks(g.characterId, parentKey, "nightly_send", "선톡 문안", body);
-};
-
-type NightlyCallRow = LlmCallSummaryRow;
-
-const tokenLine = (row: NightlyCallRow): string | null => {
-  const bits: string[] = [];
-  if (row.input_tokens) bits.push(`입력 ${row.input_tokens.toLocaleString()}`);
-  if (row.cache_write_tokens)
-    bits.push(`캐시 쓰기 ${row.cache_write_tokens.toLocaleString()}`);
-  if (row.cache_read_tokens)
-    bits.push(`캐시 읽기 ${row.cache_read_tokens.toLocaleString()}`);
-  if (row.output_tokens) bits.push(`출력 ${row.output_tokens.toLocaleString()}`);
-  return bits.length ? `*토큰* ${bits.join(" · ")}` : null;
+  recordTraceChunks(g.characterId, parentKey, "nightly_send", "선톡 문안", body);
 };
 
 const systemText = (raw: string | null): string => {
@@ -591,7 +537,7 @@ const callChildren = (g: NightlyGathered, parentKey: string): void => {
       .filter(Boolean)
       .join("\n\n───\n\n");
     if (prompt)
-      pushChunks(
+      recordTraceChunks(
         g.characterId,
         parentKey,
         "nightly_call_prompt",
@@ -601,7 +547,7 @@ const callChildren = (g: NightlyGathered, parentKey: string): void => {
       );
     const output = row.output_hash ? getBlob(row.output_hash) : null;
     if (output)
-      pushChunks(
+      recordTraceChunks(
         g.characterId,
         parentKey,
         "nightly_call_output",

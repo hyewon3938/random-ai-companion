@@ -45,8 +45,7 @@ import {
   BLOCK_END_JITTER_MS,
 } from "./thresholds.js";
 import {
-  getKstNow,
-  kstDateString,
+  kstStamp,
   kstLogicalDate,
   kstLogicalClock,
 } from "./kst.js";
@@ -80,9 +79,6 @@ const toMin = (hhmm: string): number => {
   const [h, m] = hhmm.split(":").map(Number);
   return (h ?? 0) * 60 + (m ?? 0);
 };
-
-const stamp = (): string =>
-  `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
 
 /**
  * 이 잠 블록에서 이미 깨서 답한 적이 있는가.
@@ -289,7 +285,7 @@ export const decideReplyTiming = async (
         b.activity,
         WOKE_OUTCOME,
         "자는데 연락이 와서",
-        stamp(),
+        kstStamp(),
       );
     return {
       waitMs: awake
@@ -360,7 +356,7 @@ export const decideReplyTiming = async (
     b.activity,
     outcome,
     "유저가 붙잡아서",
-    stamp(),
+    kstStamp(),
   );
   return {
     waitMs: rand(INTERMITTENT_PERSONAL_MIN_MS, INTERMITTENT_PERSONAL_MAX_MS),
@@ -397,7 +393,7 @@ export const recordHold = (
     b.activity,
     outcome,
     "유저가 붙잡아서",
-    stamp(),
+    kstStamp(),
   );
   console.log(`[hold] ${b.activity} → ${outcome} (답장 표시)`);
   return { blockStart: b.start, activity: b.activity, outcome };

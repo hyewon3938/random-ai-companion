@@ -35,7 +35,7 @@ import {
   type Interest,
 } from "./labels.js";
 import { matchTagNames, memoryLine, pickMemories } from "./recall.js";
-import { getKstNow, kstDateString, logicalDayStartTs } from "./kst.js";
+import { kstStamp, logicalDayStartTs } from "./kst.js";
 
 // 고르는 규칙과 프롬프트 줄은 recall.ts가 갖는다 — DB를 열지 않는 자리라 관리 대시보드의
 // 태그 검색 화면도 같은 함수를 부른다. 여기서 다시 내보내 부르던 곳은 그대로 둔다.
@@ -67,9 +67,6 @@ export const CORE_AREAS = [
   "음식",
   "여행",
 ] as const;
-
-const stamp = (): string =>
-  `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
 
 const tidy = (v: string): string => v.trim().replace(/\s+/g, " ");
 
@@ -121,7 +118,7 @@ const toWrite = (m: MemoryInput, area: string, subject: string) => ({
   lastMentionedAt: m.lastMentionedAt,
   endCondition: m.endCondition,
   interest: m.interest,
-  updatedAt: stamp(),
+  updatedAt: kstStamp(),
 });
 
 const attach = (m: MemoryInput, id: number, area: string, subject: string) => {
@@ -165,7 +162,7 @@ export const saveCreationMemory = (m: MemoryInput): number => {
 
 /** 일이 끝났을 때 저장 항목만 옮긴다(진행 중인 일 → 사실). */
 export const moveMemory = (id: number, to: MemoryItemType): number =>
-  moveMemoryItemType(id, to, stamp());
+  moveMemoryItemType(id, to, kstStamp());
 
 export const memoryTags = (id: number): string[] => getTags("memory", id);
 
@@ -201,7 +198,7 @@ export const searchMemories = (
   if (opts.track !== false)
     markMemoriesRetrieved(
       picked.map((r) => r.id),
-      stamp(),
+      kstStamp(),
     );
   return picked;
 };
@@ -305,7 +302,7 @@ export const saveTodayNote = (
 ): void => {
   const text = tidy(note);
   if (!text) return;
-  addTodayNote(characterId, stamp(), text, messageId);
+  addTodayNote(characterId, kstStamp(), text, messageId);
 };
 
 /** 오늘(새벽 5시 경계) 적어 둔 메모. */
