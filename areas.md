@@ -14,7 +14,7 @@
 | 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-pick, user-profile |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
 | 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, prompts/reply, turns, reply-signal, reply-ask, reply-compose, relationship-update, reply-timing, proactive-policy |
-| 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 3개, 크론표 | index, bot, pending, presence, followup, dispatch |
+| 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 3개, 크론표 | index, bot, pending, presence, followup, dispatch, proactive-send |
 | 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
 | 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, reply-trace, feedback, tools/*, eval/* |
 
@@ -62,7 +62,7 @@
 - `src/reply-timing.ts` — 답장 텀을 정하는 자리 — 두 태그 표 한 장.
 - `src/proactive-policy.ts` — 선제 발화 관제탑 — 오늘 먼저 연락해도 되는지, 무엇을 보낼지 한곳에서 정한다.
 
-### 5. 실행과 발송 · 2,470줄
+### 5. 실행과 발송 · 2,419줄
 
 - `src/index.ts` — 봇 프로세스의 시작점.
 - `src/bot.ts` — 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
@@ -70,6 +70,7 @@
 - `src/presence.ts` — 자리 비움 예고 — 오래 답을 못 하게 되기 전에 미리 알린다(10분 틱).
 - `src/followup.ts` — 침묵 팔로업 — 답이 끊긴 자리에 한 통 보낸다(15분 틱).
 - `src/dispatch.ts` — 아침·점심·안부 선톡을 창 안에 내보내는 자리(3분 틱).
+- `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
 ### 6. 새벽 정리 · 2,233줄
 
@@ -179,19 +180,18 @@ context.ts가 안정도 순 3층을 조립하고, prompts/reply.ts가 캐릭터�
 
 손볼 자리
 - context.ts가 조립만 하지 않는다. 21-37에서 db 함수 12개를 직접 불러 읽고, 각본을 시간대로 나누는 dayProgress·sleepGap 96-146도 여기 있다. 읽기와 조립을 나누면 조립 쪽에 테스트를 붙일 수 있다.
-- 답장 밖 발화 표면 6곳의 문안이 각자 파일에 있다. 옮기기 쉬운 것은 followup 97-133, bot 527-586, tag-pick 32-38, reply-timing의 붙잡기 지시문이다.
+- 답장 밖 발화 표면 6곳의 문안이 각자 파일에 있다. 옮기기 쉬운 것은 followup 87-121, bot 527-586, tag-pick 32-38, reply-timing의 붙잡기 지시문이다.
 
 ### 5. 실행과 발송
 
-bot.ts가 텔레그램과 주고받고, pending.ts가 만들어 둔 답장을 정한 시각에 내보낸다. presence 10분, followup 15분, dispatch 3분 틱이 선톡을 내고, index.ts가 크론 7개를 건다. 텔레그램 발송은 bot.ts:196 한 곳이고 틱 3개는 sendProactive만 부른다.
+bot.ts가 텔레그램과 주고받고, pending.ts가 만들어 둔 답장을 정한 시각에 내보낸다. presence 10분, followup 15분, dispatch 3분 틱이 선톡을 내고, index.ts가 크론 7개를 건다. 텔레그램 발송은 bot.ts:196 한 곳이고 틱 3개는 sendProactive만 부른다. followup·presence가 선톡 한 통을 만들어 보내는 순서(잠금, 앞 틱에서 못 나간 문안, 모델 호출, 발송 직전 재확인, 실패 보관)는 proactive-send.ts의 sendProactiveDraft 하나에 있고, 틱 재진입을 막는 noOverlap도 거기 있어 dispatch·followup·presence가 같이 쓴다.
 
 고칠 때 같이 보는 곳은 4번, 7번 reply-trace.ts의 결과 후기록 함수 5개, 그리고 6번이 만들어 둔 예약 발송 행이다. dispatch가 그 행을 내보낸다.
 
-검사는 pending-recovery·pending-retry·presence-situation·catchup-silence 4개다. bot·dispatch·index는 테스트가 없다.
+검사는 pending-recovery·pending-retry·presence-situation·catchup-silence·proactive-send 5개다. bot·dispatch·index는 테스트가 없다.
 
 손볼 자리
-- followup 3종 190-237·260-301·323-367과 presence 294-388이 같은 뼈대를 4번 반복한다. 선톡 한 통을 보내는 공통 함수로 모으고, running 가드 3곳 dispatch:71·presence:153·followup:133도 같이 정리한다.
-- 정책과 실행이 한 함수에 있다. respond 597-730(텀 결정과 깨우기 행·예약 저장), 몰아 답장 핸들러 778-889, presenceTickBody 204-390, followupTickBody 145-370, runDispatchTick 73-152다.
+- 정책과 실행이 한 함수에 있다. respond 597-730(텀 결정과 깨우기 행·예약 저장), 몰아 답장 핸들러 778-889, presenceTickBody 176-315, followupTickBody 123-240, runDispatchTick 72-145다.
 - bot.ts의 acquireProactive는 락이고 proactive-policy.ts의 proactiveAllowed는 정책인데 이름이 비슷해 헷갈린다.
 
 ### 6. 새벽 정리
@@ -233,7 +233,7 @@ trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다.
 1. 아크를 3번으로 옮기고 WAIT 상수 중복을 지우고 도구 4개를 보관 폴더로 옮긴다. 9/6에 끝났다(#294).
 2. bot.ts의 답장 파이프라인 2벌을 1벌로 합쳐 밖으로 뺀다. 4번과 5번의 경계가 확정된다. 9/6에 끝났다(#296).
 3. nightly.ts에서 문안을 뗀다. 9/6에 끝났다(#298).
-4. 선톡 한 통을 보내는 공통 함수를 만들어 followup·presence를 줄인다.
+4. 선톡 한 통을 보내는 공통 함수를 만들어 followup·presence를 줄인다. 9/6에 끝났다(#300).
 5. db.ts를 표 묶음으로 나누고 밖의 raw SQL과 안의 정책 함수를 제자리로 보낸다. 임포터가 24개라 가장 넓지만, 재내보내기 파일을 남기면 임포터는 안 건드린다.
 6. trace.ts와 reply-trace.ts를 나누고 context.ts의 읽기와 조립을 나눈다. 테스트를 붙이며 한다.
 

@@ -13,8 +13,8 @@
 // 미루고, 마지막 말이 캐릭터 것이면 이미 답한 말에 다시 답하지 않고 그 말에 이어 나간다고 한다.
 // 문안 JSON에는 자리를 비우는 일을 한 구절로 적는 away 칸을 두고, 그 칸이 비면 보내지 않는다.
 //
-// 만든 문안이 한 통도 못 나갔으면 버리지 않고 들고 있다가(proactive-policy의 보관 자리),
-// 다음 틱이 같은 블록에 다시 오면 모델을 부르지 않고 그 문안부터 보낸다.
+// 문안을 만들어 보내는 일은 proactive-send의 sendProactiveDraft에 맡긴다 — 다른 틱과의 잠금,
+// 발송이 실패한 문안을 같은 블록의 다음 틱까지 들고 있는 것, 발송 직전 재확인이 거기 있다.
 //
 // 캐릭터가 방금 말했으면 예고하지 않는다. 기준은 최소 AWAY_QUIET_MIN분이되, 알릴 일정이
 // 이미 시작했으면 그 시작 시각까지 넓힌다 — 구간 끝 몰아 답장이 이미 같은 전환을 알린
@@ -27,8 +27,6 @@
 // 다녀온 뒤는 이 모듈 몫이 아니다. 구간 끝의 깨우기 처리(bot.ts)가 몰아 답장과 복귀 인사를
 // 한 자리에서 한다.
 
-import { chatJson, type CallMeta } from "./llm.js";
-import { config } from "./config.js";
 import { isHeldNow } from "./reply-timing.js";
 import {
   awayNoticeCountToday,
@@ -38,30 +36,17 @@ import {
   hasWaitingWakeRow,
   lastMessage,
   lastUserTs,
-  recordSendFailure,
   type CharacterRow,
 } from "./db.js";
 import { scheduleWakeRow } from "./pending.js";
-import {
-  holdFailedDraft,
-  takeHeldDraft,
-  type HeldDraft,
-} from "./proactive-policy.js";
-import { traceAwaySkip, traceProactiveFail } from "./reply-trace.js";
-import { buildSystemBlocks } from "./context.js";
+import { noOverlap, sendProactiveDraft } from "./proactive-send.js";
+import { traceAwaySkip } from "./reply-trace.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory, isAwayUnavail } from "./day-plan.js";
-import {
-  sendProactive,
-  acquireProactive,
-  releaseProactive,
-  logErr,
-} from "./bot.js";
 import {
   AWAY_MIN_BLOCK_MIN,
   BLOCK_END_JITTER_MS,
   AWAY_QUIET_MIN,
-  PROACTIVE_RECENT_LINES,
   AWAY_BEFORE_MIN,
   AWAY_AFTER_MIN,
   AWAY_SUDDEN_AFTER_MIN,
@@ -147,19 +132,6 @@ export const presenceSituation = (
     ``,
     `JSON으로만 답한다: {"send":true,"away":"무슨 일로 자리를 비우는지 한 구절","text":"..."} 또는 {"send":false}`,
   ].join("\n");
-};
-
-// 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
-let running = false;
-
-export const runPresenceTick = async (): Promise<void> => {
-  if (running) return;
-  running = true;
-  try {
-    await presenceTickBody();
-  } finally {
-    running = false;
-  }
 };
 
 /**
@@ -290,101 +262,56 @@ const presenceTickBody = async (): Promise<void> => {
       continue;
     }
 
-    // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
-    if (!acquireProactive(c.chat_id)) continue;
-    // 호출 번호를 catch에서도 봐야 한다 — 발송에 실패하면 이 문안 스레드에 실패를 단다.
-    const meta: CallMeta = {
-      purpose: "away",
+    const activity = target.activity;
+    const block = target.start;
+    await sendProactiveDraft<{ send: boolean; away?: string; text?: string }>({
       characterId: c.id,
       chatId: c.chat_id,
-    };
-    // 앞 틱에서 못 나간 문안이 같은 블록의 것이면 모델을 다시 부르지 않고 그것부터 보낸다 —
-    // 길이 몇 분 끊긴 사이 같은 예고를 매 틱 새로 만들어 또 실패하는 것을 막는다(이슈 #269).
-    let outgoing: HeldDraft | null = takeHeldDraft(
-      c.chat_id,
-      "away",
-      target.start,
-    );
-    try {
-      if (!outgoing) {
-        const draft = await chatJson<{
-          send: boolean;
-          away?: string;
-          text?: string;
-        }>(
-          buildSystemBlocks(c.id, c.chat_id, {
-            recent: PROACTIVE_RECENT_LINES,
-            situation: presenceSituation(
-              target,
-              between,
-              prevAct,
-              last.role === "user",
-            ),
-          }),
-          "위 상황 문단대로 문안을 만들어.",
-          400,
-          config.model, // 실시간성이라 대화 모델(sonnet)
-          meta,
-        );
-        // 자리를 비우는 일을 적는 칸이 비었으면 보내지 않는다 — 상대 말에 답만 하고 나간 문안이
-        // 이 모양이다(이슈 #265). 다음 틱에 아직 알릴 창 안이면 다시 만든다.
+      kind: "away",
+      block,
+      lastSentAt: last.sent_at,
+      situation: presenceSituation(
+        target,
+        between,
+        prevAct,
+        last.role === "user",
+      ),
+      maxTokens: 400,
+      // 자리를 비우는 일을 적는 칸이 비었으면 보내지 않는다 — 상대 말에 답만 하고 나간 문안이
+      // 이 모양이다(이슈 #265). 다음 틱에 아직 알릴 창 안이면 다시 만든다.
+      read: (draft, meta) => {
         const away = typeof draft.away === "string" ? draft.away.trim() : "";
         if (draft.send && draft.text && !away) {
           console.log(
-            `[presence] ${c.chat_id} @ ${target.activity} 접음 — 문안에 자리를 비우는 일이 없다`,
+            `[presence] ${c.chat_id} @ ${activity} 접음 — 문안에 자리를 비우는 일이 없다`,
           );
           traceAwaySkip({
             characterId: c.id,
             reason: "no_away",
-            activity: target.activity,
-            block: target.start,
+            activity,
+            block,
             callId: meta.callId,
           });
-        } else if (draft.send && draft.text) {
-          outgoing = {
-            kind: "away",
-            text: draft.text,
-            block: target.start,
-            madeAt: Date.now(),
-          };
+          return null;
         }
-      }
-      // 발송 직전 재확인 — LLM을 기다리는 사이 대화 상태가 바뀌었으면(유저 추가 발화·다른 발송) 접는다
-      if (outgoing && lastMessage(c.chat_id)?.sent_at !== last.sent_at) {
+        return draft.send && draft.text ? draft.text : null;
+      },
+      label: "[presence]",
+      sentLog: `[presence] ${c.chat_id} @ ${activity} (between=${between})`,
+      onMoved: (meta) => {
         console.log(
-          `[presence] ${c.chat_id} @ ${target.activity} 접음 — 문안을 만드는 사이 마지막 메시지가 바뀌었다`,
+          `[presence] ${c.chat_id} @ ${activity} 접음 — 문안을 만드는 사이 마지막 메시지가 바뀌었다`,
         );
         traceAwaySkip({
           characterId: c.id,
           reason: "conversation_moved",
-          activity: target.activity,
-          block: target.start,
+          activity,
+          block,
           callId: meta.callId,
         });
-      } else if (outgoing) {
-        await sendProactive(c.chat_id, c.id, outgoing.text, "away", {
-          block: target.start,
-        });
-        outgoing = null; // 나갔으니 들고 있지 않는다
-        console.log(
-          `[presence] ${c.chat_id} @ ${target.activity} (between=${between})`,
-        );
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      logErr("[presence] 전송 실패:", e);
-      recordSendFailure(c.chat_id, c.id, "away", msg);
-      traceProactiveFail({
-        characterId: c.id,
-        kind: "away",
-        error: msg,
-        callId: meta.callId,
-      });
-      // 만들어 둔 문안이 한 통도 못 나갔으면 들고 있는다(일부라도 나가면 sendProactive가
-      // 던지지 않으므로 여기 오지 않는다 — 같은 말이 두 번 나갈 일은 없다).
-      if (outgoing) holdFailedDraft(c.chat_id, outgoing);
-    } finally {
-      releaseProactive(c.chat_id);
-    }
+      },
+    });
   }
 };
+
+export const runPresenceTick = noOverlap(presenceTickBody);

@@ -20,6 +20,7 @@ import {
   logErr,
 } from "./bot.js";
 import { dailySendPlan } from "./proactive-policy.js";
+import { noOverlap } from "./proactive-send.js";
 import { getKstNow, kstClock, kstDateString } from "./kst.js";
 import { RECENT_USER_MS, SEND_GRACE_MIN } from "./thresholds.js";
 
@@ -68,85 +69,77 @@ const graceUntil = (windowStart: string, windowEnd: string): string => {
 
 // 틱이 겹치지 않게 — 재시도 간격을 넓히면서 한 틱이 최대 ~130초까지 붙잡힐 수 있게 됐고,
 // 틱 간격도 짧아졌다. 겹치면 같은 행을 두 틱이 집어 이중 발송이 된다.
-let running = false;
+export const runDispatchTick = noOverlap(async () => {
+  const today = kstDateString();
+  const now = kstClock();
+  for (const r of getPendingSends(today)) {
+    if (now < r.window_start) continue;
 
-export const runDispatchTick = async (): Promise<void> => {
-  if (running) return;
-  running = true;
-  try {
-    const today = kstDateString();
-    const now = kstClock();
-    for (const r of getPendingSends(today)) {
-      if (now < r.window_start) continue;
-
-      // 발송 직전 재확인(관제탑): 밤에 정한 종류가 지금도 맞는지 본다. 문안 준비 단계에서
-      // 이미 같은 판정을 거쳤지만, 날짜 경계를 넘긴 문안을 거르는 이중 가드다.
-      // 점심 문안은 아침 문안과 같은 종류로 저장하므로 둘을 함께 통과시킨다.
-      const plan = dailySendPlan(r.chat_id, r.character_id, today);
-      const allowed =
-        r.kind === "checkin"
-          ? plan.kind === "checkin"
-          : plan.kind === "morning" || plan.kind === "lunch";
-      if (!allowed) {
-        markScheduledSend(r.id, "skipped", `보내지 않는 날 (${plan.reason})`, null);
-        continue;
-      }
-
-      const deadline = graceUntil(r.window_start, r.window_end);
-      if (now > deadline) {
-        // 시도 흔적이 있으면 전송 실패로 죽은 것, 없으면 창 자체를 못 잡은 것 — 사유를 가른다.
-        markScheduledSend(
-          r.id,
-          "skipped",
-          r.attempts > 0
-            ? `유예(${deadline})까지 전송 실패 — ${r.attempts}회 시도`
-            : `발송 창 지남 (시도 없음, 유예 ${deadline})`,
-          null,
-        );
-        console.warn(
-          `[dispatch] 폐기 #${r.id} attempts=${r.attempts} deadline=${deadline}`,
-        );
-        continue;
-      }
-
-      if (hasUserMessageSince(r.chat_id, stampBefore(RECENT_USER_MS))) {
-        markScheduledSend(r.id, "skipped", "유저가 먼저 연락함", null);
-        continue;
-      }
-
-      const late = now > r.window_end;
-      // 다른 선톡 틱·답장이 이 chat에 진행 중이면 다음 틱으로 미룬다(겹쳐 나가지 않게)
-      if (!acquireProactive(r.chat_id)) continue;
-      try {
-        const { delivered, total } = await sendProactive(
-          r.chat_id,
-          r.character_id,
-          r.text,
-          r.kind === "checkin" ? "checkin" : "morning",
-        );
-        const notes = [
-          late ? `유예 발송 (창 종료 ${r.window_end} 이후)` : null,
-          delivered < total ? `부분 발송 ${delivered}/${total}` : null,
-          r.attempts > 0 ? `${r.attempts}회 실패 후 성공` : null,
-        ].filter(Boolean);
-        markScheduledSend(
-          r.id,
-          "sent",
-          notes.length ? notes.join(" / ") : null,
-          stamp(),
-        );
-        console.log(
-          `[dispatch] sent #${r.id} to ${r.chat_id}${late ? " (유예)" : ""}`,
-        );
-      } catch (e) {
-        // 상태는 pending 그대로 — 마감 전이면 다음 틱이 다시 시도한다. 실패 흔적만 행에 남긴다.
-        recordSendAttempt(r.id, e instanceof Error ? e.message : String(e));
-        logErr(`[dispatch] send error #${r.id}:`, e);
-      } finally {
-        releaseProactive(r.chat_id);
-      }
+    // 발송 직전 재확인(관제탑): 밤에 정한 종류가 지금도 맞는지 본다. 문안 준비 단계에서
+    // 이미 같은 판정을 거쳤지만, 날짜 경계를 넘긴 문안을 거르는 이중 가드다.
+    // 점심 문안은 아침 문안과 같은 종류로 저장하므로 둘을 함께 통과시킨다.
+    const plan = dailySendPlan(r.chat_id, r.character_id, today);
+    const allowed =
+      r.kind === "checkin"
+        ? plan.kind === "checkin"
+        : plan.kind === "morning" || plan.kind === "lunch";
+    if (!allowed) {
+      markScheduledSend(r.id, "skipped", `보내지 않는 날 (${plan.reason})`, null);
+      continue;
     }
-  } finally {
-    running = false;
+
+    const deadline = graceUntil(r.window_start, r.window_end);
+    if (now > deadline) {
+      // 시도 흔적이 있으면 전송 실패로 죽은 것, 없으면 창 자체를 못 잡은 것 — 사유를 가른다.
+      markScheduledSend(
+        r.id,
+        "skipped",
+        r.attempts > 0
+          ? `유예(${deadline})까지 전송 실패 — ${r.attempts}회 시도`
+          : `발송 창 지남 (시도 없음, 유예 ${deadline})`,
+        null,
+      );
+      console.warn(
+        `[dispatch] 폐기 #${r.id} attempts=${r.attempts} deadline=${deadline}`,
+      );
+      continue;
+    }
+
+    if (hasUserMessageSince(r.chat_id, stampBefore(RECENT_USER_MS))) {
+      markScheduledSend(r.id, "skipped", "유저가 먼저 연락함", null);
+      continue;
+    }
+
+    const late = now > r.window_end;
+    // 다른 선톡 틱·답장이 이 chat에 진행 중이면 다음 틱으로 미룬다(겹쳐 나가지 않게)
+    if (!acquireProactive(r.chat_id)) continue;
+    try {
+      const { delivered, total } = await sendProactive(
+        r.chat_id,
+        r.character_id,
+        r.text,
+        r.kind === "checkin" ? "checkin" : "morning",
+      );
+      const notes = [
+        late ? `유예 발송 (창 종료 ${r.window_end} 이후)` : null,
+        delivered < total ? `부분 발송 ${delivered}/${total}` : null,
+        r.attempts > 0 ? `${r.attempts}회 실패 후 성공` : null,
+      ].filter(Boolean);
+      markScheduledSend(
+        r.id,
+        "sent",
+        notes.length ? notes.join(" / ") : null,
+        stamp(),
+      );
+      console.log(
+        `[dispatch] sent #${r.id} to ${r.chat_id}${late ? " (유예)" : ""}`,
+      );
+    } catch (e) {
+      // 상태는 pending 그대로 — 마감 전이면 다음 틱이 다시 시도한다. 실패 흔적만 행에 남긴다.
+      recordSendAttempt(r.id, e instanceof Error ? e.message : String(e));
+      logErr(`[dispatch] send error #${r.id}:`, e);
+    } finally {
+      releaseProactive(r.chat_id);
+    }
   }
-};
+});
