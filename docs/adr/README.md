@@ -17,3 +17,4 @@
 | [0009](0009-slack-feedback-polling.md) | 슬랙 채널에 남긴 표시를 폴링으로 모아 표 하나에 쌓기 | Accepted |
 | [0010](0010-character-attitude-in-identity.md) | 캐릭터가 유저를 대하는 방식을 관계 표에서 정체성으로 옮기기 | Accepted |
 | [0011](0011-json-reply-envelope.md) | 답장 본문과 신호를 JSON 한 덩이로 받기 | Accepted |
+| [0012](0012-drop-secure-stance-show-caring.md) | 안정형 stance를 빼고 신경 쓰는 티를 공통 규칙으로 두기 | Accepted |
