@@ -31,12 +31,14 @@ import { isHeldNow } from "./reply-timing.js";
 import {
   awayNoticeCountToday,
   awayNoticeSent,
-  db,
+} from "./proactive-policy.js";
+import {
+  getActiveCharacters,
   getDayPlan,
   hasWaitingWakeRow,
+  lastAssistantTs,
   lastMessage,
   lastUserTs,
-  type CharacterRow,
 } from "./db.js";
 import { scheduleWakeRow } from "./pending.js";
 import { noOverlap, sendProactiveDraft } from "./proactive-send.js";
@@ -82,15 +84,6 @@ const toMin = (hhmm: string): number => {
 };
 const ageMin = (ts: string): number =>
   (Date.now() - new Date(ts.replace(" ", "T") + "+09:00").getTime()) / 60_000;
-
-const lastCharTs = (chatId: string): string | undefined =>
-  (
-    db
-      .prepare(
-        `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`,
-      )
-      .get(chatId) as { sent_at: string } | undefined
-  )?.sent_at;
 
 // 문안에 필요한 값(활동 이름·활동 성격·닥친 일인지·언제 끝나는지)이 전부 블록에 들어 있어,
 // 부르는 쪽이 하나씩 뽑아 넘기지 않고 블록 자체를 넘긴다.
@@ -174,11 +167,7 @@ const armReturnRow = (
 };
 
 const presenceTickBody = async (): Promise<void> => {
-  const rows = db
-    .prepare(`SELECT * FROM characters WHERE status = 'active'`)
-    .all() as CharacterRow[];
-
-  for (const c of rows) {
+  for (const c of getActiveCharacters()) {
     const raw = getDayPlan(c.id, kstLogicalDate());
     if (!raw) continue;
     let blocks: PlanBlock[];
@@ -245,7 +234,7 @@ const presenceTickBody = async (): Promise<void> => {
     // 기준은 최소 AWAY_QUIET_MIN분이되, 알릴 일정이 이미 시작했으면 그 시작 시각까지 넓힌다.
     // 불가 구간이 끝나는 자리에서 몰아 답장이 나가고 그 시각이 곧 다음 일정의 시작이라,
     // 시간만 재면 그 답장이 이미 말한 전환("방금 끝났고 이제 ~하러 간다")을 또 말하게 된다.
-    const lc = lastCharTs(c.chat_id);
+    const lc = lastAssistantTs(c.chat_id);
     const quietMin = Math.max(AWAY_QUIET_MIN, nowMin - toMin(target.start));
     if (lc && ageMin(lc) < quietMin) {
       const detail = `${Math.round(ageMin(lc))}분 전에 이미 말했다, 기준 ${Math.round(quietMin)}분`;

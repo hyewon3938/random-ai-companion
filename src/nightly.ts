@@ -56,6 +56,11 @@ import {
   listTagNames,
   getUserProfile,
   saveUserProfile,
+  getMessagesBetween,
+  hasMessageBetween,
+  hasDiaryOn,
+  insertDiary,
+  hasScheduledSendOn,
   type CharacterRow,
   type DaySeed,
   type MemoryRow,
@@ -472,19 +477,11 @@ export const gatherNightlyInput = (
   // 대화 창은 그 하루(diaryDate 05:00 ~ 다음날 05:00)로 한정 — 백필로 과거 날짜를 잡아도
   // 오늘까지의 대화가 통째로 섞이지 않게.
   const diaryNext = nextDate(diaryDate);
-  const msgs = db
-    .prepare(
-      `SELECT role, sent_at, text FROM messages WHERE chat_id = ? AND sent_at >= ? AND sent_at < ? ORDER BY id`,
-    )
-    .all(
-      character.chat_id,
-      `${diaryDate} 05:00:00`,
-      `${diaryNext} 05:00:00`,
-    ) as {
-    role: string;
-    sent_at: string;
-    text: string;
-  }[];
+  const msgs = getMessagesBetween(
+    character.chat_id,
+    `${diaryDate} 05:00:00`,
+    `${diaryNext} 05:00:00`,
+  );
 
   const convo = msgs
     .map(
@@ -504,11 +501,7 @@ export const gatherNightlyInput = (
     diaryDate,
     today,
     todayLabel: dayLabelOf(today),
-    diaryExists: !!db
-      .prepare(
-        `SELECT 1 FROM diary_entries WHERE character_id = ? AND date = ? LIMIT 1`,
-      )
-      .get(character.id, diaryDate),
+    diaryExists: hasDiaryOn(character.id, diaryDate),
     convo,
     msgsCount: msgs.length,
     planBriefYesterday: planBrief(getDayPlan(character.id, diaryDate)),
@@ -580,20 +573,13 @@ const applyNightlyTxn = db.transaction(
   (g: NightlyGathered, out: NightlyOutput): string => {
     const ts = nowStamp();
 
-    const dup = db
-      .prepare(
-        `SELECT 1 FROM diary_entries WHERE character_id = ? AND date = ? LIMIT 1`,
-      )
-      .get(g.characterId, g.diaryDate);
-    if (dup) return `skip: ${g.diaryDate} 일기 이미 있음`;
+    if (hasDiaryOn(g.characterId, g.diaryDate))
+      return `skip: ${g.diaryDate} 일기 이미 있음`;
 
-    const diaryId = Number(
-      db
-        .prepare(
-          `INSERT INTO diary_entries (character_id, date, entry_json) VALUES (?, ?, ?)`,
-        )
-        .run(g.characterId, g.diaryDate, JSON.stringify(out.entry))
-        .lastInsertRowid,
+    const diaryId = insertDiary(
+      g.characterId,
+      g.diaryDate,
+      JSON.stringify(out.entry),
     );
     // 일기도 기억과 같은 태그로 찾는다 — 이 줄이 없으면 옛 일기를 태그로 꺼내는
     // 경로(context.ts)가 늘 빈손으로 돌아온다.
@@ -882,18 +868,9 @@ export const missingDiaryDates = (
     const next = kstDateString(
       new Date(shifted.getTime() - (i - 1) * 24 * 3600_000),
     );
-    const hasDiary = !!db
-      .prepare(
-        `SELECT 1 FROM diary_entries WHERE character_id = ? AND date = ? LIMIT 1`,
-      )
-      .get(characterId, d);
-    if (hasDiary) continue;
-    const hasMsgs = !!db
-      .prepare(
-        `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND sent_at < ? LIMIT 1`,
-      )
-      .get(chatId, `${d} 05:00:00`, `${next} 05:00:00`);
-    if (hasMsgs) out.push(d);
+    if (hasDiaryOn(characterId, d)) continue;
+    if (hasMessageBetween(chatId, `${d} 05:00:00`, `${next} 05:00:00`))
+      out.push(d);
   }
   return out;
 };
@@ -1057,12 +1034,7 @@ const ensurePreparedSend = async (
   plan: DailySendPlan,
 ): Promise<void> => {
   if (plan.kind === "none") return;
-  const exists = db
-    .prepare(
-      `SELECT 1 FROM scheduled_messages WHERE character_id = ? AND date = ? LIMIT 1`,
-    )
-    .get(g.characterId, g.today);
-  if (exists) return;
+  if (hasScheduledSendOn(g.characterId, g.today)) return;
   const style =
     plan.kind === "morning" && g.silenceTier === "normal"
       ? (morningStyles(getDayPlan(g.characterId, g.today))[0] ?? null)

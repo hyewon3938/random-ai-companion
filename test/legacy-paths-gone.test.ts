@@ -56,9 +56,9 @@ const MIGRATION_TOOLS = [
   join("src", "tools", "archive", "migrate-v1-data.ts"),
   join("src", "tools", "archive", "migrate-v2-data.ts"),
 ];
-const DB = join("src", "db.ts");
+const DB = join("src", "db", "connection.ts");
 
-// db.ts는 v6에서 이 자리를 지우는 파일이라 이름이 남는다. 이관 도구 둘은 한 번 돌고 끝난
+// db/connection.ts는 v6에서 이 자리를 지우는 파일이라 이름이 남는다. 이관 도구 둘은 한 번 돌고 끝난
 // 기록이라 지우지 않고 두기로 했다(ADR 0005) — 지금은 실행되지 않는다.
 const GONE_NAMES: [string, string[]][] = [
   ["cast_members", [DB, ...MIGRATION_TOOLS]],

@@ -11,7 +11,13 @@
 // takeHeldDraft). 무엇을 보낼지 정하는 곳과 같은 자리라, 조건이 아직 맞으면 모델을 다시
 // 부르지 않고 만들어 둔 문안부터 보낸다.
 
-import { db, hasUserScheduleOn } from "./db.js";
+import {
+  countAssistantMeta,
+  getCharacterById,
+  hasAssistantMeta,
+  hasUserScheduleOn,
+  lastUserTs,
+} from "./db.js";
 import { kstLogicalDate, logicalDateOf } from "./kst.js";
 import { QUIET_AFTER_DAYS, RECONNECT_AT_DAYS } from "./thresholds.js";
 
@@ -44,23 +50,17 @@ const daysBetween = (a: string, b: string): number =>
       86_400_000,
   );
 
+// 선톡 메시지의 meta_json을 고르는 LIKE 패턴. 선톡은 전부 proactive를, 종류는 kind를 달고 저장된다.
+const PROACTIVE = "%proactive%";
+const AWAY = '%"kind":"away"%';
+const kindPattern = (kind: string): string => `%"kind":"${kind}"%`;
+
 export const silenceState = (
   chatId: string,
   characterId: number,
 ): SilenceState => {
-  const lastUser = db
-    .prepare(
-      `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
-    )
-    .get(chatId) as { sent_at: string } | undefined;
   // 유저 메시지가 아직 없으면 관계 시작 시점을 기준으로 센다(첫 인사 후 무응답도 백오프 대상)
-  const anchor =
-    lastUser?.sent_at ??
-    (
-      db
-        .prepare(`SELECT created_at FROM characters WHERE id = ?`)
-        .get(characterId) as { created_at: string } | undefined
-    )?.created_at;
+  const anchor = lastUserTs(chatId) ?? getCharacterById(characterId)?.created_at;
   if (!anchor) return { tier: "normal", days: 0 };
 
   const days = Math.max(
@@ -71,11 +71,10 @@ export const silenceState = (
   if (days < QUIET_AFTER_DAYS) return { tier: "normal", days };
   if (days < RECONNECT_AT_DAYS) return { tier: "quiet", days };
   // 안부 선톡이 실제로 나갔는가 — 마지막 유저 메시지 이후 kind=checkin 발화가 있으면 dormant
-  const sent = db
-    .prepare(
-      `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at > ? AND meta_json LIKE '%"kind":"checkin"%' LIMIT 1`,
-    )
-    .get(chatId, anchor);
+  const sent = hasAssistantMeta(chatId, anchor, {
+    after: true,
+    like: [kindPattern("checkin")],
+  });
   return { tier: sent ? "dormant" : "checkin", days };
 };
 
@@ -206,3 +205,70 @@ export const takeHeldDraft = (
   heldDrafts.delete(chatId);
   return d;
 };
+
+// ── 선제 발화 카운터 ──────────────────────────────────────────────────────
+// 캐릭터 말의 meta_json으로 무엇이 선톡이고 어떤 종류인지 가른다. 패턴은 여기서만 정하고
+// db 쪽은 패턴을 받아 세기만 한다.
+
+
+// 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸 선톡 수 — 하루 총량 상한을 지키는 데 쓴다.
+// followup·dispatch가 공유한다. 채널별 상한만 있으면 합이 통제되지 않아서, 각자 자기 몫을
+// 다 쓰면 하루 10통까지 나갈 수 있었다.
+//
+// 자리비움 선톡은 여기서 뺀다 — 캐릭터가 나갔다 오는 일정 수만큼 나가는 말이라 성격이
+// 다르고, 그쪽은 AWAY_DAILY_MAX가 따로 막는다.
+export const proactiveCountToday = (chatId: string, since: string): number =>
+  countAssistantMeta(chatId, since, { like: [PROACTIVE], notLike: [AWAY] });
+
+// 오늘 보낸 선톡을 종류별로 센다.
+export const proactiveKindCountToday = (
+  chatId: string,
+  since: string,
+  kind: string,
+): number => countAssistantMeta(chatId, since, { like: [kindPattern(kind)] });
+
+/** 그 블록의 자리 비움 예고가 오늘 이미 나갔는가.
+ *  두 자리가 같은 질의를 쓴다 — 예고를 두 번 보내지 않게 막는 presence, 예고한 일정으로
+ *  곧 들어가는지 보는 bot의 배웅 답 판단. */
+export const awayNoticeSent = (
+  chatId: string,
+  since: string,
+  blockStart: string,
+): boolean =>
+  hasAssistantMeta(chatId, since, {
+    like: [AWAY, `%"block":"${blockStart}"%`],
+  });
+
+// 오늘 알리고 나간 자리비움 선톡 수. 돌아와서 하는 인사는 이미 알린 구간을 마무리하는
+// 말이라 빼고 센다.
+export const awayNoticeCountToday = (chatId: string, since: string): number =>
+  countAssistantMeta(chatId, since, { like: [AWAY], notLike: ['%"return"%'] });
+
+// 마지막 유저 발화 이후 구간의 시작. 유저가 한 번도 말한 적이 없으면 대화 전체를 본다.
+const sinceLastUser = (chatId: string): string =>
+  lastUserTs(chatId) ?? "0000-00-00 00:00:00";
+
+// 마지막 유저 메시지 이후 캐릭터가 먼저 보낸(proactive) 수 — '연속 무응답'을 세어 매달림을 막는다.
+export const proactiveSinceLastUser = (chatId: string): number =>
+  countAssistantMeta(chatId, sinceLastUser(chatId), {
+    after: true,
+    like: [PROACTIVE],
+  });
+
+// 달래기 선톡을 보낼지 정하는 질의 둘. 마지막 유저 발화 이후 구간을 통째로 본다 — 마지막
+// 메시지 하나만 보면 서운함 표시가 붙은 답장 뒤에 자리 비움 예고가 끼었을 때 표시가 가려져
+// 달래기가 영영 안 나간다.
+
+/** 그 구간의 캐릭터 답장에 상대 서운함 표시가 붙었는가(reply-signal의 userUpset). */
+export const upsetSinceLastUser = (chatId: string): boolean =>
+  hasAssistantMeta(chatId, sinceLastUser(chatId), {
+    after: true,
+    like: ['%"userUpset":true%'],
+  });
+
+/** 그 구간에 달래기 선톡이 이미 나갔는가 — 한 번 서운해한 것에 한 통이다. */
+export const mendSentSinceLastUser = (chatId: string): boolean =>
+  hasAssistantMeta(chatId, sinceLastUser(chatId), {
+    after: true,
+    like: [kindPattern("mend")],
+  });

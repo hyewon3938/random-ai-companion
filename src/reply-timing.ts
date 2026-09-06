@@ -20,6 +20,7 @@ import {
   getDayActuals,
   setCallContext,
   getScheduleById,
+  recentMessageTimes,
 } from "./db.js";
 import { chat, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
@@ -401,3 +402,27 @@ export const recordHold = (
   console.log(`[hold] ${b.activity} → ${outcome} (답장 표시)`);
   return { blockStart: b.start, activity: b.activity, outcome };
 };
+
+// ── 유저가 이어 보내는 텀 ──────────────────────────────────────────────
+
+// 유저가 연속으로 이어 보낸 메시지 사이의 텀(ms). 봇 응답이 끼지 않은 '이어 보내기'만 센다
+// (봇 답장을 사이에 둔 건 새 턴이라 제외, 2분 넘는 텀도 새 턴으로 보고 제외).
+// 텀이 길수록 = 한 번에 길게 치는 사람 = 응답 대기를 더 길게 잡아 중간에 끊지 않게 한다.
+const BURST_GAP_MAX_MS = 120000;
+
+export const userBurstGaps = (
+  rows: readonly { role: string; sent_at: string }[],
+): number[] => {
+  const t = (s: string): number =>
+    new Date(s.replace(" ", "T") + "+09:00").getTime();
+  const gaps: number[] = [];
+  for (let i = 1; i < rows.length; i++)
+    if (rows[i].role === "user" && rows[i - 1].role === "user") {
+      const g = t(rows[i].sent_at) - t(rows[i - 1].sent_at);
+      if (g > 0 && g < BURST_GAP_MAX_MS) gaps.push(g);
+    }
+  return gaps;
+};
+
+export const recentUserGaps = (chatId: string, limit = 80): number[] =>
+  userBurstGaps(recentMessageTimes(chatId, limit));
