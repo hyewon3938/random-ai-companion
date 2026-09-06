@@ -509,9 +509,11 @@ export const gatherNightlyInput = (
     relationship: relationshipLines(getRelationship(character.id)),
     userProfile: userProfileLines(character.chat_id),
     todayNotes,
+    // 결과 뒤의 시각은 그렇게 된 실제 시각이다. 잠 블록의 깸이면 그 시각에 깬 것이라, 일기가
+    // 몇 시에 깼는지를 어림하지 않고 이 값을 쓴다(이슈 #288).
     dayActuals: getDayActuals(character.id, diaryDate).map(
       (a) =>
-        `- ${a.block_start ? `${clockLabel(a.block_start)} ` : ""}${a.intended} → ${a.outcome}${a.reason ? ` (${a.reason})` : ""}`,
+        `- ${a.block_start ? `${clockLabel(a.block_start)} ` : ""}${a.intended} → ${a.outcome} ${a.recorded_at.slice(11, 16)}${a.reason ? ` (${a.reason})` : ""}`,
     ),
     existingKeys: existingKeys(character.id),
     areas: existingAreas(character.id),

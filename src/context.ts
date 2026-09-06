@@ -16,7 +16,7 @@
 
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import type { SystemBlock } from "./llm.js";
-import { blockCategory } from "./day-plan.js";
+import { blockCategory, isSleeping } from "./day-plan.js";
 import { renderUserBlock } from "./user-profile.js";
 import {
   getMetAt,
@@ -31,6 +31,7 @@ import {
   lastMessageBefore,
   lastExchangeGap,
   getRecentMessages,
+  getDayActuals,
   listMemoryItems,
   type MemoryRow,
   type RelationshipRow,
@@ -62,6 +63,7 @@ import {
   workdayContext,
   kstLogicalDate,
   kstLogicalClock,
+  logicalClockOf,
   clockLabel,
   logicalDayStartTs,
   lastTalkedLabel,
@@ -70,6 +72,7 @@ import {
 import {
   ACTIVITY_CATEGORY_NAME,
   RESPONSIVENESS_NAME,
+  WOKE_OUTCOME,
   type SpeechLevel,
 } from "./labels.js";
 import {
@@ -279,6 +282,19 @@ const recentSection = (chatId: string, lines: number): string => {
   ].join("\n");
 };
 
+// 자는 시간에 상대 연락으로 깬 뒤의 '지금' 문장. 각본은 아직 잠으로 되어 있지만 오늘 실제
+// 기록에 깸 행이 있으면 그 행의 시각이 깬 시각이다 — 모델이 몇 시에 깼는지 어림해 지어내지 않게
+// 코드가 세어 준다(이슈 #288). wokeAt은 기록의 recorded_at("YYYY-MM-DD HH:MM:SS"), now는 각본 표기.
+export const wokeNowLine = (
+  cur: PlanBlock,
+  wokeAt: string,
+  now: string,
+): string => {
+  const clock = wokeAt.slice(11, 16);
+  const awake = Math.max(0, toMin(now) - toMin(logicalClockOf(wokeAt)));
+  return `너는 각본상 ${clockLabel(cur.start)}~${clockLabel(cur.end)} 자는 시간이지만 ${clock}에 상대 연락에 깼고, 지금 ${awake}분째 깨어 있다. 깬 시각은 이 값 그대로다 — 몇 시에 깼는지 다른 시각을 어림해 말하지 않는다. 자다 깬 채로 답하는 자리라 답장 여건은 ${RESPONSIVENESS_NAME.instant}이고, 도로 잘지는 대화가 정한다.`;
+};
+
 const nowSection = (
   chatId: string,
   characterId: number,
@@ -286,11 +302,27 @@ const nowSection = (
 ): string => {
   const { past, cur } = dayProgress(characterId);
   const now = kstLogicalClock();
+  // 잠 블록인데 오늘 실제 기록에 깸 행이 있으면 깨어 있는 것이다 — 답장 텀 판정(reply-timing)이
+  // 남긴 표시를 같은 키(블록 시작·결과)로 읽는다.
+  const woke =
+    cur && isSleeping(cur)
+      ? getDayActuals(characterId, kstLogicalDate()).find(
+          (a) => a.block_start === cur.start && a.outcome === WOKE_OUTCOME,
+        )
+      : undefined;
   // 시각은 숫자 표기와 말 표현을 함께 준다 — "12:30"만 주면 모델이 분을 흘리고 시 토큰만 읽어
   // "곧 12시" 같은 오인이 난다(12시 반인데). 반올림·상대 표현은 코드가 계산한 값을 그대로 쓰게 한다.
-  const nowLine = cur
-    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). 너는 지금 "${cur.activity}" 중이다(이 일 ${clockLabel(cur.start)}~${clockLabel(cur.end)}·시작 ${Math.max(0, toMin(now) - toMin(cur.start))}분째·끝나기까지 ${Math.max(0, toMin(cur.end) - toMin(now))}분, 답장 여건 ${RESPONSIVENESS_NAME[cur.responsiveness]}, 활동 성격 ${ACTIVITY_CATEGORY_NAME[blockCategory(cur)]}). 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
+  const situation = cur
+    ? woke
+      ? wokeNowLine(cur, woke.recorded_at, now)
+      : `너는 지금 "${cur.activity}" 중이다(이 일 ${clockLabel(cur.start)}~${clockLabel(cur.end)}·시작 ${Math.max(0, toMin(now) - toMin(cur.start))}분째·끝나기까지 ${Math.max(0, toMin(cur.end) - toMin(now))}분, 답장 여건 ${RESPONSIVENESS_NAME[cur.responsiveness]}, 활동 성격 ${ACTIVITY_CATEGORY_NAME[blockCategory(cur)]}).`
+    : null;
+  const nowLine = situation
+    ? `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). ${situation} 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
     : `- 지금: ${kstDescription()}, 즉 ${kstVerbalTime()} — 시각은 이 말 표현 그대로 인식한다(분 단위까지). 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
+  // 깨어 있는 잠 블록에는 여건 안내와 '분째'·끝 시각 규칙을 붙이지 않는다 — 잠의 남은 시간을
+  // 일의 남은 시간처럼 말하게 된다.
+  const onTask = !!cur && !woke;
   return [
     `[지금 — 답장 전에 이 사실들과 어긋나지 않는지 확인한다]`,
     // 끝 시각까지 함께 준다. 시작 시각만 있으면 "20:15 씻기"가 지금 하는 일인지 이미 마친
@@ -302,11 +334,11 @@ const nowSection = (
       ? `- '지나온 오늘'에 있는 일을 아직 안 했다거나 이제부터 하려는 것처럼 말하지 않는다. 상대가 그 일을 물으면 이미 끝낸 사람으로서 답한다.`
       : "",
     nowLine,
-    cur ? (RESPONSIVENESS_NOTE[cur.responsiveness] ?? "") : "",
-    cur
+    onTask ? (RESPONSIVENESS_NOTE[cur.responsiveness] ?? "") : "",
+    onTask
       ? `- 위 '분째'에 맞게 말한다. 이제 막 시작한 참(0~5분째)이면 아직 그 일을 하지 않은 것이니 끝냈다고 말하지 않고, 한참 지났으면(30분째 이상) 이제 시작하는 것처럼 말하지 않는다.`
       : "",
-    cur
+    onTask
       ? `- 상대가 언제 끝나냐고 물으면 위 끝 시각과 남은 시간 그대로 답한다. 다른 시각을 어림해 지어내지 않는다.`
       : "",
     `- 최근 대화에서 이미 알린 자리 비움·상태 전환("방금 뛰고 왔다", "씻고 올게요")을 다시 처음처럼 새로 반복하지 않는다. 이미 말했으면 그 다음 상태로 자연스럽게 이어간다.`,

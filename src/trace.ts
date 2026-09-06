@@ -19,11 +19,11 @@ import {
 import {
   blockCategory,
   buildPlanPrompt,
+  isSleeping,
   PLAN_SYSTEM,
   type DayPlan,
   type PlanBlock,
 } from "./day-plan.js";
-import { isSleeping } from "./reply-timing.js";
 import {
   ACTIVITY_CATEGORY_NAME,
   RESPONSIVENESS_NAME,
