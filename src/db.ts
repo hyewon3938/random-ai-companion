@@ -1149,6 +1149,26 @@ export const lastMessageBefore = (
     )
     .get(chatId, before) as MessageRow | undefined;
 
+// 캐릭터의 마지막 말과 그 뒤 처음 온 유저 말. 유저가 연달아 보냈으면 첫 통이 기준이다 —
+// 지금 답하려는 유저 말이 몇 시간 만에 온 건지는 그 첫 통이 정한다(이슈 #284). 캐릭터 말이
+// 아직 없거나 그 뒤로 유저 말이 없으면(선톡 자리) undefined.
+export const lastExchangeGap = (
+  chatId: string,
+): { lastChar: string; firstUser: string } | undefined => {
+  const last = db
+    .prepare(
+      `SELECT id, sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`,
+    )
+    .get(chatId) as { id: number; sent_at: string } | undefined;
+  if (!last) return undefined;
+  const first = db
+    .prepare(
+      `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' AND id > ? ORDER BY id ASC LIMIT 1`,
+    )
+    .get(chatId, last.id) as { sent_at: string } | undefined;
+  return first ? { lastChar: last.sent_at, firstUser: first.sent_at } : undefined;
+};
+
 // 유저가 연속으로 이어 보낸 메시지 사이의 텀(ms). 봇 응답이 끼지 않은 '이어 보내기'만 센다
 // (봇 답장을 사이에 둔 건 새 턴이라 제외, 2분 넘는 텀도 새 턴으로 보고 제외).
 // 텀이 길수록 = 한 번에 길게 치는 사람 = 응답 대기를 더 길게 잡아 중간에 끊지 않게 한다.

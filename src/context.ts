@@ -4,7 +4,7 @@
 //   불변층   — 정체성 기억(creation), 유저 프로필, 공통 규칙(태도·대화·표기·말의 결·note 신호)
 //   일간층   — 관계 8컬럼 서술, 주변 인물, 진행 중인 일, 아크, 일정, 최근 일기
 //   실시간   — 검색해 꺼낸 기억, 주제로 찾은 지난 일기와 일정, 오늘 각본, 오늘 메모,
-//              직전 대화 시점, 지금 시각, 말투, 상황 문단, 답장 객체 설명
+//              직전 대화 시점, 오늘 안의 연락 텀, 지금 시각, 말투, 상황 문단, 답장 객체 설명
 //
 // 말투는 저장값(relationships.speech_level)을 먼저 보고, 없을 때만 currentSpeechLevel이
 // 최근 발화로 판정한다. 판정만으로 정하면 존댓말로 되돌아간다.
@@ -29,6 +29,7 @@ import {
   type ScheduleRow,
   currentSpeechLevel,
   lastMessageBefore,
+  lastExchangeGap,
   getRecentMessages,
   listMemoryItems,
   type MemoryRow,
@@ -64,6 +65,7 @@ import {
   clockLabel,
   logicalDayStartTs,
   lastTalkedLabel,
+  contactGapLabel,
 } from "./kst.js";
 import {
   ACTIVITY_CATEGORY_NAME,
@@ -357,6 +359,28 @@ export interface BuildOptions {
 //   실시간 꼬리: 매 응답마다 바뀌는 것 — 검색된 기억·오늘 메모·지금 시각·현재 활동·말투 (캐시 밖)
 // 변하는 값이 상단에 있으면 매 응답마다 캐시 전체가 깨진다 — 전부 꼬리로 모은다.
 // 캐시 히트 시 앞 두 층의 입력이 기본가의 ~0.1배로 떨어진다.
+/**
+ * 유저 연락이 몇 시간 만에 온 건지와 그때 어떻게 굴지. 기준은 thresholds.ts의
+ * CONTACT_GAP_NOTICE_MS다.
+ *
+ * 규칙을 절 안에 함께 두는 이유는 이 절이 있을 때만 그 규칙이 필요해서다 — 규칙층에 늘 두면
+ * 텀이 짧은 답장에서도 기다렸다는 말이 나온다. 기다렸다는 말을 허용하되 죄책감을 만드는 쪽으로
+ * 가지 않게 하는 선은 여기와 PERSON 둘 다 같다(이슈 #285).
+ */
+const contactGapSectionOf = (chatId: string): string => {
+  const gap = lastExchangeGap(chatId);
+  if (!gap) return "";
+  const label = contactGapLabel(gap.lastChar, gap.firstUser);
+  if (!label) return "";
+  return [
+    "[연락 텀]",
+    label,
+    "- 그 시간이 지났다는 걸 안다는 티를 네 성격대로 한 마디로 낸다. 기다렸다고 말하거나, 무엇 하느라 바빴는지 묻거나, 그 사이 누구랑 있었는지 물으며 가볍게 질투한다. 답장 하나에 한 마디면 되고 길게 끌지 않는다.",
+    "- 기다린 시간을 상대 탓으로 돌리지 않는다. 다음엔 미리 말해 달라거나 그래야 안 기다린다는 말은 상대를 미안하게 만드는 말이다. 기다렸다는 말 뒤에는 바빴나 보다 하고 좋게 넘겨짚고 무슨 일 있었는지 묻는다. 상대가 먼저 미안하다고 하면 괜찮다고만 넘기지 말고 기다렸다는 말로 받는다.",
+    "- 그 사이 네가 각본대로 바빴으면 기다렸다는 말은 맞지 않는다. 그때는 상대가 뭘 했는지 묻는 쪽을 고른다.",
+  ].join("\n");
+};
+
 export const buildSystemBlocks = (
   characterId: number,
   chatId: string,
@@ -476,12 +500,17 @@ export const buildSystemBlocks = (
     ? `[직전 대화]\n마지막으로 대화한 날은 ${lastTalkedLabel(prev.sent_at)}다. 그 뒤로는 오늘 다시 연락이 닿았다.`
     : "";
 
+  // 오늘 안에서 몇 시간 만에 온 연락 — 기록의 시간 표시만으로는 모델이 그 텀을 화제로 삼지
+  // 않는다. 텀이 기준에 못 미치거나 날짜가 바뀌었으면 빈 문자열이다(이슈 #284).
+  const contactGapSection = contactGapSectionOf(chatId);
+
   const live = [
     memorySection(found),
     oldDiarySection(oldDiaries),
     scheduleSearchSection(foundSchedules, today),
     todaySection,
     lastTalkSection,
+    contactGapSection,
     nowSection(chatId, characterId, rel?.speech_level ?? null),
     FINAL_CHECK,
     opts.recent ? recentSection(chatId, opts.recent) : "",
