@@ -60,6 +60,14 @@ export const RECENT_USER_MS = 4 * 60 * 60 * 1000;
 export const GOODNIGHT_SILENCE_MS = 60 * 60 * 1000;
 export const GOODNIGHT_WINDOW = { start: "00:00", end: "05:00" } as const;
 
+/** 충분히 잔 것으로 치는 시간 — 어젯밤 잠든 시각에 이만큼을 더한 시각보다 늦게 일어나면
+ *  늦게 잤어도 피곤해하지 않는다. 피곤함은 잠든 시각이 아니라 잔 시간으로 잰다(이슈 #289). */
+export const ENOUGH_SLEEP_HOURS = 6;
+/** 밤 잠 블록으로 치는 시작 시각의 하한(각본 표기). 새벽 5시부터 이어지는 아침 꼬리 잠은 제외. */
+export const NIGHT_SLEEP_FROM = "20:00";
+/** 캐릭터의 마지막 말을 잠든 시각의 후보로 치는 하한(각본 표기). 저녁에 끝난 대화는 취침이 아니다. */
+export const LATE_TALK_FROM = "22:00";
+
 /** 달래기 선톡 — 상대가 서운해하고 답이 끊긴 뒤 이만큼 지나면 한 통 보낸다.
  * 침묵 팔로업 틱이 15분 간격이라 실제 발송은 30~45분 사이에 흩어진다. */
 export const MEND_SILENCE_MS = 30 * 60 * 1000;

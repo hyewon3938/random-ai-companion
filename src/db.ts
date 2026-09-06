@@ -962,6 +962,14 @@ export interface MessageRow {
   sent_at: string;
 }
 
+// 캐릭터 번호만 아는 자리(각본 생성)에서 대화방을 찾는다.
+export const getCharacterChatId = (characterId: number): string | null =>
+  (
+    db
+      .prepare(`SELECT chat_id FROM characters WHERE id = ?`)
+      .get(characterId) as { chat_id: string } | undefined
+  )?.chat_id ?? null;
+
 export const getActiveCharacter = (chatId: string): CharacterRow | undefined =>
   db
     .prepare(
@@ -1139,6 +1147,20 @@ export const getRecentMessages = (
 };
 
 // 특정 시각 이전의 마지막 메시지 — '직전에 대화한 날'을 세는 데 쓴다.
+// 어느 구간 안 캐릭터의 마지막 말 시각. 어젯밤 몇 시까지 깨어 있었는지 잰다(이슈 #289).
+export const lastCharMessageTsBetween = (
+  chatId: string,
+  from: string,
+  to: string,
+): string | null =>
+  (
+    db
+      .prepare(
+        `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' AND sent_at >= ? AND sent_at < ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(chatId, from, to) as { sent_at: string } | undefined
+  )?.sent_at ?? null;
+
 export const lastMessageBefore = (
   chatId: string,
   before: string,
