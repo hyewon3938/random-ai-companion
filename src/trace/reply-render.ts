@@ -80,6 +80,12 @@ export interface CallContext {
     /** 그 구간에 처음 온 메시지가 답장을 받기까지 기다린 시간. */
     waitedMs?: number | null;
   };
+  /** 약속 시각에 만든 답장 — 어느 약속을 지키는 자리였는가(이슈 #308). */
+  promised?: {
+    promise?: string;
+    activity?: string;
+    blockStart?: string | null;
+  };
   /**
    * 도착 대기 — 유저 말이 다 오기를 기다린 시간(waitMs), 첫 메시지가 온 뒤 답장을 만들기
    * 시작할 때까지 걸린 시간(spanMs), 그동안 도착한 메시지 수(msgs). 답장 텀과 다른 값이다.
@@ -106,6 +112,14 @@ export interface CallContext {
   stay?: boolean;
   note?: string | null;
   userUpset?: boolean;
+  /** 이 답장에서 한 연락 약속과 코드가 정한 시각. 시각을 못 정했으면 dropped에 사유. */
+  promise?: {
+    text: string;
+    sendAt?: string;
+    block?: string;
+    activity?: string;
+    dropped?: string;
+  };
   /** 객체를 어느 길로 읽었는지(json·stray·salvage·plain·empty). */
   outputParse?: string;
   bubbles?: number;
@@ -278,6 +292,14 @@ const holdSkipReason = (t: NonNullable<CallContext["timing"]>): string => {
 export const timingLines = (ctx: CallContext): string[] => {
   const t = ctx.timing;
   if (!t) {
+    if (ctx.promised) {
+      const activity = ctx.promised.activity ?? "하던 일";
+      const start = ctx.promised.blockStart;
+      return [
+        `*텀* 약속 연락 — ${esc(start ? `${start} ${activity}` : activity)} 구간이 끝나 약속대로 답했다`,
+        `*지킨 약속* ${esc(ctx.promised.promise ?? "")}`,
+      ];
+    }
     if (!ctx.gathered) return [];
     const activity = ctx.gathered.activity ?? "하던 일";
     const start = ctx.gathered.blockStart;
@@ -381,6 +403,14 @@ const outcomeLines = (ctx: CallContext): string[] => {
       ? `*오늘 메모* ${esc(clip(ctx.note, 200))}`
       : "*오늘 메모* 추가 없음",
   );
+  if (ctx.promise) {
+    const p = ctx.promise;
+    out.push(
+      p.dropped
+        ? `*약속* ${esc(p.text)} — 못 걸었다: ${esc(p.dropped)}`
+        : `*약속* ${esc(p.text)} → ${esc(p.sendAt ?? "")}${p.activity ? ` (${esc(p.activity)} 끝)` : ""}`,
+    );
+  }
   if (ctx.dayActual) {
     const d = ctx.dayActual;
     const by = d.by === "judge" ? "붙잡기 판정" : "답장의 남음 신호";

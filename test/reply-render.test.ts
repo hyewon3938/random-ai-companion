@@ -145,6 +145,38 @@ test("자다 깨서 이어 답하는 자리와 판정을 물은 자리가 구분
   assert.match(failed[2], /^\*붙잡기 판정\* 물었다 · :warning: 판정 실패/);
 });
 
+test("약속 연락으로 만든 답장은 텀 자리에 지킨 약속을 적는다", () => {
+  assert.deepEqual(
+    timingLines({
+      promised: { promise: "통화 끝나고 다시 연락", activity: "통화", blockStart: "13:00" },
+    }),
+    [
+      "*텀* 약속 연락 — 13:00 통화 구간이 끝나 약속대로 답했다",
+      "*지킨 약속* 통화 끝나고 다시 연락",
+    ],
+  );
+});
+
+test("답장이 한 약속은 건 시각이나 못 건 사유와 함께 적는다", () => {
+  const kept = renderReply(row(), {
+    promise: {
+      text: "통화 끝나고 다시 연락",
+      sendAt: "2026-09-07 14:00:30",
+      block: "13:00~14:00",
+      activity: "통화",
+    },
+  });
+  assert.ok(
+    kept.includes("*약속* 통화 끝나고 다시 연락 → 2026-09-07 14:00:30 (통화 끝)"),
+  );
+  const dropped = renderReply(row(), {
+    promise: { text: "통화 끝나고 다시 연락", dropped: "각본에 남은 블록이 없음" },
+  });
+  assert.ok(
+    dropped.includes("*약속* 통화 끝나고 다시 연락 — 못 걸었다: 각본에 남은 블록이 없음"),
+  );
+});
+
 test("답장 한 장은 유저 말과 호출 실패를 제자리에 붙인다", () => {
   const turns = putBlob("[assistant] 응\n[user] 이제 봤어 미안\n[user] 뭐 하고 있었어?");
   const text = renderReply(

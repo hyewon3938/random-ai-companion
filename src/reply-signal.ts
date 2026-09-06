@@ -23,6 +23,8 @@ export interface ReplySignals {
   addressTerms: string | null;
   /** 상대가 너에게 서운해하거나 화가 난 기색이 분명하다(달래기 선톡을 보낼지 정하는 데만 쓴다). */
   userUpset: boolean;
+  /** 이번 답장에서 무엇을 마치고 다시 연락하겠다고 한 약속 한 문장. 시각은 코드가 정한다(이슈 #308). */
+  promise: string | null;
 }
 
 /** 답을 어느 길로 읽었는지 — 운영에서 형식이 얼마나 지켜지는지 보려고 남긴다. */
@@ -41,6 +43,7 @@ export const EMPTY_SIGNALS: ReplySignals = {
   stage: null,
   addressTerms: null,
   userUpset: false,
+  promise: null,
 };
 
 // 객체 키·따옴표가 본문 밖에서 토큰을 쓰고, 잘리면 본문 일부가 아니라 JSON 한 덩이가 통째로
@@ -60,19 +63,21 @@ const SIGNAL_KEYS = [
   "stage",
   "address_terms",
   "userUpset",
+  "promise",
 ] as const;
 
-// note는 나머지 넷과 성격이 다르다. 넷은 드물게만 켜지는 신호이고 note는 매 답장에서 해당할 수
+// note는 나머지 다섯과 성격이 다르다. 다섯은 드물게만 켜지는 신호이고 note는 매 답장에서 해당할 수
 // 있는 칸이라, 한 묶음으로 "해당할 때만"이라고 읽히면 아예 안 나온다. stage는 반대 방향으로
 // 어긋났다 — 얼마나 자주 넣는지를 막았더니 사이가 달라진 날에도 안 나왔다. 지금 값이 프롬프트의
 // [상대와의 관계]에 실려 있으니, 그 값과 대조하라고 시켜야 같은 사이를 다른 말로 바꿔 쓰는 것만
 // 막힌다(이슈 #227).
 const SIGNAL_LINES = [
-  `- note: 오늘 메모로 남길 한 문장. 뒤에 가서도 알고 있어야 할 것이 나오면 적는 칸이라, 아래 넷과 달리 자주 쓴다. 무엇을 적는지는 위 note 신호 규칙에 있다.`,
+  `- note: 오늘 메모로 남길 한 문장. 뒤에 가서도 알고 있어야 할 것이 나오면 적는 칸이라, 아래 다섯과 달리 자주 쓴다. 무엇을 적는지는 위 note 신호 규칙에 있다.`,
   `- stay: 하려던 일을 접거나 미루고 상대 곁에 남기로 했을 때만 true.`,
   `- stage: 둘 사이가 실제로 달라졌을 때 지금 어떤 사이인지 한 줄로 새로 쓴다. 위 [상대와의 관계]의 '지금 어떤 사이'와 뜻이 같으면 넣지 않는다. 같은 사이를 다른 말로 바꿔 쓰는 자리가 아니다.`,
   `- address_terms: 서로 부르는 말이 달라졌을 때만, 서로를 뭐라고 부르는지 짧게 적는다. 부르던 대로면 넣지 않는다.`,
   `- userUpset: 상대가 너에게 서운해하거나 화가 난 기색이 분명할 때만 true. 회사 일이나 다른 사람 때문에 상한 기분은 아니다. 애매하면 넣지 않는다.`,
+  `- promise: 이번 답장에서 지금 하는 일을 마치고 다시 연락하겠다고 상대에게 말했을 때만, 무엇을 마치고 연락할지 한 문장으로 적는다(예: 통화 끝나고 다시 연락). 시각은 적지 않는다 — 그 일이 끝나는 시각에 코드가 너를 다시 불러 그때 말을 만든다. 그런 말을 안 했으면 넣지 않는다.`,
 ].join("\n");
 
 // 답장 경로에서만 프롬프트 맨 끝에 붙는다(context.ts BuildOptions.signals).
@@ -111,10 +116,7 @@ const stripLeadTag = (line: string): string => {
 };
 
 const lines = (text: string): string[] =>
-  text
-    .split("\n")
-    .map(stripLeadTag)
-    .filter(Boolean);
+  text.split("\n").map(stripLeadTag).filter(Boolean);
 
 const stripFence = (raw: string): string =>
   raw
@@ -138,6 +140,7 @@ const readSignals = (o: Record<string, unknown>): ReplySignals => ({
   stage: asText(o.stage),
   addressTerms: asText(o.address_terms),
   userUpset: asFlag(o.userUpset),
+  promise: asText(o.promise),
 });
 
 /** 첫 답이 비어 다시 부른 경우 — 두 답의 신호를 하나로 합친다(먼저 나온 값을 남긴다). */
@@ -150,12 +153,17 @@ export const mergeSignals = (
   stage: a.stage ?? b.stage,
   addressTerms: a.addressTerms ?? b.addressTerms,
   userUpset: a.userUpset || b.userUpset,
+  promise: a.promise ?? b.promise,
 });
 
 // 배열이면 원소마다, 문자열 하나면 그것만. 원소 안에 줄바꿈이 들어와도 말풍선으로 나눈다 —
 // 모델이 배열과 줄바꿈을 섞어 쓰는 경우가 있고, 나눠도 손해가 없다.
 const toBubbles = (v: unknown): string[] => {
-  const raw: unknown[] = Array.isArray(v) ? v : typeof v === "string" ? [v] : [];
+  const raw: unknown[] = Array.isArray(v)
+    ? v
+    : typeof v === "string"
+      ? [v]
+      : [];
   return capBubbles(
     raw.flatMap((el) => (typeof el === "string" ? lines(el) : [])),
   );
@@ -239,7 +247,8 @@ const hasSignal = (s: ReplySignals): boolean =>
   s.note !== null ||
   s.stage !== null ||
   s.addressTerms !== null ||
-  s.userUpset;
+  s.userUpset ||
+  s.promise !== null;
 
 // JSON을 쓰려다 만 답(대개 상한에 걸려 잘린 경우)에서 온전한 조각만 건진다.
 // 닫는 따옴표가 없는 마지막 문장은 걸리지 않는다 — 반 토막 난 말을 보내느니 버린다.
@@ -265,7 +274,9 @@ const arrayItems = (rest: string): string[] => {
   return out;
 };
 
-const salvage = (text: string): { bubbles: string[]; signals: ReplySignals } => {
+const salvage = (
+  text: string,
+): { bubbles: string[]; signals: ReplySignals } => {
   const head = text.search(/"reply"\s*:\s*\[/);
   const parts =
     head >= 0 ? arrayItems(text.slice(text.indexOf("[", head) + 1)) : [];

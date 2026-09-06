@@ -56,6 +56,7 @@ const POST_PURPOSES = [
   "mend",
   "away",
   "comeback",
+  "promise",
 ] as const;
 
 // 3층 프롬프트를 타는 호출 — 하루 고정 두 덩이를 여기서만 견준다.

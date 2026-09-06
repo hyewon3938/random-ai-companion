@@ -1,10 +1,13 @@
 // 답장 한 통을 만드는 순서 — 말투 굳히기, 검색 태그, 프롬프트 조립, 호출, 신호 반영, 폐기 판정.
 //
-// 즉답·틈틈이 답장(bot.ts의 respond)과 불가 구간이 끝난 뒤의 몰아 답장(bot.ts의 깨우기
-// 핸들러)이 같은 순서로 답장을 만든다. 둘이 다른 것은 프롬프트 끝에 붙는 상황 문단, 대화
-// 기록에서 시간 표시를 강제하는 기준 시각, 호출 기록에 붙이는 근거 세 가지뿐이라 그 셋만
-// 입력으로 받는다. 만든 답장을 어떻게 보낼지(정한 시각에 보낼지, 바로 보낼지)는 호출부가
-// 정한다 — 이 파일은 텔레그램을 모른다.
+// 즉답·틈틈이 답장(bot.ts의 respond), 불가 구간이 끝난 뒤의 몰아 답장(bot.ts의 깨우기
+// 핸들러), 약속 시각의 답장(bot.ts의 약속 핸들러)이 같은 순서로 답장을 만든다. 서로 다른
+// 것은 프롬프트 끝에 붙는 상황 문단, 대화 기록에서 시간 표시를 강제하는 기준 시각, 호출
+// 기록에 붙이는 근거 세 가지뿐이라 그 셋만 입력으로 받는다. 붙잡기 판정이 일정을 취소하거나
+// 미룬 뒤의 답장이면 그 결정을 상황 문단으로 함께 알려 준다 — 판정 결과를 모른 채 쓰면
+// 취소한 일에 가겠다고 하거나 끝나고 연락하겠다는 약속이 나온다(이슈 #308). 만든 답장을
+// 어떻게 보낼지(정한 시각에 보낼지, 바로 보낼지)는 호출부가 정한다 — 이 파일은 텔레그램을
+// 모른다.
 //
 // 만드는 동안 유저가 말을 더 보냈거나 답이 비어 있으면 null을 돌려준다. 그때도 호출 기록에는
 // 버린 이유와 객체를 어느 길로 읽었는지가 남는다 — 형식이 깨진 날을 되짚는 자리다.
@@ -97,6 +100,22 @@ export const askReplyWith: ReplyAsker = (system, turns, meta) =>
     return { text, callId: callMeta.callId ?? null };
   });
 
+/** 붙잡기 판정이 이미 내린 결정을 답장에 알리는 상황 문단. 답장이 그 결정과 어긋나지 않게. */
+export const heldSituation = (held: {
+  activity: string;
+  outcome: string;
+}): string =>
+  [
+    `[붙잡기 판정 — 이미 정해진 것]`,
+    `상대가 붙잡아서 너는 "${held.activity}"을(를) ${
+      held.outcome === "취소"
+        ? "취소하고 남기로 했다"
+        : "미루고 지금은 상대 곁에 남기로 했다"
+    }. 이 답장은 그 결정 뒤의 말이다.`,
+    `- 취소했으면 그 일에 가겠다거나 끝나고 연락하겠다고 하지 않는다. 미뤘으면 나중에 한다는 결로만 말하고 지금 가겠다고 하지 않는다.`,
+    `- 남기로 한 것을 무겁게 생색내지 않는다. 한 마디면 된다.`,
+  ].join("\n");
+
 export interface ComposeInput {
   characterId: number;
   chatId: string;
@@ -160,12 +179,19 @@ export const composeReply = async (
     dropped: [],
   };
   const pick = await pickTags(characterId, turn.text);
+  // 상황 문단은 호출부가 준 것 뒤에 붙잡기 판정의 결정을 잇는다 — 둘 다 있을 수 있다.
+  const situation = [
+    input.situation ?? "",
+    input.heldActual ? heldSituation(input.heldActual) : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const system = buildSystemBlocks(characterId, chatId, {
     pick,
     trace: built,
     // 답장만 객체(JSON)로 받는다 — 본문과 신호가 한 덩이로 온다.
     signals: true,
-    ...(input.situation ? { situation: input.situation } : {}),
+    ...(situation ? { situation } : {}),
   });
   const turns = replyHistory(chatId, input.markFrom);
   const meta: CallMeta = { purpose: "reply", characterId, chatId };

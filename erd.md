@@ -418,7 +418,7 @@ erDiagram
 
 role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰는 이름이다. 저장한 대화를 프롬프트에 넣을 때 이 형식 그대로 보내기 때문에 캐릭터가 한 말도 `assistant`로 적는다.
 
-**pending_replies** — 만들어 두고 정한 시각에 보낼 답장, 그리고 답장 불가 구간이 끝날 때 깨어나기 위한 표시. 봇이 다시 떠도 여기 남은 행을 보고 이어서 보낸다
+**pending_replies** — 만들어 두고 정한 시각에 보낼 답장, 답장 불가 구간이 끝날 때 깨어나기 위한 표시, 그리고 답장에서 한 연락 약속. 봇이 다시 떠도 여기 남은 행을 보고 이어서 보낸다
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
@@ -429,8 +429,8 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | bubbles_json | TEXT | O | 보낼 말풍선들. 깨우기 표시는 문안이 없어 빈 목록 |
 | note_to_save | TEXT | | 발송 후 today_notes에 적을 한 줄 |
 | send_at | TEXT | O | 보낼 시각. 깨우기 표시는 구간이 끝나는 시각 |
-| kind | TEXT | O | 행의 종류 — `reply` · `recover` · `wake` |
-| meta_json | TEXT | | 깨우기 표시일 때 그 구간의 활동과 시작 · 종료 시각 |
+| kind | TEXT | O | 행의 종류 — `reply` · `recover` · `wake` · `return` · `promise` |
+| meta_json | TEXT | | 깨우기 표시와 약속 행일 때 그 구간의 활동과 시작 · 종료 시각. 약속 행에는 약속 문장도 있다 |
 | call_id | INTEGER | | 이 답장을 만든 모델 호출의 llm_calls 행. 발송과 폐기 결과를 그 호출의 슬랙 트레이스 스레드에 이을 때 쓴다 |
 | status | TEXT | O | `waiting` · `sent` · `superseded` · `failed` |
 | attempts | INTEGER | O | |
@@ -441,6 +441,8 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 키·인덱스: PK `id`, 인덱스 `(status, send_at)`, 인덱스 `(chat_id, status)`
 
 `wake` 행은 답장이 아니라 깨우기 표시다. 답장 불가 구간에 유저가 말을 걸면 몇 시간 뒤에 나갈 답장을 지금 만들지 않고 이 행만 걸어 두었다가, 구간이 끝나는 시각에 깨어나 그 사이 쌓인 메시지를 한 번에 읽고 답한다. 유저가 말을 더 보내면 만들어 둔 답장은 버리지만 이 행은 남겨 둔다. 구간이 끝날 때 몰아 읽는 것은 메시지가 몇 개든 같기 때문이다.
+
+`return` 행은 자리 비움 틱이 긴 구간에 들어가며 거는 표시다. 유저 말이 없어도 구간이 끝나면 깨어나 복귀 인사를 보낼지 가린다. `promise` 행은 캐릭터가 답장에서 한 연락 약속이다. 답장이 통화 끝나고 다시 연락하겠다고 하면 코드가 그 약속 문장을 이 행에 적고, 시각은 모델이 정하지 않고 각본 블록이 끝나는 시각에서 고른다. 그 시각이 되면 모델을 다시 불러 그때의 대화 기록을 보고 말을 만들고, 그 사이 유저가 말을 보냈으면 그 답장이 약속을 지키는 자리가 된다. 이 행은 유저가 기다리는 답장이 아니라 답장 대기로 세지 않아 선톡을 막지 않고, 새 약속이 오면 앞 약속을 거둔다.
 
 **scheduled_messages** — 미리 만드는 선톡 둘(아침 · 안부)의 문안과 발송 창
 
@@ -603,7 +605,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | day_plans | 새벽 정리, 각본 생성(임시) | 답장 파이프라인(텀 결정), 프롬프트 조립, 선톡 모듈, 새벽 정리 |
 | day_actuals | 답장 파이프라인(붙잡기 즉시), 새벽 정리 | 프롬프트 조립(지난 시간은 실제로 읽음), 새벽 정리 |
 | messages | 답장 파이프라인, 선톡 모듈 | 프롬프트 조립(최근 대화), 새벽 정리, 채점·분석 |
-| pending_replies | 답장 파이프라인 | 답장 파이프라인(발송 틱·부팅 복구), 선톡 모듈(대기 중이면 선톡 미발송) |
+| pending_replies | 답장 파이프라인(답장 · 깨우기 표시 · 연락 약속), 선톡 모듈(자리 비움 틱의 복귀 표시) | 답장 파이프라인(발송 틱·부팅 복구), 선톡 모듈(답장 대기 중이면 선톡 미발송) |
 | scheduled_messages | 새벽 정리 | 선톡 모듈 |
 | recovery_marks | 답장 파이프라인 | 답장 파이프라인(부팅 복구) |
 | send_failures | 선톡 모듈 | 운영 점검 |
@@ -637,13 +639,13 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | scheduled_messages.kind 선톡 종류 | `morning` 아침 선톡, 점심에 보내는 날도 이 값 · `checkin` 안부 선톡 |
 | scheduled_messages.status | `pending` 대기 · `sent` 발송 · `skipped` 폐기 |
 | pending_replies.status | `waiting` 대기 · `sent` 발송 · `superseded` 새 메시지로 폐기 · `failed` 실패 |
-| pending_replies.kind | `reply` 답장 · `recover` 복구 발송 · `wake` 구간 끝 깨우기 |
+| pending_replies.kind | `reply` 답장 · `recover` 복구 발송 · `wake` 구간 끝 깨우기 · `return` 구간 끝 복귀 확인 · `promise` 답장에서 한 연락 약속 |
 | characters.status | `active` 대화 중 · `ended` 이별 |
 | messages.role | `user` 유저 · `assistant` 캐릭터 |
 | trace_events.status | `pending` 대기 · `sent` 게시 · `failed` 실패 · `skipped` 건너뜀 |
 | call_feedback.source 표시를 남긴 방법 | `reaction` 리액션으로 고른 분류 · `reply` 스레드에 적은 이유 |
 | call_feedback.kind 분류 | `fact` 사실 오류 · `tone` 말투 · `timing` 타이밍 · `good` 좋음 |
-| messages 메타의 발송 종류, send_failures.kind | `reply` 답장 · `recover` 복구 · `morning` 아침 · `checkin` 안부 · `away` 자리비움 · `catchup` 근황 · `goodnight` 밤 인사 (send_failures는 뒤 셋만) |
+| messages 메타의 발송 종류, send_failures.kind | `reply` 답장 · `recover` 복구 · `morning` 아침 · `checkin` 안부 · `away` 자리비움 · `catchup` 근황 · `goodnight` 밤 인사 · `mend` 달래기 · `promise` 약속 연락 (send_failures는 자리비움 · 근황 · 밤 인사 · 달래기 4개만) |
 
 영역 이름은 캐릭터마다 목록이 달라서 CHECK 대신 areas 테이블로 관리한다. 각본 블록의 세 태그는 plan_json 안에 있어 CHECK가 걸리지 않으므로 쓰기 코드에서 검사한다. llm_calls.purpose는 값이 목록으로 정해져 있는데도 CHECK를 걸지 않는다. 호출하는 자리가 늘 때마다 제약을 다시 만들어야 하고 제약에 걸린 INSERT는 기록을 통째로 잃어서, 코드의 타입으로 막는 쪽을 택했다.
 

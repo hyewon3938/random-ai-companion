@@ -8,14 +8,15 @@
 // wake 핸들러가 세 갈래로 나뉜다 — 쌓인 메시지에 몰아 답하거나, 예고하고 나간 자리면
 // 복귀 인사를 하거나, 아무것도 하지 않는다. 몰아 답장도 같은 생성 순서를 타고, 상황 문단과
 // 시간 표시 기준만 다르게 준다. 예고한 블록이 시작하기 전까지 온 말에는 farewellSituation으로
-// 배웅 답을 보낸다.
+// 배웅 답을 보낸다. 답장에서 연락 약속을 하면 코드가 각본 경계에서 시각을 골라 걸어 두고,
+// 그 시각에 promise 핸들러가 그 사이 온 말에 답하거나 먼저 연락한다(이슈 #308).
 //
 // 부팅하면 recoverMissedReplies가 놓친 답장을 복구한다. 워터마크로 중복을 막고 최근
 // 3시간 것만 본다 — 더 멀리 보면 자정 경계에서 어제 것까지 딸려 온다.
 //
 // 선톡 틱과는 acquireProactive로 chat 단위 상호 배제를 건다(대기 중인 답장이 있으면
-// 선톡을 접는다). 발송과 깨우기 함수는 setPendingSender·setWakeHandler로 pending.ts에
-// 넘겨 준다 — 순환 참조를 피하려고 주입한다.
+// 선톡을 접는다). 발송·깨우기·약속 함수는 setPendingSender·setWakeHandler·setPromiseHandler로
+// pending.ts에 넘겨 준다 — 순환 참조를 피하려고 주입한다.
 
 import { Bot, InlineKeyboard, type ApiClientOptions } from "grammy";
 import { Agent } from "node:https";
@@ -35,7 +36,7 @@ import {
   type PlanBlock,
 } from "./day-plan.js";
 import { ensureMonthPlan } from "./life-plan.js";
-import { buildSystemBlocks } from "./context.js";
+import { buildSystemBlocks, currentBlock } from "./context.js";
 import {
   decideReplyTiming,
   recentUserGaps,
@@ -43,14 +44,18 @@ import {
 } from "./reply-timing.js";
 import { awayNoticeSent } from "./proactive-policy.js";
 import { composeReply, pendingUserTurn } from "./reply-compose.js";
+import { promiseSlotFor } from "./reply-promise.js";
 import {
   dropPendingReplies,
+  dropPromiseRows,
   dropWakeRows,
   isWaiting,
   schedulePendingReply,
   scheduleWakeRow,
   setPendingSender,
+  setPromiseHandler,
   setWakeHandler,
+  type WakeMeta,
 } from "./pending.js";
 import { traceProactiveSend } from "./reply-trace.js";
 import { chatJson } from "./llm.js";
@@ -84,7 +89,8 @@ import {
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
 // reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 선톡,
 // checkin=긴 침묵 뒤 안부 선톡, away=자리비움 선톡(나갈 때·돌아왔을 때),
-// catchup=낮의 근황 선톡, goodnight=밤 인사 선톡, mend=서운해한 뒤 보내는 달래기 선톡
+// catchup=낮의 근황 선톡, goodnight=밤 인사 선톡, mend=서운해한 뒤 보내는 달래기 선톡,
+// promise=답장에서 한 연락 약속을 지키는 연락(이슈 #308)
 export type SendKind =
   | "reply"
   | "recover"
@@ -93,7 +99,8 @@ export type SendKind =
   | "away"
   | "catchup"
   | "goodnight"
-  | "mend";
+  | "mend"
+  | "promise";
 
 // 텔레그램 API 연결 풀.
 //
@@ -587,6 +594,74 @@ const returnSituation = (activity: string): string =>
     `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
   ].join("\n");
 
+// 약속한 연락 — 답장에서 무엇을 마치고 연락하겠다고 한 그 시각이 온 자리의 상황 문단(이슈 #308).
+//
+// replying이 참이면 그 사이 상대가 말을 보내 답장으로 나가는 자리라 JSON 형식 줄을 붙이지
+// 않는다(답장 형식은 REPLY_ENVELOPE가 정한다). 거짓이면 선톡과 같은 형식으로 문안을 받는다.
+// 약속을 이미 지켰거나 대화가 그 뒤로 이어졌으면 send=false로 접게 한다 — 약속 시각은 각본
+// 경계에서 코드가 고른 것이라 실제로는 그 전에 대화가 재개됐을 수 있다.
+const promiseSituation = (
+  promise: string,
+  activity: string,
+  replying: boolean,
+): string =>
+  [
+    replying
+      ? `[약속한 연락 — 이 답장이 그 약속을 지키는 자리다]`
+      : `[문안 — 약속한 연락 한 통]`,
+    `너는 아까 답장에서 "${promise}"라고 했고, 방금 "${activity}"을(를) 끝냈다. 지금 그 약속을 지키는 자리다.`,
+    replying
+      ? `- 대화 기록 끝의 상대 메시지는 그 사이 온 것이다. 약속대로 돌아왔다는 결로 그 말을 받는다.`
+      : `- 약속한 대로 돌아왔다는 결로 말을 건다. 무엇을 하다 왔는지는 한 마디면 된다.`,
+    `- 대화 기록에서 이미 그 연락을 했거나 그 뒤로 대화가 이어지고 있으면 같은 말을 되풀이하지 않는다${replying ? "" : " — 그때는 send=false"}.`,
+    `- 짧게 1~2개 말풍선(줄바꿈 구분). 재촉하거나 답을 요구하지 않는다.`,
+    ...(replying
+      ? []
+      : [``, `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`]),
+  ].join("\n");
+
+/**
+ * 답장에서 한 연락 약속을 코드가 지킬 시각에 걸어 둔다(이슈 #308). 시각은 각본 블록 경계에서
+ * 고른다(reply-promise.ts). 한 대화에 약속은 하나라 앞 약속이 있으면 거두고 새로 건다.
+ * 각본에 남은 블록이 없으면 걸지 않고 null — 그 약속은 코드가 시각을 정할 수 없다.
+ */
+const keepPromise = (
+  chatId: string,
+  characterId: number,
+  userMsgAt: string,
+  promise: string,
+): { sendAt: string; block: string; activity: string } | null => {
+  const slot = promiseSlotFor(characterId);
+  if (!slot) {
+    console.warn(
+      `[promise] 각본에 남은 블록이 없어 약속 시각을 못 정함 (chat=${chatId}): ${promise}`,
+    );
+    return null;
+  }
+  const dropped = dropPromiseRows(chatId);
+  if (dropped)
+    console.log(`[promise] 앞 약속 ${dropped}건 거둠 — 새 약속으로 갈아 끼운다`);
+  const meta: WakeMeta = {
+    activity: slot.block.activity,
+    blockStart: slot.block.start,
+    blockEnd: slot.block.end,
+    promise,
+  };
+  const { sendAt } = scheduleWakeRow({
+    chatId,
+    characterId,
+    userMsgAt,
+    waitMs: slot.waitMs,
+    meta,
+    kind: "promise",
+  });
+  return {
+    sendAt,
+    block: `${slot.block.start}~${slot.block.end}`,
+    activity: slot.block.activity,
+  };
+};
+
 // 답장 한 번의 순서: 텀 결정 → 생성 → 대기 → 발송.
 //
 // 예전에는 각본상 자리를 비운 시간만큼 먼저 기다린 뒤 생성했다. 그러면 30분 뒤에 나가는 답장도
@@ -723,6 +798,15 @@ const respond = async (
     reply.attach({ sendAt: scheduled.sendAt });
     // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
     setRecoveryMark(chatId, turn.at);
+    // 답장에서 연락 약속을 했으면 코드가 그 시각을 정해 걸어 둔다(이슈 #308).
+    if (signals.promise) {
+      const kept = keepPromise(chatId, character.id, turn.at, signals.promise);
+      reply.attach({
+        promise: kept
+          ? { text: signals.promise, ...kept }
+          : { text: signals.promise, dropped: "각본에 남은 블록이 없음" },
+      });
+    }
     console.log(
       `[send] kind=${kind} chat=${chatId} bubbles=${bubbles.length} wait=${Math.round(timing.waitMs / 1000)}s`,
     );
@@ -841,6 +925,14 @@ setWakeHandler(async (row: PendingReplyRow) => {
     );
     if (signals.note) saveTodayNote(row.character_id, signals.note);
     setRecoveryMark(chatId, turn.at);
+    if (signals.promise) {
+      const kept = keepPromise(chatId, row.character_id, turn.at, signals.promise);
+      reply.attach({
+        promise: kept
+          ? { text: signals.promise, ...kept }
+          : { text: signals.promise, dropped: "각본에 남은 블록이 없음" },
+      });
+    }
     console.log(
       `[wake] 몰아 답장 chat=${chatId} @ ${activity} bubbles=${bubbles.length}`,
     );
@@ -884,6 +976,130 @@ setWakeHandler(async (row: PendingReplyRow) => {
         return: meta.blockStart ?? true,
       });
       console.log(`[wake] return @ ${activity} → ${chatId}`);
+    }
+  } finally {
+    releaseProactive(chatId);
+  }
+});
+
+// 약속 시각이 울리는 자리 — 답장에서 한 연락 약속을 지킨다(이슈 #308). 갈래는 넷:
+// ① 같은 대화에 깨우기 표시가 걸려 있으면 지나간다 — 그 구간이 끝날 때 몰아 답장이나 복귀
+//    인사가 나가고, 그 자리에서 대화 기록의 약속을 보고 받는다.
+// ② 지금 블록이 답장 불가면 그 블록 끝으로 다시 건다 — 약속 시각을 고른 뒤 각본이 바뀌었거나
+//    잠든 시간에 걸린 경우다.
+// ③ 그 사이 상대가 말을 보냈으면 그 말에 답하는 답장으로 약속을 지킨다.
+// ④ 온 말이 없으면 약속대로 먼저 연락한다. 선톡 자리를 쓰되 하루 상한에는 세지 않는다.
+// 답장 생성이 진행 중이면 던져서 pending의 재시도(1·2분)를 탄다.
+setPromiseHandler(async (row: PendingReplyRow) => {
+  const chatId = row.chat_id;
+  let meta: Partial<WakeMeta> = {};
+  try {
+    meta = JSON.parse(row.meta_json ?? "{}") as typeof meta;
+  } catch {
+    /* 약속 자체는 유효 — 활동 이름 없이 진행한다 */
+  }
+  const activity = meta.activity ?? "하던 일";
+  const promise = meta.promise ?? "끝나고 다시 연락";
+  if (hasWaitingWakeRow(chatId)) {
+    console.log(
+      `[promise] 깨우기 표시가 걸려 있어 그쪽에 맡김 (chat=${chatId}): ${promise}`,
+    );
+    return;
+  }
+  if (pending.has(chatId) || responding.has(chatId))
+    throw new Error("답장을 만드는 중 — 잠시 뒤 다시");
+  const cur = currentBlock(row.character_id);
+  if (cur && cur.responsiveness === "unavailable") {
+    const kept = keepPromise(chatId, row.character_id, row.user_msg_at, promise);
+    console.log(
+      `[promise] 지금은 답장 불가 구간(${cur.activity}) — ${kept ? `${kept.sendAt}로 다시 검` : "다시 걸 블록 없음"} (chat=${chatId})`,
+    );
+    return;
+  }
+  const last = lastMessage(chatId);
+
+  // ③ 그 사이 온 말이 있다 — 약속을 지키는 답장.
+  if (last?.role === "user") {
+    // 만들어 둔 답장이 있으면 버린다 — 약속 시각의 답장이 그 말까지 함께 받는다.
+    const droppedReply = dropPendingReplies(chatId, "약속 시각이 되어 다시 만든다");
+    if (droppedReply)
+      console.log(`[promise] 만들어 둔 답장 ${droppedReply}건 거둠 (chat=${chatId})`);
+    const turn = pendingUserTurn(chatId);
+    if (!turn) return;
+    const reply = await composeReply({
+      characterId: row.character_id,
+      chatId,
+      turn,
+      situation: promiseSituation(promise, activity, true),
+      context: {
+        promised: { promise, activity, blockStart: meta.blockStart ?? null },
+      },
+      logTag: "[promise]",
+    });
+    if (!reply) return;
+    const { bubbles, signals } = reply;
+    const { sent, error } = await sendBubbleList(chatId, bubbles);
+    if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
+    reply.attach({ sent: `${sent.length}/${bubbles.length}` });
+    if (error)
+      console.warn(`[promise] 부분 발송 ${sent.length}/${bubbles.length}`);
+    logMessage(
+      chatId,
+      row.character_id,
+      "assistant",
+      sent.join("\n"),
+      kstStamp(),
+      {
+        kind: "reply",
+        promised: true,
+        ...(signals.userUpset ? { userUpset: true } : {}),
+        ...(sent.length < bubbles.length
+          ? { partial: `${sent.length}/${bubbles.length}` }
+          : {}),
+      },
+    );
+    if (signals.note) saveTodayNote(row.character_id, signals.note);
+    setRecoveryMark(chatId, turn.at);
+    if (signals.promise) {
+      const kept = keepPromise(chatId, row.character_id, turn.at, signals.promise);
+      reply.attach({
+        promise: kept
+          ? { text: signals.promise, ...kept }
+          : { text: signals.promise, dropped: "각본에 남은 블록이 없음" },
+      });
+    }
+    console.log(
+      `[promise] 약속 답장 chat=${chatId} @ ${activity} bubbles=${bubbles.length}`,
+    );
+    return;
+  }
+
+  // ④ 온 말이 없다 — 약속대로 먼저 연락한다.
+  if (!last || last.role !== "assistant") return;
+  if (!acquireProactive(chatId)) throw new Error("선톡 자리가 차 있음 — 잠시 뒤 다시");
+  try {
+    const draft = await chatJson<{ send: boolean; text?: string }>(
+      buildSystemBlocks(row.character_id, chatId, {
+        recent: PROACTIVE_RECENT_LINES,
+        situation: promiseSituation(promise, activity, false),
+      }),
+      "위 상황 문단대로 문안을 만들어.",
+      400,
+      config.model,
+      { purpose: "promise", characterId: row.character_id, chatId },
+    );
+    // 발송 직전 재확인 — 모델을 기다리는 사이 유저가 답했거나 다른 경로가 보냈으면 접는다.
+    if (
+      draft.send &&
+      draft.text &&
+      lastMessage(chatId)?.sent_at === last.sent_at
+    ) {
+      await sendProactive(chatId, row.character_id, draft.text, "promise", {
+        promise,
+      });
+      console.log(`[promise] 약속 연락 @ ${activity} → ${chatId}`);
+    } else {
+      console.log(`[promise] 약속 연락 접음 (chat=${chatId}): ${promise}`);
     }
   } finally {
     releaseProactive(chatId);

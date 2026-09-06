@@ -175,13 +175,14 @@ export const getPendingReply = (id: number): PendingReplyRow | null =>
     )
     .get(id) as PendingReplyRow | undefined) ?? null;
 
-// 유저가 답을 기다리는 중인가 — 선톡 틱이 이 값을 보고 물러난다. kind='return'은 빼고 센다.
-// 그 행은 답할 말이 없는 구간 경계 알림이라, 세면 불가 구간 내내 모든 선톡이 멈춰 연속 불가
-// 구간의 다음 예고와 아침·점심 선톡이 발송 창을 놓친다.
+// 유저가 답을 기다리는 중인가 — 선톡 틱이 이 값을 보고 물러난다. kind='return'과 'promise'는
+// 빼고 센다. 'return'은 답할 말이 없는 구간 경계 알림이라, 세면 불가 구간 내내 모든 선톡이
+// 멈춰 연속 불가 구간의 다음 예고와 아침·점심 선톡이 발송 창을 놓친다. 'promise'는 캐릭터가
+// 먼저 하겠다고 한 연락이라 유저가 답을 기다리는 상태가 아니다.
 export const hasWaitingPendingReply = (chatId: string): boolean =>
   !!db
     .prepare(
-      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind <> 'return' LIMIT 1`,
+      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind NOT IN ('return','promise') LIMIT 1`,
     )
     .get(chatId);
 
@@ -238,6 +239,21 @@ export const supersedeWakeRows = (chatId: string): SupersededRow[] => {
   if (rows.length)
     db.prepare(
       `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return')`,
+    ).run(chatId);
+  return rows;
+};
+
+// 걸어 둔 연락 약속을 거둔다 — 같은 대화에서 새 약속이 생겨 앞 약속을 갈아 끼울 때. 약속은
+// 한 대화에 하나만 걸린다(이슈 #308).
+export const supersedePromiseRows = (chatId: string): SupersededRow[] => {
+  const rows = db
+    .prepare(
+      `SELECT id, call_id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'promise'`,
+    )
+    .all(chatId) as SupersededRow[];
+  if (rows.length)
+    db.prepare(
+      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind = 'promise'`,
     ).run(chatId);
   return rows;
 };

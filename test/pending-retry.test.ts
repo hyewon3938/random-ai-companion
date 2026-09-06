@@ -65,3 +65,10 @@ test("깨우기·복귀는 앞 두 칸만 쓴다 — 재시도마다 모델을 �
   );
   assert.equal(retryDelayMs(row("return", 2)), null);
 });
+
+test("약속 연락도 앞 두 칸만 쓴다 — 울릴 때마다 모델을 다시 부른다", () => {
+  assert.deepEqual(
+    [0, 1, 2].map((n) => retryDelayMs(row("promise", n))),
+    [60_000, 120_000, null],
+  );
+});

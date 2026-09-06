@@ -138,6 +138,7 @@ export type CallPurpose =
   | "mend"
   | "away"
   | "comeback"
+  | "promise"
   | "tool";
 
 export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
@@ -160,6 +161,7 @@ export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
   mend: "달래기 선톡",
   away: "자리비움 선톡",
   comeback: "복귀 선톡",
+  promise: "약속 연락",
   tool: "개발 도구",
 };
 

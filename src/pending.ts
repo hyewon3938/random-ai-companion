@@ -11,8 +11,12 @@
 // 시각에 걸어 둔다. 유저가 말을 더 보내도 이 행은 살아남고(구간 끝 시각은 그대로다),
 // 지우는 것은 dropWakeRows다. 기다리는 동안 isWaiting이 참이라 선톡 틱이 물러난다.
 //
-// 발송 함수와 깨우기 함수는 bot.ts가 setPendingSender·setWakeHandler로 넣어 준다 —
-// 여기서 bot.ts를 부르면 순환 참조가 된다.
+// 캐릭터가 답장에서 한 연락 약속도 같은 표를 쓴다(이슈 #308) — 문안 없이 kind='promise'
+// 행으로 약속 시각에 걸어 두고, 울리면 그때 모델을 불러 말을 만든다. 유저가 말을 더 보내도
+// 살아남고 선톡 틱을 막지 않으며, 지우는 것은 dropPromiseRows다.
+//
+// 발송 함수와 깨우기·약속 함수는 bot.ts가 setPendingSender·setWakeHandler·setPromiseHandler로
+// 넣어 준다 — 여기서 bot.ts를 부르면 순환 참조가 된다.
 
 import {
   insertPendingReply,
@@ -21,6 +25,7 @@ import {
   hasWaitingPendingReply,
   supersedePendingReplies,
   supersedeWakeRows,
+  supersedePromiseRows,
   markPendingReply,
   bumpPendingAttempt,
   getRecoveryMark,
@@ -53,7 +58,7 @@ import { getKstNow, kstDateString } from "./kst.js";
 // 거두므로, 오래된 답장이 뒤늦게 나갈 걱정은 없다.
 const RETRY_MS = [60_000, 120_000, 300_000, 600_000];
 
-// 깨우기·구간 끝 표시는 표의 앞 두 칸(1·2분)까지만 쓴다 — 지금까지와 같은 3회다.
+// 깨우기·구간 끝 표시·약속 연락은 표의 앞 두 칸(1·2분)까지만 쓴다 — 지금까지와 같은 3회다.
 //
 // 이쪽은 만들어 둔 문안을 보내는 자리가 아니라 그 자리에서 모델을 불러 몰아 답장을 새로
 // 만드는 길이라, 한 번 더 시도할 때마다 호출이 한 번 더 든다. 게다가 실패한 행이 닫히면
@@ -101,6 +106,14 @@ export const setWakeHandler = (fn: WakeHandler): void => {
   wakeHandler = fn;
 };
 
+/** 약속 시각이 되면 할 일도 bot.ts가 정한다. 약속을 못 지킬 자리면 던져서 재시도를 탄다. */
+export type PromiseHandler = (row: PendingReplyRow) => Promise<void>;
+
+let promiseHandler: PromiseHandler | null = null;
+export const setPromiseHandler = (fn: PromiseHandler): void => {
+  promiseHandler = fn;
+};
+
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
 const epochOf = (ts: string): number =>
@@ -127,6 +140,10 @@ const parseBubbles = (row: PendingReplyRow): string[] => {
 const isWakeKind = (kind: string): boolean =>
   kind === "wake" || kind === "return";
 
+/** 문안 없이 울리는 행 — 깨우기 표시와 약속 연락. 등록된 핸들러가 그 자리에서 할 일을 정한다. */
+const isHandlerKind = (kind: string): boolean =>
+  isWakeKind(kind) || kind === "promise";
+
 /**
  * 이번 실패 뒤 얼마를 기다렸다 다시 보낼지. 표를 다 썼으면 null — 그 자리에서 행을 닫는다.
  *
@@ -137,7 +154,7 @@ const isWakeKind = (kind: string): boolean =>
  * 밖에서 부를 일은 없고, 간격 표를 테스트에서 재려고 열어 둔다.
  */
 export const retryDelayMs = (row: PendingReplyRow): number | null => {
-  const table = isWakeKind(row.kind)
+  const table = isHandlerKind(row.kind)
     ? RETRY_MS.slice(0, WAKE_RETRIES)
     : RETRY_MS;
   return row.attempts < table.length ? table[row.attempts] : null;
@@ -147,14 +164,19 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
   timers.delete(fired.id);
   // 걸어 둔 뒤에 종류가 바뀌었을 수 있다 — 구간에 들어갈 때 건 'return' 행은 그 사이 유저가
   // 말을 걸면 'wake'가 된다. 타이머는 걸 때의 값을 들고 있으므로 여기서 지금 값을 다시 읽는다.
-  const row = isWakeKind(fired.kind)
+  const row = isHandlerKind(fired.kind)
     ? (getPendingReply(fired.id) ?? fired)
     : fired;
-  // 깨우기 표시 — 보낼 말풍선이 없고, 등록된 핸들러가 그 자리에서 할 일을 정한다.
-  if (isWakeKind(row.kind)) {
-    if (!wakeHandler) return;
+  // 깨우기 표시·약속 연락 — 보낼 말풍선이 없고, 등록된 핸들러가 그 자리에서 할 일을 정한다.
+  // 그 사이 다른 길이 행을 거뒀으면(superseded) 지금 값을 못 읽어 걸 때의 값이 돌아오는데,
+  // 그 행은 getPendingReply가 waiting만 주므로 여기서 다시 확인해 울리지 않는다.
+  if (isHandlerKind(row.kind)) {
+    if (row.kind === "promise" && !getPendingReply(row.id)) return;
+    const handler = row.kind === "promise" ? promiseHandler : wakeHandler;
+    const label = row.kind === "promise" ? "약속 연락" : "깨우기";
+    if (!handler) return;
     try {
-      await wakeHandler(row);
+      await handler(row);
       markPendingReply(row.id, "sent", stamp());
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -162,12 +184,12 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
       const delay = retryDelayMs(row);
       if (delay === null) {
         markPendingReply(row.id, "failed", null, msg);
-        releaseRecoveryMark(row);
-        console.error(`[pending] 깨우기 포기 #${row.id}: ${msg}`);
+        if (row.kind !== "promise") releaseRecoveryMark(row);
+        console.error(`[pending] ${label} 포기 #${row.id}: ${msg}`);
         return;
       }
       console.warn(
-        `[pending] 깨우기 실패 #${row.id} (${row.attempts + 1}번째), ${delay / 1000}초 뒤 재시도: ${msg}`,
+        `[pending] ${label} 실패 #${row.id} (${row.attempts + 1}번째), ${delay / 1000}초 뒤 재시도: ${msg}`,
       );
       timers.set(
         row.id,
@@ -293,20 +315,36 @@ export const schedulePendingReply = (p: {
   return { id, sendAt };
 };
 
+/** 문안 없이 울리는 행이 들고 있는 값. 약속 연락은 약속 문장을 함께 둔다. */
+export interface WakeMeta {
+  activity: string;
+  blockStart: string;
+  blockEnd: string;
+  /** kind='promise'일 때, 캐릭터가 답장에서 한 약속 한 문장. */
+  promise?: string;
+}
+
+const WAKE_LABEL: Record<"wake" | "return" | "promise", string> = {
+  wake: "깨우기",
+  return: "구간 끝 표시",
+  promise: "약속 연락",
+};
+
 /**
- * 불가 구간이 끝나는 시각에 울릴 표시를 건다. 무엇을 보낼지는 그때 정한다.
+ * 구간이 끝나는 시각에 울릴 표시를 건다. 무엇을 보낼지는 그때 정한다.
  *
  * kind='wake'는 그 구간에 온 유저 메시지에 답해야 해서 거는 행이고, 'return'은 자리 비움 틱이
- * 구간에 들어가며 거는 행이라 아직 답할 말이 없다. 'return' 행은 선톡을 막지 않는다.
+ * 구간에 들어가며 거는 행이라 아직 답할 말이 없다. 'promise'는 캐릭터가 답장에서 한 연락
+ * 약속이다. 'return'과 'promise' 행은 선톡을 막지 않는다.
  */
 export const scheduleWakeRow = (p: {
   chatId: string;
   characterId: number;
   userMsgAt: string;
   waitMs: number;
-  meta: { activity: string; blockStart: string; blockEnd: string };
-  kind?: "wake" | "return";
-}): number => {
+  meta: WakeMeta;
+  kind?: "wake" | "return" | "promise";
+}): { id: number; sendAt: string } => {
   const kind = p.kind ?? "wake";
   const sendAt = stampAfter(p.waitMs);
   const createdAt = stamp();
@@ -337,17 +375,21 @@ export const scheduleWakeRow = (p: {
     created_at: createdAt,
   });
   console.log(
-    `[pending] ${kind === "wake" ? "깨우기" : "구간 끝 표시"} #${id} ${p.chatId} ${p.meta.activity} → ${sendAt} (${Math.round(p.waitMs / 1000)}초 뒤)`,
+    `[pending] ${WAKE_LABEL[kind]} #${id} ${p.chatId} ${p.meta.activity} → ${sendAt} (${Math.round(p.waitMs / 1000)}초 뒤)`,
   );
-  return id;
+  return { id, sendAt };
 };
 
 /**
  * 기다리던 답장을 버린다.
  * 유저가 말을 더 보내면 답장의 내용도 텀도 다시 정해야 하므로, 만들어 둔 것은 쓰지 않는다.
- * 깨우기 표시는 남는다 — 메시지가 더 쌓여도 구간 끝에 한 번 깨서 몰아 읽는 건 같다.
+ * 깨우기 표시와 약속 연락은 남는다 — 메시지가 더 쌓여도 그 시각에 한 번 깨서 읽는 건 같다.
+ * detail은 트레이스에 적는 버린 사유. 약속 시각에 다시 만들 때는 그 사유로 적는다.
  */
-export const dropPendingReplies = (chatId: string): number => {
+export const dropPendingReplies = (
+  chatId: string,
+  detail = "유저가 말을 더 보내 다시 만든다",
+): number => {
   const rows = supersedePendingReplies(chatId);
   for (const r of rows) {
     const t = timers.get(r.id);
@@ -356,8 +398,19 @@ export const dropPendingReplies = (chatId: string): number => {
     traceReplyOutcome({
       callId: r.call_id,
       outcome: "superseded",
-      detail: "유저가 말을 더 보내 다시 만든다",
+      detail,
     });
+  }
+  return rows.length;
+};
+
+/** 걸어 둔 연락 약속을 거둔다 — 새 약속으로 갈아 끼우거나 몰아 답장이 그 자리를 덮을 때. */
+export const dropPromiseRows = (chatId: string): number => {
+  const rows = supersedePromiseRows(chatId);
+  for (const r of rows) {
+    const t = timers.get(r.id);
+    if (t) clearTimeout(t);
+    timers.delete(r.id);
   }
   return rows.length;
 };

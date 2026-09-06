@@ -216,9 +216,13 @@ export const takeHeldDraft = (
 // 다 쓰면 하루 10통까지 나갈 수 있었다.
 //
 // 자리비움 선톡은 여기서 뺀다 — 캐릭터가 나갔다 오는 일정 수만큼 나가는 말이라 성격이
-// 다르고, 그쪽은 AWAY_DAILY_MAX가 따로 막는다.
+// 다르고, 그쪽은 AWAY_DAILY_MAX가 따로 막는다. 약속 연락도 뺀다 — 답장에서 한 약속을
+// 지키는 말이라 상한에 막히면 약속을 어기는 쪽이 된다(이슈 #308).
 export const proactiveCountToday = (chatId: string, since: string): number =>
-  countAssistantMeta(chatId, since, { like: [PROACTIVE], notLike: [AWAY] });
+  countAssistantMeta(chatId, since, {
+    like: [PROACTIVE],
+    notLike: [AWAY, kindPattern("promise")],
+  });
 
 // 오늘 보낸 선톡을 종류별로 센다.
 export const proactiveKindCountToday = (
