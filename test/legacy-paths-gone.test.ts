@@ -53,8 +53,8 @@ const GONE_SYMBOLS = [
 
 // 지운 표·컬럼 이름. 일부러 이름을 남긴 파일만 예외로 둔다.
 const MIGRATION_TOOLS = [
-  join("src", "tools", "migrate-v1-data.ts"),
-  join("src", "tools", "migrate-v2-data.ts"),
+  join("src", "tools", "archive", "migrate-v1-data.ts"),
+  join("src", "tools", "archive", "migrate-v2-data.ts"),
 ];
 const DB = join("src", "db.ts");
 

@@ -4,7 +4,7 @@
 // (05:40)이 같은 함수를 쓴다. 기본 경로는 밖이라 봇은 API를 쓰지 않는다.
 //
 // 하는 일 — 일기 쓰기, 기억 정리, 다음 날 각본, 월 리듬(rhythmNeeded 신호가 오면),
-// 아크 이어쓰기(월요일은 주, 1일은 달), 내일 선톡 문안 준비.
+// 아크 이어쓰기(arcs.ts가 달력 경계에서 정한다), 내일 선톡 문안 준비.
 //
 // 일기에는 기억과 같은 어휘의 주제 태그를 최대 8개 붙인다. 생성 프롬프트에 이미 쓰는 태그
 // 목록을 넣어서, 지난 일기도 같은 태그로 걸린다.
@@ -27,12 +27,12 @@
 
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
+import { ensureArcs, refreshArcs } from "./arcs.js";
 import {
   db,
   getDayPlan,
   getDayPlanMadeBy,
   getDaySeed,
-  getRecentDiaries,
   getRelationship,
   updateRelationshipNotes,
   addSchedule,
@@ -104,7 +104,6 @@ import {
   EXTRACT_USER_FACT_MAX,
   LUNCH_WINDOW,
   RECONNECT_WINDOW,
-  RECENT_DIARY_DAYS,
 } from "./thresholds.js";
 import {
   SPEECH_LEVEL_NAME,
@@ -1315,97 +1314,6 @@ const ensurePreparedSend = async (
     );
 };
 
-const ARC_SYSTEM = `너는 한 인물의 삶의 큰 흐름을 짜는 작가다. 과장 없이, 실제 그 사람의 한 해에 있을 법한 결로.`;
-
-const arcPrompt = (
-  personBlock: string,
-  today: string,
-): string => `오늘은 ${today}다. 아래 인물의 삶의 큰 흐름을 JSON으로 짜줘.
-
-[인물]
-${personBlock}
-
-{"year":"올해의 큰 진행 사건 1~2문장","season":"이 계절의 결 1~2문장","month":"이번 달의 상황 1~2문장","week":"이번 주의 특이사항 1문장 (없으면 '평범한 주')"}`;
-
-export const ensureArcs = async (
-  characterId: number,
-  personBlock: string,
-): Promise<void> => {
-  if (Object.keys(getArcs(characterId)).length) return;
-  const arcs = await chatJson<{
-    year: string;
-    season: string;
-    month: string;
-    week: string;
-  }>(
-    ARC_SYSTEM,
-    arcPrompt(personBlock, kstDateString()),
-    1000,
-    config.modelDeep,
-    { purpose: "arc", characterId },
-  );
-  saveArc(characterId, "year", arcs.year);
-  saveArc(characterId, "season", arcs.season);
-  saveArc(characterId, "month", arcs.month);
-  saveArc(characterId, "week", arcs.week);
-};
-
-// 흐름 갱신: ensureArcs는 최초 1회 부트스트랩뿐이라 아크가 생성 시점에 영구 고정되던 것을,
-// 달력 경계에서만 이어서 다시 쓴다 — 매주 월요일에 '이번 주', 매달 1일에 '이번 달'
-// (분기 시작 달엔 계절, 1월 1일엔 올해까지). 기존 흐름과 최근 일기를 주고 단절 없이 진행시킨다.
-const arcRefreshPrompt = (
-  g: NightlyGathered,
-  diaries: string,
-): string => `오늘은 ${g.today}다. 아래 인물의 삶의 큰 흐름을 이어서 갱신해줘. 기존 흐름과 단절되지 않게 — 진행 중인 사건은 자연스럽게 진행시키고, 매듭지어질 때가 된 것은 마무리하고, 새 흐름이 필요하면 이 인물답게 잔잔하게 연다.
-
-[인물]
-${arcMaterialOf(g)}
-
-[지금까지의 흐름]
-${arcLinesOf(g) || "(없음)"}
-
-[최근 일기 — 실제로 산 나날]
-${diaries || "(없음)"}
-
-{"year":"올해의 큰 진행 사건 1~2문장","season":"이 계절의 결 1~2문장","month":"이번 달의 상황 1~2문장","week":"이번 주의 특이사항 1문장 (없으면 '평범한 주')"}`;
-
-const refreshArcs = async (g: NightlyGathered): Promise<void> => {
-  const isFirst = g.today.endsWith("-01");
-  const isMonday = new Date(`${g.today}T00:00:00Z`).getUTCDay() === 1;
-  if (!isFirst && !isMonday) return;
-  const diaries = getRecentDiaries(g.characterId, RECENT_DIARY_DAYS)
-    .map((d) => {
-      try {
-        return `${d.date}: ${(JSON.parse(d.entry_json) as { diary?: string }).diary ?? ""}`;
-      } catch {
-        return "";
-      }
-    })
-    .filter(Boolean)
-    .join("\n");
-  const arcs = await chatJson<{
-    year: string;
-    season: string;
-    month: string;
-    week: string;
-  }>(ARC_SYSTEM, arcRefreshPrompt(g, diaries), 1000, config.modelDeep, {
-    purpose: "arc",
-    characterId: g.characterId,
-    chatId: g.chatId,
-  });
-  if (isMonday && arcs.week) saveArc(g.characterId, "week", arcs.week);
-  if (isFirst) {
-    if (arcs.month) saveArc(g.characterId, "month", arcs.month);
-    const m = Number(g.today.slice(5, 7));
-    if ([3, 6, 9, 12].includes(m) && arcs.season)
-      saveArc(g.characterId, "season", arcs.season);
-    if (m === 1 && arcs.year) saveArc(g.characterId, "year", arcs.year);
-  }
-  console.log(
-    `[nightly] 아크 갱신 (${isMonday ? "주" : ""}${isFirst ? " 월" : ""})`,
-  );
-};
-
 export const runNightly = async (character: CharacterRow): Promise<string> => {
   const g = gatherNightlyInput(character);
   await ensureArcs(g.characterId, arcMaterialOf(g));
@@ -1413,7 +1321,13 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   await ensureRhythmRunway(g.characterId, g.today);
   // 달력 경계 아크 갱신 — 침묵 중엔 생략(볼 사람이 없고, 복귀 후 다음 경계에 이어 쓴다)
   if (g.silenceTier === "normal")
-    await refreshArcs(g).catch((e) =>
+    await refreshArcs({
+      characterId: g.characterId,
+      chatId: g.chatId,
+      today: g.today,
+      personBlock: arcMaterialOf(g),
+      arcLines: arcLinesOf(g),
+    }).catch((e) =>
       console.error(
         "[nightly] 아크 갱신 실패:",
         e instanceof Error ? e.message : String(e),

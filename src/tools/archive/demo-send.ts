@@ -1,11 +1,13 @@
 // 데모 발송 도구 (발표 시연용): 활성 캐릭터로 선톡 문안을 실제 발송 경로(sendProactive)로 보낸다.
+//
+// 9/6에 보관 폴더로 옮겼다. 한 번 돌고 끝났거나 지금은 돌리지 않는 도구라 실행 경로에서 뺐다(#294).
 // 각 인자 = 말풍선 하나(줄바꿈으로 합쳐 splitBubbles가 나눈다). 발송 직전 message 최대 id(경계)를 출력한다.
 // 촬영이 끝나면 demo-undo.ts <chat_id> <boundary>로 경계 이후를 삭제해 데모 전 상태로 원복한다.
 // bot.ts는 import해도 폴링(bot.start)이 뜨지 않으므로(그건 index.ts) 발신 API만 쓰는 이 스크립트는
 // 실행 중 컨테이너와 충돌하지 않는다.
-// 사용: docker exec random-ai-companion npx tsx src/tools/demo-send.ts "버블1" "버블2" "버블3"
-import { db, type CharacterRow } from "../db.js";
-import { sendProactive } from "../bot.js";
+// 사용: docker exec random-ai-companion npx tsx src/tools/archive/demo-send.ts "버블1" "버블2" "버블3"
+import { db, type CharacterRow } from "../../db.js";
+import { sendProactive } from "../../bot.js";
 
 const main = async (): Promise<void> => {
   const bubbles = process.argv.slice(2).filter((s) => s.trim());

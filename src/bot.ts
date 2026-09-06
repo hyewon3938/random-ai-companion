@@ -66,6 +66,8 @@ import { REPLY_MAX_TOKENS, capBubbles } from "./reply-signal.js";
 import { askReply, type ReplyDraft } from "./reply-ask.js";
 import { saveTodayNote } from "./memory.js";
 import {
+  ARRIVAL_WAIT_MAX_MS,
+  ARRIVAL_WAIT_MIN_MS,
   PROACTIVE_RECENT_LINES,
   RECENT_MESSAGE_FETCH_MAX,
   RECENT_TURN_COUNT,
@@ -500,8 +502,6 @@ bot.on("callback_query:data", async (ctx) => {
 // 한 번에 길게 치는 사람(이어 보내기 텀이 긴)일수록 더 오래. 아래로는 줄이지 않는다 —
 // '답장 올까봐' 급히 친 짧은 텀에 벌주듯 대기를 더 줄이면 재촉 악순환이 되기 때문(실측으로 확인).
 // (자체 앱이라면 유저의 '입력중' 신호를 받아 치는 동안엔 안 답하고 멈춤에만 답할 수 있다 — 텔레그램 봇의 한계)
-const WAIT_BASE_MS = 20000; // 최소 대기(짧게 치는 사람 기본 20~25초). 이 아래로는 내려가지 않는다
-const WAIT_CEIL_MS = 40000; // 길게 치는 사람도 이 이상은 응답이 끊긴 듯 느껴짐
 const pending = new Map<string, ReturnType<typeof setTimeout>>();
 const responding = new Set<string>();
 // 도착 대기 기록 — 유저 말이 다 오기를 기다린 시간, 그동안 도착한 메시지 수, 첫 메시지 시각.
@@ -532,12 +532,12 @@ export const releaseProactive = (chatId: string): void => {
 // 대기 시간 = 20초 바닥에서 위로만. 이어 보내기 텀이 길면(길게 치는 사람) 그 상위값(p80)에 맞춰 늘린다.
 const computeWait = (chatId: string): number => {
   const gaps = recentUserGaps(chatId);
-  let base = WAIT_BASE_MS;
+  let base = ARRIVAL_WAIT_MIN_MS;
   if (gaps.length >= 3) {
     const sorted = [...gaps].sort((a, b) => a - b);
     const p80 =
       sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.8))];
-    base = clamp(p80 * 1.4, WAIT_BASE_MS, WAIT_CEIL_MS); // 20초 미만으로는 안 내려감
+    base = clamp(p80 * 1.4, ARRIVAL_WAIT_MIN_MS, ARRIVAL_WAIT_MAX_MS); // 20초 미만으로는 안 내려감
   }
   const wait = base + Math.random() * 5000; // +0~5초 (짧게 치는 사람 20~25초, 길게 치는 사람은 더)
   console.log(

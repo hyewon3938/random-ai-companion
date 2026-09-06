@@ -1,4 +1,6 @@
 // v1 데이터 이관 도구 (이슈 #22). legacy_state_json에 쌓인 관계 기록과 바이블을
+//
+// 9/6에 보관 폴더로 옮겼다. 한 번 돌고 끝났거나 지금은 돌리지 않는 도구라 실행 경로에서 뺐다(#294).
 // v1 스키마의 저장 항목(memory_items·areas·cast_members·arcs·schedules·user_profile)으로
 // 옮긴다. 후보 값은 커밋하지 않는 docs/migration/candidates.json에 있고, 이 파일에는
 // 검증 규칙과 반영 절차만 둔다.
@@ -216,7 +218,7 @@ const cmdSnapshot = async (
   characterId: number,
   outPath: string,
 ): Promise<void> => {
-  const { db } = await import("../db.js");
+  const { db } = await import("../../db.js");
   const row = db
     .prepare(
       `SELECT legacy_state_json FROM relationships WHERE character_id = ?`,
@@ -254,7 +256,7 @@ const cmdDiffLegacy = async (
     fail(
       `스냅샷의 characterId(${snap.characterId})가 인자(${characterId})와 다르다`,
     );
-  const { db } = await import("../db.js");
+  const { db } = await import("../../db.js");
   const row = db
     .prepare(
       `SELECT legacy_state_json FROM relationships WHERE character_id = ?`,
@@ -306,7 +308,7 @@ const cmdApply = async (
   reportPath?: string,
 ): Promise<void> => {
   const cand = readJson<Candidates>(candPath);
-  const { db } = await import("../db.js");
+  const { db } = await import("../../db.js");
   const cid = cand.characterId;
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -625,9 +627,9 @@ const cmdApply = async (
 
 const cmdRegen = async (candPath: string, outPath: string): Promise<void> => {
   const cand = readJson<Candidates>(candPath);
-  const { db } = await import("../db.js");
-  const { chatJson } = await import("../llm.js");
-  const { config } = await import("../config.js");
+  const { db } = await import("../../db.js");
+  const { chatJson } = await import("../../llm.js");
+  const { config } = await import("../../config.js");
   const cid = cand.characterId;
   const start = boundaryDate();
   const end = cand.regen.endDate;
@@ -734,7 +736,7 @@ const cmdRegen = async (candPath: string, outPath: string): Promise<void> => {
 
 const cmdApplyRegen = async (planPath: string): Promise<void> => {
   const plan = readJson<RegenPlan>(planPath);
-  const { db } = await import("../db.js");
+  const { db } = await import("../../db.js");
   const cid = plan.characterId;
   const boundary = boundaryDate();
   const now = kstNow();
