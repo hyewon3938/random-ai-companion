@@ -7,7 +7,11 @@
 // getKstNow()가 돌려주는 값은 UTC에 9시간을 더한 Date라, 경과 시간을 잴 때 쓰면 9시간이
 // 어긋난다. 시간 차 계산은 Date.now()로 한다.
 
-import { DAY_BOUNDARY_HOUR, TIME_MARKER_GAP_MS } from "./thresholds.js";
+import {
+  CONTACT_GAP_NOTICE_MS,
+  DAY_BOUNDARY_HOUR,
+  TIME_MARKER_GAP_MS,
+} from "./thresholds.js";
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
@@ -179,4 +183,22 @@ export const lastTalkedLabel = (
           ? "그저께"
           : `${ago}일 전`;
   return `${rel}(${date}) ${ts.slice(11, 16)}`;
+};
+
+// 유저 연락이 캐릭터의 마지막 말에서 얼마 만에 온 건지 사람 말로. 같은 논리일 안에서 기준
+// 이상 벌어졌을 때만 문구를 만들고, 아니면 null이다 — 날짜가 바뀐 자리는 직전 대화 절이
+// 다루고, 짧은 틈은 화제가 아니다(이슈 #284). 분 단위는 반 시간으로 뭉갠다. 모델이 그 값을
+// 그대로 말에 옮기는데, 4시간 27분 만이라고 하면 사람 말이 아니다.
+export const contactGapLabel = (
+  lastCharTs: string,
+  firstUserTs: string,
+  minGapMs: number = CONTACT_GAP_NOTICE_MS,
+): string | null => {
+  if (logicalDateOf(lastCharTs) !== logicalDateOf(firstUserTs)) return null;
+  const gap = kstDateOf(firstUserTs).getTime() - kstDateOf(lastCharTs).getTime();
+  if (gap < minGapMs) return null;
+  const halves = Math.round(gap / 1_800_000);
+  const hours = Math.floor(halves / 2);
+  const span = halves % 2 ? `${hours}시간 반` : `${hours}시간`;
+  return `네가 ${lastCharTs.slice(11, 16)}에 마지막으로 말한 뒤 상대 연락은 ${firstUserTs.slice(11, 16)}에 왔다. ${span} 만이다.`;
 };

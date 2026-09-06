@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  contactGapLabel,
   lastTalkedLabel,
   logicalDateOf,
   logicalDaysAgo,
@@ -78,5 +79,41 @@ test("마지막으로 대화한 날은 날짜를 함께 적는다", () => {
   assert.equal(
     lastTalkedLabel("2026-09-02 02:00:00", "2026-09-01"),
     "오늘(9/2 수) 02:00",
+  );
+});
+
+test("같은 날 세 시간 넘게 지나 온 연락에는 텀 문구가 붙는다", () => {
+  assert.equal(
+    contactGapLabel("2026-09-05 14:06:00", "2026-09-05 18:36:00"),
+    "네가 14:06에 마지막으로 말한 뒤 상대 연락은 18:36에 왔다. 4시간 반 만이다.",
+  );
+  // 딱 기준만큼도 붙는다. 분은 반 시간 단위로 뭉갠다
+  assert.equal(
+    contactGapLabel("2026-09-05 09:00:00", "2026-09-05 12:00:00"),
+    "네가 09:00에 마지막으로 말한 뒤 상대 연락은 12:00에 왔다. 3시간 만이다.",
+  );
+  assert.match(
+    contactGapLabel("2026-09-05 09:00:00", "2026-09-05 14:10:00") ?? "",
+    /5시간 만이다\.$/,
+  );
+});
+
+test("기준에 못 미치는 틈에는 문구가 없다", () => {
+  assert.equal(
+    contactGapLabel("2026-09-05 14:06:00", "2026-09-05 16:30:00"),
+    null,
+  );
+});
+
+test("날짜가 바뀐 연락은 직전 대화 절 몫이라 문구가 없다", () => {
+  // 새벽 5시 경계를 넘긴다
+  assert.equal(
+    contactGapLabel("2026-09-05 02:00:00", "2026-09-05 09:00:00"),
+    null,
+  );
+  // 자정을 넘겨도 같은 논리일이면 붙는다
+  assert.equal(
+    contactGapLabel("2026-09-05 22:00:00", "2026-09-06 01:30:00"),
+    "네가 22:00에 마지막으로 말한 뒤 상대 연락은 01:30에 왔다. 3시간 반 만이다.",
   );
 });
