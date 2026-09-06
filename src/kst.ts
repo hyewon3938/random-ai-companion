@@ -10,6 +10,9 @@
 import {
   CONTACT_GAP_NOTICE_MS,
   DAY_BOUNDARY_HOUR,
+  ENOUGH_SLEEP_HOURS,
+  LATE_TALK_FROM,
+  NIGHT_SLEEP_FROM,
   TIME_MARKER_GAP_MS,
 } from "./thresholds.js";
 
@@ -209,4 +212,53 @@ export const contactGapLabel = (
   const hours = Math.floor(halves / 2);
   const span = halves % 2 ? `${hours}시간 반` : `${hours}시간`;
   return `네가 ${lastCharTs.slice(11, 16)}에 마지막으로 말한 뒤 상대 연락은 ${firstUserTs.slice(11, 16)}에 왔다. ${span} 만이다.`;
+};
+
+// 날짜 문자열을 며칠 옮긴다.
+export const shiftDate = (date: string, days: number): string =>
+  kstDateString(
+    new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000),
+  );
+
+// 각본 표기 시각을 그 논리일의 벽시계 문자열로 되돌린다. 24시 이상이면 다음 달력일이다.
+export const logicalClockToTs = (date: string, hhmm: string): string => {
+  const [h, m] = hhmm.split(":").map(Number);
+  const day = h >= 24 ? shiftDate(date, 1) : date;
+  return `${day} ${String(h % 24).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
+};
+
+/** 어젯밤 잠 — 잠든 시각과, 거기서 충분히 잔 시간을 더한 시각. 둘 다 "HH:MM" 벽시계 표기. */
+export interface NightSleep {
+  bedtime: string;
+  enoughSleepFrom: string;
+}
+
+// 어젯밤 몇 시에 잠들었는지와 몇 시 이후에 일어나야 충분히 잔 것인지. 피곤함은 늦게 잤는지가
+// 아니라 잔 시간으로 정한다 — 평일에 2시에 자고 6시에 일어나면 피곤하고, 주말에 2시에 자도
+// 10시에 일어나면 피곤하지 않다(이슈 #289). 잠든 시각은 어제 각본의 밤 잠 블록 시작과 어제
+// 논리일 안 캐릭터의 마지막 말 중 늦은 쪽이다. 각본이 잠이라고 한 시각에 아직 대화 중이었으면
+// 실제로는 그 뒤에 잔 것이고, 대화가 일찍 끝났으면 각본대로 잔 것이다. 저녁에 끝난 대화는 취침이
+// 아니라 후보에서 뺀다. 둘 다 없으면 null이고, 부르는 쪽이 시드대로 간다.
+export const nightSleepOf = (
+  date: string,
+  sleepStart: string | null,
+  lastCharTs: string | null,
+  hours: number = ENOUGH_SLEEP_HOURS,
+): NightSleep | null => {
+  const candidates: string[] = [];
+  if (sleepStart && sleepStart >= NIGHT_SLEEP_FROM)
+    candidates.push(logicalClockToTs(date, sleepStart));
+  if (
+    lastCharTs &&
+    logicalDateOf(lastCharTs) === date &&
+    logicalClockOf(lastCharTs) >= LATE_TALK_FROM
+  )
+    candidates.push(lastCharTs);
+  if (!candidates.length) return null;
+  const bedtime = candidates.sort().at(-1) as string;
+  const wake = new Date(kstDateOf(bedtime).getTime() + hours * 3600_000);
+  return {
+    bedtime: bedtime.slice(11, 16),
+    enoughSleepFrom: wake.toISOString().slice(11, 16),
+  };
 };

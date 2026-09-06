@@ -9,8 +9,11 @@ import { test } from "node:test";
 import {
   contactGapLabel,
   lastTalkedLabel,
+  logicalClockToTs,
   logicalDateOf,
   logicalDaysAgo,
+  nightSleepOf,
+  shiftDate,
   timeMarkerFor,
 } from "../src/kst.js";
 
@@ -116,4 +119,43 @@ test("날짜가 바뀐 연락은 직전 대화 절 몫이라 문구가 없다", 
     contactGapLabel("2026-09-05 22:00:00", "2026-09-06 01:30:00"),
     "네가 22:00에 마지막으로 말한 뒤 상대 연락은 01:30에 왔다. 3시간 반 만이다.",
   );
+});
+
+test("날짜를 옮기고 각본 표기를 벽시계로 되돌린다", () => {
+  assert.equal(shiftDate("2026-09-06", -1), "2026-09-05");
+  assert.equal(shiftDate("2026-08-31", 1), "2026-09-01");
+  assert.equal(logicalClockToTs("2026-09-05", "23:30"), "2026-09-05 23:30:00");
+  assert.equal(logicalClockToTs("2026-09-05", "26:40"), "2026-09-06 02:40:00");
+});
+
+// 피곤함은 늦게 잤는지가 아니라 잔 시간으로 정한다(이슈 #289). 잠든 시각에 기준 시간을 더한
+// 값을 주고, 각본은 기상 시각을 그 값과 견준다.
+test("각본의 잠보다 대화가 늦게 끝났으면 대화 끝이 잠든 시각이다", () => {
+  assert.deepEqual(nightSleepOf("2026-09-05", "24:30", "2026-09-06 02:40:00"), {
+    bedtime: "02:40",
+    enoughSleepFrom: "08:40",
+  });
+});
+
+test("대화가 각본의 잠보다 먼저 끝났으면 각본대로 잔 것이다", () => {
+  assert.deepEqual(nightSleepOf("2026-09-05", "23:00", "2026-09-05 22:30:00"), {
+    bedtime: "23:00",
+    enoughSleepFrom: "05:00",
+  });
+});
+
+test("저녁에 끝난 대화는 취침이 아니라 잠든 시각 후보에서 뺀다", () => {
+  assert.deepEqual(nightSleepOf("2026-09-05", null, "2026-09-05 21:00:00"), null);
+  assert.deepEqual(nightSleepOf("2026-09-05", "23:00", "2026-09-05 21:00:00"), {
+    bedtime: "23:00",
+    enoughSleepFrom: "05:00",
+  });
+});
+
+test("새벽 5시부터 이어지는 아침 꼬리 잠은 밤 잠이 아니다", () => {
+  assert.deepEqual(nightSleepOf("2026-09-05", "05:00", null), null);
+});
+
+test("다른 논리일의 말은 어젯밤 잠에 쓰지 않는다", () => {
+  assert.deepEqual(nightSleepOf("2026-09-05", null, "2026-09-06 06:00:00"), null);
 });

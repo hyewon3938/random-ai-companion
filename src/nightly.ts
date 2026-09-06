@@ -64,6 +64,7 @@ import { isSameScheduleContent } from "./schedule-dedupe.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import {
   ensureTodayPlan,
+  lastNightSleep,
   normalizePlan,
   planOngoingLines,
 } from "./day-plan.js";
@@ -84,7 +85,13 @@ import {
   monthsNeedingRhythm,
   type MonthPlan,
 } from "./life-plan.js";
-import { getKstNow, kstDateString, dayLabelOf, clockLabel } from "./kst.js";
+import {
+  getKstNow,
+  kstDateString,
+  dayLabelOf,
+  clockLabel,
+  type NightSleep,
+} from "./kst.js";
 import {
   dailySendPlan,
   silenceState,
@@ -258,6 +265,7 @@ export interface NightlyGathered {
   existingSchedules: string[];
   arcs: Record<string, string>;
   todaySeed: DaySeed | null; // 오늘의 컨디션 시드(있으면)
+  lastNight: NightSleep | null; // 어젯밤 잠든 시각과 충분히 잔 기준 시각 — 오늘 피곤한지는 이 값으로(이슈 #289)
   rhythmNeeded: { ym: string; days: { date: string; label: string }[] }[]; // 이번 새벽에 생성해야 할 월 리듬
   // 침묵 백오프 상태 — 외부 생성 경로가 이를 보고 산출물을 조절한다
   // (normal=평소대로 / quiet·dormant=각본·선톡 생성 불필요 / checkin=저녁 재연결 문안만)
@@ -540,6 +548,7 @@ export const gatherNightlyInput = (
     ),
     arcs: getArcs(character.id),
     todaySeed: getDaySeed(character.id, today) ?? null,
+    lastNight: lastNightSleep(character.id, today),
     rhythmNeeded: monthsNeedingRhythm(character.id, today).map((ym) => ({
       ym,
       days: monthDays(ym),
@@ -1066,6 +1075,11 @@ const morningSituation = (
     `문안 규칙:`,
     `- 아침이면 웬만하면 보낸다. 네 하루가 시작됐다는 걸 가볍게 알리는 결 — '보내는 시점' 그대로의 상황에서 쓰는 말이어야 한다. 자기 삶 공유는 그 자체로 근거다.`,
     `- 각본상 오늘 유난히 일찍 깼거나 늦잠이면 그 결을 자연스럽게 반영한다.`,
+    ...(g.lastNight
+      ? [
+          `- 어젯밤 ${g.lastNight.bedtime}에 잠들었다. 각본의 기상 시각이 ${g.lastNight.enoughSleepFrom}보다 이르면 잠이 모자라 피곤한 아침이고, 그 이후면 늦게 잤어도 충분히 잔 것이라 피곤한 티를 내지 않는다.`,
+        ]
+      : []),
     `- 이어갈 것이나 상대의 일정이 있으면 그중 하나를 자연스럽게 엮는다. 특히 상대의 일정이 오늘이면 그걸 챙기는 게 우선이다.`,
     `- 한 통에 하나만. 캐묻지 않는다. 용건 없는 애정 표시성 핑은 금지. 1~3개 말풍선(줄바꿈 구분).`,
     `- 상대 일정이 점심·저녁에 있으면 window를 "점심"/"저녁"으로 바꿔도 된다(그 외엔 "아침").`,

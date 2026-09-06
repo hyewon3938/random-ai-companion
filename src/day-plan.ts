@@ -27,6 +27,8 @@ import {
   getArcs,
   getRecentDiaries,
   getDaySeed,
+  getCharacterChatId,
+  lastCharMessageTsBetween,
   listMemoryItems,
   type DaySeed,
   type MemoryRow,
@@ -39,7 +41,13 @@ import {
   memoryLine,
 } from "./memory.js";
 import { ensureRhythmRunway } from "./life-plan.js";
-import { kstLogicalDate, dayLabelOf } from "./kst.js";
+import {
+  kstLogicalDate,
+  dayLabelOf,
+  shiftDate,
+  nightSleepOf,
+  type NightSleep,
+} from "./kst.js";
 import {
   AWAY_DAILY_MAX,
   AWAY_MIN_BLOCK_MIN,
@@ -164,6 +172,13 @@ const ongoingSection = (ongoing: string): string =>
     ? `\n[진행 중인 일 — 며칠에 걸쳐 이어 하는 일. 오늘 손댈 만한 것이 있으면 그 다음 한 걸음을 블록으로 넣는다. 끝나는 조건이 이미 채워진 일은 넣지 않는다. 매일 손대는 일은 아니니 오늘 몫이 없으면 넣지 않아도 된다. 넣은 블록에는 source "ongoing"과 줄 앞 [번호]를 적는다]\n${ongoing}\n`
     : "";
 
+// 어젯밤 잠 절. 잠든 시각과 충분히 잔 기준 시각을 주고, 기상 시각을 그 기준과 견줘 피곤한지
+// 정하게 한다. 시각 산수는 코드가 끝냈고 모델은 견주기만 한다.
+const nightSleepLine = (n: NightSleep | null): string =>
+  n
+    ? `- 어젯밤 ${n.bedtime}에 잠들었다. 오늘 기상 시각이 ${n.enoughSleepFrom}보다 이르면 잠이 모자란 아침이라 피곤하고, ${n.enoughSleepFrom} 이후면 늦게 잤어도 충분히 잔 것이라 피곤해하지 않는다.`
+    : "(어젯밤 기록 없음 — 시드대로)";
+
 const seedLine = (seed: DaySeed | undefined): string => {
   if (!seed) return "(없음 — 평범한 컨디션으로)";
   return `기력=${seed.energy}, 기상 성향=${seed.wake_hint}, 기분=${seed.mood}${seed.reason ? ` (이유: ${seed.reason})` : ""}`;
@@ -180,6 +195,7 @@ const planPrompt = (
   arcs: string,
   diary: string,
   seed: DaySeed | undefined,
+  lastNight: NightSleep | null,
 ): string => `아래 인물의 ${date} (${label}) 하루를 시간 블록으로 짜줘.
 
 [인물 — 같은 항목이 두 줄이면 아래쪽이 최신]
@@ -192,18 +208,21 @@ ${persona || "(없음)"}
 [오늘의 컨디션 시드 — 미리 정해진 오늘의 몸 상태·기상 성향]
 ${seedLine(seed)}
 
+[어젯밤 잠 — 오늘 피곤한지는 이 값으로 정한다]
+${nightSleepLine(lastNight)}
+
 [이 날의 확정 일정 — 있으면 반드시 하루에 자연스럽게 반영 (advance_known=true). 줄 앞의 [번호]는 그 일정의 번호다]
 ${schedules || "(없음)"}
 ${ongoingSection(ongoing)}
 [삶의 큰 흐름 — 하루의 결에 은은하게 반영]
 ${arcs || "(없음)"}
 
-[어제의 일기 — 여운·컨디션이 자연스럽게 이어지게 (늦게 잤으면 오늘 피곤한 식으로). 어제 이미 한 구체적인 것(특정 영화·책 제목 등)은 오늘 또 반복하지 않는다 — 봤던 건 봤고, 오늘은 다른 걸 하거나 새 제목으로]
+[어제의 일기 — 여운·컨디션이 자연스럽게 이어지게. 어제 이미 한 구체적인 것(특정 영화·책 제목 등)은 오늘 또 반복하지 않는다 — 봤던 건 봤고, 오늘은 다른 걸 하거나 새 제목으로]
 ${diary || "(없음)"}
 
 [컨디션→기상→활동을 하나로 잇기]
 - 위 컨디션 시드가 오늘의 바탕이다. 기력이 낮으면 기상이 흐트러지고(못 자서 너무 일찍 깨거나, 뻗어서 늦잠) 활동량이 준다(운동 거름·저녁 일찍 뻗음). 기력이 높으면 개운하게 제때 일어나 활동이 는다(운동 챙김·저녁도 활기).
-- 단, 어제 일기에 실제 여파(회식·술·새벽까지 대화 등)가 있으면 그게 시드보다 우선이다 — 실제로 늦게 잤으면 시드가 '보통'이어도 오늘 아침은 피곤하게.
+- 단, 어제 일기에 회식·술 같은 실제 여파가 있으면 그게 시드보다 우선이다. 늦게 잔 것은 위 [어젯밤 잠]의 시각으로만 잰다 — 기상 시각이 그 기준보다 이르면 시드가 '보통'이어도 피곤한 아침이고, 기준 이후면 늦게 잤어도 피곤하지 않다. 일기에 새벽까지 대화했다고 적혀 있어도 이 시각 비교가 우선이다.
 
 [원칙]
 - 근무일이면: 기상·취침 시각은 위 [생활 리듬]의 잠 값이 기준이고, 컨디션 시드가 그날의 시각을 정한다 — '보통'이면 기준대로, '이른'이면 기준보다 일찍 눈이 떠지고, '늦잠'이면 기준을 놓쳐 허둥지둥한 아침. 출퇴근 방식·근무 형태·점심·퇴근 시각 같은 하루의 뼈대는 [인물]의 직업·생활 값에서 뽑는다. 저녁은 [생활 리듬]의 매주 루틴 중 그 요일 몫과 [인물]의 취향에서 — 루틴 활동도 그날 컨디션·사정에 따라 건너뛰거나 시간이 밀린다.
@@ -347,7 +366,38 @@ export const buildPlanPrompt = (characterId: number, date: string): string => {
     arcs,
     lastDiary,
     seed,
+    lastNightSleep(characterId, date),
   );
+};
+
+// 어젯밤 잠 — 오늘 피곤한지는 시드가 아니라 이 값으로 정한다(이슈 #289). 어제 각본의 밤 잠 블록
+// 시작과 어제 논리일 안 캐릭터의 마지막 말을 재료로 넘기고, 어느 쪽이 잠든 시각인지와 충분히 잔
+// 기준 시각은 nightSleepOf가 정한다. 어제 각본이 없고 대화도 없으면 null.
+export const lastNightSleep = (
+  characterId: number,
+  date: string,
+): NightSleep | null => {
+  const yesterday = shiftDate(date, -1);
+  let sleepStart: string | null = null;
+  const raw = getDayPlan(characterId, yesterday);
+  if (raw) {
+    try {
+      const plan = JSON.parse(raw) as DayPlan;
+      const night = plan.blocks.find((b) => isSleeping(b) && b.start >= "20:00");
+      sleepStart = night?.start ?? null;
+    } catch {
+      sleepStart = null;
+    }
+  }
+  const chatId = getCharacterChatId(characterId);
+  const lastChar = chatId
+    ? lastCharMessageTsBetween(
+        chatId,
+        `${yesterday} 05:00:00`,
+        `${date} 05:00:00`,
+      )
+    : null;
+  return nightSleepOf(yesterday, sleepStart, lastChar);
 };
 
 // nightly=true는 밤 정리 경로: 어제 일기가 확정된 뒤의 정식 생성이라, 새벽 대화가 미리 만든
