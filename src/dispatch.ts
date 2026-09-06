@@ -21,15 +21,12 @@ import {
 } from "./bot.js";
 import { dailySendPlan } from "./proactive-policy.js";
 import { noOverlap } from "./proactive-send.js";
-import { getKstNow, kstClock, kstDateString } from "./kst.js";
+import { getKstNow, kstClock, kstDateString, kstStamp } from "./kst.js";
 import { RECENT_USER_MS, SEND_GRACE_MIN } from "./thresholds.js";
 
 // 선톡 디스패처: LLM 콜 없이, 밤 정리가 준비해둔 문안을 발송 창 안에서 내보내는 틱.
 // 유저가 오늘 이미 먼저 말을 걸었다면 보내지 않는다 — 선톡은 침묵을 여는 용도이고,
 // 이미 열린 대화에서는 오픈 루프가 컨텍스트로 자연스럽게 이어지기 때문.
-
-const stamp = (): string =>
-  `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
 
 // 유저가 방금까지 대화 중이었는지는 RECENT_USER_MS 창으로 본다. 논리일(새벽 5시) 기준으로
 // 재면 유저가 새벽 4시에 말을 걸었을 때 그 대화가 어제로 들어가, 세 시간 뒤 아침 선톡이
@@ -129,7 +126,7 @@ export const runDispatchTick = noOverlap(async () => {
         r.id,
         "sent",
         notes.length ? notes.join(" / ") : null,
-        stamp(),
+        kstStamp(),
       );
       console.log(
         `[dispatch] sent #${r.id} to ${r.chat_id}${late ? " (유예)" : ""}`,

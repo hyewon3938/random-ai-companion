@@ -1,4 +1,4 @@
-// 슬랙 트레이스 채널 — 캐릭터 파이프라인이 안에서 내린 판단을 슬랙에 게시한다.
+// 슬랙 트레이스 게시함 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
 //
 // 원칙 셋.
 // - 게시를 위한 모델 호출은 없다. DB에 이미 있는 값과 코드 계산만으로 만든다.
@@ -6,46 +6,26 @@
 //   재시작·슬랙 장애에도 보낼 것이 남고, 봇 밖에서 도는 배치가 남긴 행도 같은 길로 나간다.
 // - SLACK_BOT_TOKEN·SLACK_TRACE_CHANNEL 둘 중 하나라도 없으면 전체가 no-op —
 //   토큰 없이 먼저 배포해도 안전하다.
+//
+// 무엇을 쌓을지는 각 자리가 정한다 — 아침 각본은 trace/morning-plan.ts, 답장 호출은
+// trace/reply-post.ts, 발송 결과와 선톡은 reply-trace.ts, 새벽 정리는 nightly-trace.ts.
+// 문안 표기 도우미는 trace/format.ts에 있다.
 
 import { config } from "./config.js";
 import {
-  db,
-  getActiveCharacters,
-  getDayPlan,
-  getDayPlanMadeBy,
-  getDaySeed,
-  hasTraceEvent,
   insertTraceEvent,
   markTraceEventSent,
   pendingTraceEvents,
   setTraceEventFailure,
   skipTraceEvent,
   traceParentOf,
-  type CharacterRow,
-  type DaySeed,
   type PendingTraceRow,
 } from "./db.js";
-import {
-  blockCategory,
-  buildPlanPrompt,
-  isSleeping,
-  PLAN_SYSTEM,
-  type DayPlan,
-  type PlanBlock,
-} from "./day-plan.js";
-import {
-  ACTIVITY_CATEGORY_NAME,
-  RESPONSIVENESS_NAME,
-  toResponsiveness,
-} from "./labels.js";
-import { getKstNow, kstLogicalDate, clockLabel } from "./kst.js";
-import { silenceState } from "./proactive-policy.js";
+import { kstStamp } from "./kst.js";
+import { chunked } from "./trace/format.js";
 
 export const traceEnabled = (): boolean =>
   Boolean(config.slackBotToken && config.slackTraceChannel);
-
-const nowIso = (): string =>
-  getKstNow().toISOString().replace("T", " ").slice(0, 19);
 
 // ── 게시함에 쌓기 ───────────────────────────────────────────────────────
 
@@ -71,12 +51,34 @@ export const recordTraceEvent = (e: TraceEventInput): void => {
       threadKey: e.threadKey ?? null,
       parentKey: e.parentKey ?? null,
       text: e.text,
-      createdAt: nowIso(),
+      createdAt: kstStamp(),
     });
   } catch (err) {
     // 트레이스 기록 실패가 본 기능(답장·선톡)을 멈추면 안 된다 — 적고 넘어간다.
     console.error("[trace] 기록 실패:", err);
   }
+};
+
+// 긴 본문은 한 덩이 크기로 잘라 스레드 자식 여러 행으로 쌓는다. 이스케이프는 부르는 쪽이 끝내고
+// 넘긴다. code=true면 자른 뒤에 각 덩이를 코드 울타리로 감싼다 — 울타리째 자르면 표시가 깨진다.
+export const recordTraceChunks = (
+  characterId: number | undefined,
+  parentKey: string,
+  kind: string,
+  label: string,
+  body: string,
+  code = false,
+): void => {
+  const parts = chunked(body);
+  parts.forEach((p, i) => {
+    const head = parts.length > 1 ? `${label} (${i + 1}/${parts.length})` : label;
+    recordTraceEvent({
+      characterId,
+      kind,
+      parentKey,
+      text: code ? `${head}\n\`\`\`\n${p}\n\`\`\`` : `${head}\n${p}`,
+    });
+  });
 };
 
 // ── 슬랙 발송 ───────────────────────────────────────────────────────────
@@ -141,14 +143,9 @@ const markFailure = (
     );
 };
 
-/** 1분 틱. 게시할 것을 새로 쌓고, pending 행을 슬랙으로 내보낸다. */
+/** 1분 틱. pending 행을 슬랙으로 내보낸다. 쌓는 쪽은 index.ts가 이 틱 앞에서 부른다. */
 export const runTraceTick = async (): Promise<void> => {
   if (!traceEnabled()) return;
-  try {
-    enqueueMorningPlans();
-  } catch (err) {
-    console.error("[trace] 아침 각본 게시 준비 실패:", err);
-  }
   const rows = pendingTraceEvents(BATCH);
   for (const row of rows) {
     let threadTs: string | undefined;
@@ -179,186 +176,5 @@ export const runTraceTick = async (): Promise<void> => {
     } catch (err) {
       markFailure(row, String(err), false);
     }
-  }
-};
-
-// ── 아침 각본 게시 ──────────────────────────────────────────────────────
-
-// 새벽 정리(05:40)가 끝난 뒤인 이 시각(KST)부터, 오늘 각본이 보이면 게시한다.
-const PLAN_POST_HOUR = 7;
-// 평상 관계인데 이 시각까지 각본이 없으면 경고 한 줄을 올린다.
-const PLAN_WARN_HOUR = 12;
-
-// 슬랙 표기 규칙 — &·<·>는 링크·멘션 문법과 겹쳐 그대로 보내면 깨진다.
-export const esc = (s: string): string =>
-  s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-
-const DAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"] as const;
-
-export const dateLabel = (date: string): string => {
-  const d = new Date(`${date}T00:00:00Z`);
-  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${DAY_NAMES[d.getUTCDay()]})`;
-};
-
-// 답장 텀 표(reply-timing.ts)를 사람이 읽는 범위로 옮긴 것. 표의 값이 바뀌면 여기도 맞춘다.
-const timingRange = (b: PlanBlock): string => {
-  if (isSleeping(b)) return "자다 깨면 바로";
-  const resp = toResponsiveness(b.responsiveness) ?? "instant";
-  if (resp === "instant") return "0초~2분";
-  if (resp === "unavailable") return `${b.end} 끝난 뒤 1분 안`;
-  const cat = blockCategory(b);
-  return cat === "personal"
-    ? "20초~2분 30초"
-    : cat === "social"
-      ? "30초~4분"
-      : "1~8분";
-};
-
-// 각본은 코드 블록 안에 올려 읽는다. 활동 문장 길이가 제각각이라 열을 맞추지 않고,
-// 태그를 활동 앞뒤로 나눠 붙여 시각 다음에 성격이 먼저 보이게 한다.
-// 각본 한 줄: 시각 (활동 성격) 활동 [답장 여건] 답장 텀
-const blockLine = (b: PlanBlock): string => {
-  const resp = toResponsiveness(b.responsiveness) ?? "instant";
-  const category = ACTIVITY_CATEGORY_NAME[blockCategory(b)];
-  // 당일에 닥치는 일은 활동 앞에 별표 두 개로 표시하고 각본 아래에 뜻을 한 줄 붙인다.
-  const activity = `${b.advance_known ? "" : "**"}${b.activity}`;
-  return `${clockLabel(b.start)}~${clockLabel(b.end)} (${category}) ${esc(activity)} [${RESPONSIVENESS_NAME[resp]}] ${timingRange(b)}`;
-};
-
-const seedText = (seed: DaySeed | undefined): string =>
-  seed
-    ? `기력 ${seed.energy} · 기상 ${seed.wake_hint} · 기분 ${seed.mood}${seed.reason ? ` (${seed.reason})` : ""}`
-    : "없음";
-
-// 슬랙 메시지 한 개 상한(4000자)보다 여유 있게 자른다. 프롬프트 전문이 대상이다.
-const CHUNK = 3500;
-export const chunked = (s: string): string[] => {
-  const out: string[] = [];
-  for (let i = 0; i < s.length; i += CHUNK) out.push(s.slice(i, i + CHUNK));
-  return out;
-};
-
-// 각본 생성 프롬프트는 고정 지시문 사이에 DB 값이 들어가는 한 장짜리 틀이라, 규칙이 시작하는
-// 자리에서 잘라 그날 데이터와 매일 같은 규칙을 따로 올린다(day-plan.ts planPrompt와 짝).
-const RULE_MARK = "[컨디션→기상→활동을 하나로 잇기]";
-
-const promptSections = (prompt: string): { label: string; body: string }[] => {
-  const at = prompt.indexOf(RULE_MARK);
-  if (at < 0) return [{ label: "각본 생성 프롬프트", body: prompt }];
-  return [
-    {
-      label:
-        "각본 생성 프롬프트 1 — 시스템 문장과 오늘 데이터 (게시 시점에 같은 DB 데이터로 다시 조립한 것)",
-      body: prompt.slice(0, at).trimEnd(),
-    },
-    {
-      label: "각본 생성 프롬프트 2 — 고정 규칙 (매일 같음)",
-      body: prompt.slice(at),
-    },
-  ];
-};
-
-const enqueuePlanPost = (c: CharacterRow, date: string, raw: string): void => {
-  const madeBy = getDayPlanMadeBy(c.id, date) ?? "nightly";
-  const dedupeKey = `day_plan:${c.id}:${date}:${madeBy}`;
-  if (hasTraceEvent(dedupeKey)) return;
-
-  let plan: DayPlan;
-  try {
-    plan = JSON.parse(raw) as DayPlan;
-  } catch {
-    return;
-  }
-
-  // 임시 각본을 이미 올린 날 nightly가 다시 보이면 = 새벽 정리가 정식 각본으로 교체한 것
-  const replaced =
-    madeBy === "nightly" && hasTraceEvent(`day_plan:${c.id}:${date}:ondemand`);
-  const madeByLabel =
-    madeBy === "ondemand"
-      ? "대화 중 임시 생성"
-      : replaced
-        ? "새벽 정리 생성 (임시 각본 교체)"
-        : "새벽 정리 생성";
-
-  const seed = getDaySeed(c.id, date);
-  const surprise = plan.blocks.some((b) => !b.advance_known);
-  const head = [
-    `:spiral_calendar_pad: *${dateLabel(date)} 하루 각본* — ${madeByLabel}`,
-    `컨디션 시드: ${esc(seedText(seed))}`,
-    "```",
-    ...plan.blocks.map(blockLine),
-    "```",
-    ...(surprise ? ["`**` 당일에 닥치는 일"] : []),
-  ].join("\n");
-
-  // 생성 프롬프트는 지금 같은 DB 데이터로 다시 조립한다. 각본을 만든 뒤 게시할 때까지
-  // 그 데이터(일기·아크·일정·시드)를 고치는 곳이 새벽 정리뿐이라 조립 결과가 같다.
-  let prompt: string;
-  try {
-    prompt = `${PLAN_SYSTEM}\n\n${buildPlanPrompt(c.id, date)}`;
-  } catch (err) {
-    prompt = `(프롬프트 조립 실패: ${String(err)})`;
-  }
-  const sections = promptSections(prompt);
-
-  db.transaction(() => {
-    recordTraceEvent({
-      characterId: c.id,
-      kind: "day_plan",
-      text: head,
-      dedupeKey,
-      threadKey: dedupeKey,
-    });
-    for (const s of sections) {
-      const parts = chunked(esc(s.body));
-      parts.forEach((p, i) => {
-        const label =
-          parts.length > 1 ? `${s.label} (${i + 1}/${parts.length})` : s.label;
-        recordTraceEvent({
-          characterId: c.id,
-          kind: "day_plan_prompt",
-          parentKey: dedupeKey,
-          text: `${label}\n\`\`\`\n${p}\n\`\`\``,
-        });
-      });
-    }
-  })();
-};
-
-const enqueueNoPlanNote = (
-  c: CharacterRow,
-  date: string,
-  hour: number,
-): void => {
-  const silence = silenceState(c.chat_id, c.id);
-  if (silence.tier !== "normal") {
-    const dedupeKey = `day_plan:${c.id}:${date}:quiet`;
-    if (hasTraceEvent(dedupeKey)) return;
-    recordTraceEvent({
-      characterId: c.id,
-      kind: "day_plan_quiet",
-      dedupeKey,
-      text: `:zzz: ${dateLabel(date)} 오늘 각본 없음 — 무응답 ${silence.days}일째라 새벽 정리가 일기·시드만 만들었다. 유저가 말을 걸면 임시 각본을 만든다.`,
-    });
-  } else if (hour >= PLAN_WARN_HOUR) {
-    const dedupeKey = `day_plan:${c.id}:${date}:missing`;
-    if (hasTraceEvent(dedupeKey)) return;
-    recordTraceEvent({
-      characterId: c.id,
-      kind: "day_plan_missing",
-      dedupeKey,
-      text: `:warning: ${dateLabel(date)} 정오까지 오늘 각본이 없다 — 새벽 정리가 실행되지 않았을 수 있다. 유저가 말을 걸면 임시 각본으로 시작한다.`,
-    });
-  }
-};
-
-const enqueueMorningPlans = (): void => {
-  const hour = getKstNow().getUTCHours();
-  if (hour < PLAN_POST_HOUR) return;
-  const date = kstLogicalDate();
-  for (const c of getActiveCharacters()) {
-    const raw = getDayPlan(c.id, date);
-    if (raw) enqueuePlanPost(c, date, raw);
-    else enqueueNoPlanNote(c, date, hour);
   }
 };
