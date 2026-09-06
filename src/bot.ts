@@ -36,7 +36,12 @@ import {
 } from "./day-plan.js";
 import { ensureMonthPlan } from "./life-plan.js";
 import { buildSystemBlocks } from "./context.js";
-import { decideReplyTiming, type TimingDecision } from "./reply-timing.js";
+import {
+  decideReplyTiming,
+  recentUserGaps,
+  type TimingDecision,
+} from "./reply-timing.js";
+import { awayNoticeSent } from "./proactive-policy.js";
 import { composeReply, pendingUserTurn } from "./reply-compose.js";
 import {
   dropPendingReplies,
@@ -57,7 +62,6 @@ import {
   PROACTIVE_RECENT_LINES,
 } from "./thresholds.js";
 import {
-  awayNoticeSent,
   db,
   getActiveCharacter,
   getDayPlan,
@@ -66,7 +70,6 @@ import {
   lastMessage,
   logMessage,
   promoteWakeRow,
-  recentUserGaps,
   setRecoveryMark,
   type CharacterRow,
   type PendingReplyRow,

@@ -19,15 +19,17 @@ import {
   getActiveCharacter,
   lastMessage,
   lastUserTs,
-  proactiveCountToday,
-  mendSentSinceLastUser,
-  proactiveKindCountToday,
-  proactiveSinceLastUser,
-  upsetSinceLastUser,
   type CharacterRow,
 } from "./db.js";
 import { currentBlock } from "./context.js";
-import { proactiveAllowed } from "./proactive-policy.js";
+import {
+  mendSentSinceLastUser,
+  proactiveAllowed,
+  proactiveCountToday,
+  proactiveKindCountToday,
+  proactiveSinceLastUser,
+  upsetSinceLastUser,
+} from "./proactive-policy.js";
 import {
   noOverlap,
   readSendText,

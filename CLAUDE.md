@@ -12,7 +12,7 @@
 
 ### 남은 작업
 
-- [ ] **코드 영역별 리팩토링 (09-06 착수)** — 영역 7개와 원칙, 6단계 순서는 areas.md에 있다. 1~4단계(아크 이동·대기 상수 중복·도구 보관, 답장 파이프라인을 reply-compose.ts로, 새벽 정리 문안을 prompts/nightly.ts로, 선톡 발송 공통 함수 proactive-send.ts)는 9/6에 끝났다(#294·#296·#298·#300). 다음은 5단계로 db.ts를 표 묶음으로 나누는 일이다. 동작을 바꾸지 않는 정리라 배포·확인 대기 항목과 같이 가되, 단계마다 이슈를 만들어 열고 같은 영역의 기능 작업과 한 시점에 열지 않는다.
+- [ ] **코드 영역별 리팩토링 (09-06 착수)** — 영역 7개와 원칙, 6단계 순서는 areas.md에 있다. 1~5단계(아크 이동·대기 상수 중복·도구 보관, 답장 파이프라인을 reply-compose.ts로, 새벽 정리 문안을 prompts/nightly.ts로, 선톡 발송 공통 함수 proactive-send.ts, db.ts를 src/db/ 표 묶음으로)는 9/6에 끝났다(#294·#296·#298·#300·#302). 다음은 6단계로 trace·reply-trace·context를 나누는 일이다. 동작을 바꾸지 않는 정리라 배포·확인 대기 항목과 같이 가되, 단계마다 이슈를 만들어 열고 같은 영역의 기능 작업과 한 시점에 열지 않는다.
 - [ ] **프롬프트·기억 구조 재설계** (08-19 착수) — 프롬프트 조립과 기억의 write/read/update 정책을 다시 설계한다. 설계 원본은 repo 루트 `time-and-memory.md`, 설계 허브는 `docs/data-map.html`(gitignored). 구현은 세션 하나에 단계 하나로 나누고 세션마다 이슈와 브랜치를 하나씩 둔다 — 범위·참조 절·모델은 time-and-memory.md 「작업 세션 나누기」 표에 있고, **새 세션은 그 표의 몇 번 줄인지 지정받아야 한다**(지정 없이 문서만 읽으면 여러 단계를 한꺼번에 손댄다). **9번까지 끝났고 10번(새 구조로 읽은 대화 확인, Fable)을 9/4에 열었다(이슈 #262)** — 여는 조건은 채워졌고 범위는 표의 10번 줄과 docs/session-10-plan.md에 있다. 사람이 대화해 확인하는 자리라 PR은 확인 뒤에 올린다. 11번(옛 경로 삭제, #156)은 9/4에 PR #272로 끝나 같은 날 배포했다. 12번(마무리, Fable)은 10번의 대화 확인이 끝난 뒤 연다. 날짜별 설계 기록과 1~9번·11번 세션 결과는 time-and-memory.md 「날짜별 설계 기록」·「세션별 결과」로 옮겼다.
 - [ ] **V2 — 유저 생성 캐릭터·기억 통합 (확정 08-27, 이슈 #28)**: 랜덤 매칭을 없애고 유저가 선택지와 서술형 입력으로 캐릭터를 만든다. 기억은 `memory_items` 세 항목(fact·ongoing·person) × 주인 둘, 관계는 `relationships` 컬럼 일곱 항목. 설계 원본은 time-and-memory.md 「V2」 절과 ADR 0002~0004, 저장 구조는 erd.md, 모듈 배치는 modules.md. 확정 뒤 덧붙인 세부(생성 호출 두 번·전용 컬럼 여섯·테이블 개명·구현 세션 재편·프롬프트 고유값 제거)는 time-and-memory.md 「확정 뒤에 덧붙인 것」으로 옮겼다.
 - [ ] **실제 작품의 없는 장면을 말하지 않게 하기 (09-05, 이슈 #287)** — 각본에 실제 작품 블록이 들어갈 때 답장 경로 밖에서 작품마다 한 번 검색해 짧은 사실 카드를 만들고, FACT_CARE에 적힌 것만 말하라는 규칙을 더한다. 말투 작업 뒤에 한다
@@ -76,10 +76,10 @@ yarn dev        # 로컬 기동 (long polling)
 
 | 영역 | 여기로 오는 변경 | 파일 |
 | --- | --- | --- |
-| 1. 기반과 저장 | 기준값·이름표·시각 계산, 표와 컬럼, 모델 호출 방식 | config, kst, labels, thresholds, db, llm |
+| 1. 기반과 저장 | 기준값·이름표·시각 계산, 표와 컬럼, 모델 호출 방식 | config, kst, labels, thresholds, db, db/*, llm |
 | 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-pick, user-profile |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
-| 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, prompts/reply, turns, reply-signal, reply-ask, reply-compose, relationship-update, reply-timing, proactive-policy |
+| 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, prompts/reply, turns, reply-signal, reply-ask, reply-compose, relationship-update, speech-level, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 3개, 크론표 | index, bot, pending, presence, followup, dispatch, proactive-send |
 | 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
 | 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, reply-trace, feedback, tools/*, eval/* |

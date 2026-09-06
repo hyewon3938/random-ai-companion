@@ -18,6 +18,7 @@ import type { DayPlan, PlanBlock } from "./day-plan.js";
 import type { SystemBlock } from "./llm.js";
 import { blockCategory, isSleeping } from "./day-plan.js";
 import { renderUserBlock } from "./user-profile.js";
+import { currentSpeechLevel } from "./speech-level.js";
 import {
   getMetAt,
   getRelationship,
@@ -27,7 +28,6 @@ import {
   getUpcomingSchedules,
   getSchedulesByIds,
   type ScheduleRow,
-  currentSpeechLevel,
   lastMessageBefore,
   lastExchangeGap,
   getRecentMessages,

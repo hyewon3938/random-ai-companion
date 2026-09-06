@@ -15,8 +15,8 @@
 // 세 항목 모두 하루 동안 같은 데이터층(context.ts)에 실리므로 갱신하면 그 층의 프롬프트 캐시를
 // 새로 쓴다. 자주 바뀌는 값이 아니라 그 비용은 받아들인다.
 
+import { currentSpeechLevel } from "./speech-level.js";
 import {
-  currentSpeechLevel,
   getRelationship,
   setSpeechLevel,
   updateRelationshipNotes,
