@@ -6,7 +6,7 @@
 //   generateGenesis  — 첫 호출. 정체성·주변 인물·진행 중인 일·관계 첫 값·첫 인사를 한 번에
 //                      짓고, genesisProblem으로 검증해 어긋나면 한 번 다시 부른다.
 //   persistGenesis   — 트랜잭션 하나로 genesis_json{v:2}·creation 기억 행·관계 첫 값을 쓴다.
-//   ensureArcs       — 지은 재료(arcMaterial)로 아크를 만든다.
+//   ensureArcs       — arcs.ts의 것. 지은 재료(arcMaterial)로 아크를 만든다.
 //
 // 랜덤 생성 코드(createCharacter)는 나중에 쓸 자리가 있어 지우지 않고 둔다.
 
@@ -21,7 +21,7 @@ import {
   type UserProfileFull,
 } from "./db.js";
 import { ensureCoreAreas, keyProblem, saveCreationMemory } from "./memory.js";
-import { ensureArcs } from "./nightly.js";
+import { ensureArcs } from "./arcs.js";
 
 // 케미 축: 코드에서 뽑아 프롬프트에 명시 주입 (LLM에 맡기면 평균으로 수렴함)
 // docs/character-design.md §2가 원본
@@ -112,7 +112,7 @@ export const createCharacter = async (
 // ── V2: 유저 입력 캐릭터 생성 ─────────────────────────────────────────────
 // 랜덤 매칭 대신 유저가 선택지 둘(성별·나이대)과 서술형 셋(성격·관계·바라는 모습)으로
 // 캐릭터를 만든다. 호출은 두 번 — 첫 호출이 정체성·주변 인물·진행 중인 일·관계 첫 값을
-// 한 번에 만들고, 두 번째는 아크 코드(nightly.ts의 ensureArcs)가 삶의 흐름을 쓴다.
+// 한 번에 만들고, 두 번째는 아크 코드(arcs.ts의 ensureArcs)가 삶의 흐름을 쓴다.
 // 유저가 적은 입력과 만들어진 결과는 characters.genesis_json에 원본 그대로 보관한다.
 // 대화와 새벽 정리는 이 원본을 읽지 않는다 — 실제 읽는 자리는 기억 행(memory_items
 // origin=creation)과 relationships의 관계 컬럼이다.

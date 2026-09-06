@@ -1,5 +1,7 @@
 // V2 데이터 이관 도구 (#50) — 운영 중인 캐릭터를 새 기억 구조로 옮긴다.
 //
+// 9/6에 보관 폴더로 옮겼다. 한 번 돌고 끝났거나 지금은 돌리지 않는 도구라 실행 경로에서 뺐다(#294).
+//
 // 명령 셋:
 //   genesis <input.json> <out.json>  새로 적는 설정으로 생성 호출을 돌리고 결과 JSON만 저장한다.
 //                                    DB에는 아무것도 쓰지 않는다 — 관계 여섯 값을 사람이 다듬는 재료.
@@ -10,7 +12,7 @@
 //
 // DB_PATH를 반드시 지정해야 한다. db.js를 import하는 순간 config.dbPath가 열리고 마이그레이션이
 // 돌기 때문에, 인자 검사가 끝난 뒤에 동적 import한다 (migrate-v1-data.ts와 같은 이유).
-// 예: DB_PATH=data/rehearsal-v2.db npx tsx src/tools/migrate-v2-data.ts check docs/migration/candidates-v2.json
+// 예: DB_PATH=data/rehearsal-v2.db npx tsx src/tools/archive/migrate-v2-data.ts check docs/migration/candidates-v2.json
 import { readFileSync, writeFileSync } from "node:fs";
 
 const fail: (msg: string) => never = (msg) => {
@@ -74,7 +76,7 @@ if (command === "genesis") {
   if (!profile)
     fail("input.json에 profile을 함께 적어야 한다 (DB를 읽지 않는다).");
 
-  const { generateGenesis } = await import("../character.js");
+  const { generateGenesis } = await import("../../character.js");
   const out = await generateGenesis(input, profile);
   writeFileSync(outPath, JSON.stringify(out, null, 2) + "\n");
 
@@ -91,8 +93,8 @@ const candPath = args[0];
 if (!candPath) fail(`사용법: ${command} <candidates.json>`);
 const cand = JSON.parse(readFileSync(candPath, "utf8")) as Candidates;
 
-const { db } = await import("../db.js");
-const { keyProblem, saveMemory } = await import("../memory.js");
+const { db } = await import("../../db.js");
+const { keyProblem, saveMemory } = await import("../../memory.js");
 
 const errors: string[] = [];
 const warnings: string[] = [];

@@ -1,8 +1,10 @@
 // 데모 원복 도구 (발표 시연용): demo-send.ts가 출력한 경계 id 이후의 메시지를 삭제해 데모 전 상태로 되돌린다.
+//
+// 9/6에 보관 폴더로 옮겼다. 한 번 돌고 끝났거나 지금은 돌리지 않는 도구라 실행 경로에서 뺐다(#294).
 // 유저의 데모 응답과 그 사이 봇의 응답까지, 경계 이후는 전부 제거된다.
 // 파괴적 작업이므로 먼저 --dry로 삭제 대상을 확인한 뒤 실제 삭제한다.
-// 사용: docker exec random-ai-companion npx tsx src/tools/demo-undo.ts <chat_id> <boundary> [--dry]
-import { db } from "../db.js";
+// 사용: docker exec random-ai-companion npx tsx src/tools/archive/demo-undo.ts <chat_id> <boundary> [--dry]
+import { db } from "../../db.js";
 
 const chatId = process.argv[2];
 const boundary = Number(process.argv[3]);
