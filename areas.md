@@ -167,7 +167,7 @@ memory.ts가 저장하고 찾고, recall.ts가 찾은 것 중 무엇을 넣을�
 
 고칠 때 같이 보는 곳은 6번의 추출 프롬프트, 4번 context/assemble.ts의 검색 절, 3번 day-plan.ts의 진행 중인 일 블록, tools/db-tag-search, erd.md의 memory_items·tags·relationships다.
 
-검사는 nightly-extract·day-plan-ongoing 2개다. recall·tag-pick·user-profile은 테스트가 없다. 설계 원본은 time-and-memory.md와 ADR 0003·0004·0005·0010이다.
+검사는 nightly-extract·day-plan-ongoing·recall·tag-pick·user-profile 5개다. 설계 원본은 time-and-memory.md와 ADR 0003·0004·0005·0010이다.
 
 경계가 깨끗해서 손볼 자리가 작고, 다른 영역을 정리한 뒤에 봐도 된다.
 
@@ -177,7 +177,7 @@ character.ts는 캐릭터를 두 번 호출로 만들고, arcs.ts는 삶의 큰 
 
 고칠 때 같이 보는 곳은 6번의 진행 중인 일 반영과 runNightly의 아크 호출, 4번 context/day-progress.ts의 각본 위의 지금 계산과 reply-timing.ts의 두 태그 표, 7번 trace/morning-plan.ts의 아침 각본 게시다. 도구는 tools/gen-day-plan·gen-rhythm·create-character·backfill-attitude다.
 
-검사는 arcs·day-plan-ongoing·schedule-dedupe·schedule-time-update·eval-fixture-character 5개다. life-plan은 테스트가 없다. 설계 원본은 ADR 0002·0010과 time-and-memory.md의 V2 절이다.
+검사는 arcs·day-plan-ongoing·schedule-dedupe·schedule-time-update·eval-fixture-character·life-plan 6개다. 설계 원본은 ADR 0002·0010과 time-and-memory.md의 V2 절이다.
 
 손볼 자리
 - 프롬프트 문안이 조립 함수와 얽혀 있다. life-plan 65-99, day-plan 116과 162-235와 305-342, character 67-89와 285와 306-357이다. 4번의 prompts/ 방식으로 떼려면 인자를 다시 짜야 해서 급하지 않다.
@@ -188,7 +188,7 @@ context.ts는 앞문이다. context/input.ts가 DB에서 값을 읽어 한 묶�
 
 고칠 때 같이 보는 곳은 5번 bot.ts가 composeReply에 넘기는 상황 문단과 호출 근거다. 선톡 문안 7곳도 같은 3층을 쓴다. presence 1곳, followup 3곳, nightly 2곳, bot 복귀 인사 1곳이다. 7번의 eval/output-rules는 이 영역을 고친 PR에 eval 라벨을 붙여 돌리고, trace/reply-render.ts의 렌더도 답장 형식이 바뀌면 따라온다.
 
-검사는 reply-signal·reply-ask·reply-compose·output-rules·turns·held-draft·speech-level·proactive-counters·context-assemble 9개다. relationship-update는 테스트가 없고(#305) reply-timing은 이어 보내는 텀만 있다. 설계 원본은 ADR 0011·0012와 time-and-memory.md다.
+검사는 reply-signal·reply-ask·reply-compose·output-rules·turns·held-draft·speech-level·proactive-counters·context-assemble·relationship-update 10개다. reply-timing은 이어 보내는 텀만 있다. 설계 원본은 ADR 0011·0012와 time-and-memory.md다.
 
 손볼 자리
 - 답장 밖 발화 표면 6곳의 문안이 각자 파일에 있다. 옮기기 쉬운 것은 followup 87-121, bot 527-586, tag-pick 32-38, reply-timing의 붙잡기 지시문이다.
@@ -199,7 +199,7 @@ bot.ts가 텔레그램과 주고받고, pending.ts가 만들어 둔 답장을 �
 
 고칠 때 같이 보는 곳은 4번, 7번 reply-trace.ts의 결과 후기록 함수 5개, 그리고 6번이 만들어 둔 예약 발송 행이다. dispatch가 그 행을 내보낸다.
 
-검사는 pending-recovery·pending-retry·presence-situation·catchup-silence·proactive-send 5개다. bot·dispatch·index는 테스트가 없다.
+검사는 pending-recovery·pending-retry·presence-situation·catchup-silence·proactive-send·dispatch 6개다. bot·index는 테스트가 없다.
 
 손볼 자리
 - 정책과 실행이 한 함수에 있다. respond 597-730(텀 결정과 깨우기 행·예약 저장), 몰아 답장 핸들러 778-889, presenceTickBody 176-315, followupTickBody 123-240, runDispatchTick 72-145다.
@@ -211,7 +211,7 @@ nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 app
 
 고칠 때 같이 보는 곳은 네 군데로, 추출 결과가 memory_items로 가므로 2번, 진행 중인 일과 일정 시각을 옮기고 아크를 이어 쓰라고 부르므로 3번, 선톡 문안이 buildSystemBlocks를 쓰므로 4번, 만들어 둔 예약 발송 행을 내보내는 5번 dispatch다. 여기에 repo 밖의 외부 스케줄러 지시서가 더해진다. 지시서의 프롬프트 규칙은 이 영역의 문안과 맞춰야 한다.
 
-검사는 nightly-extract·nightly-progress·nightly-prompts·schedule-time-update·schedule-dedupe 5개다. nightly-trace는 테스트가 없다. 설계 원본은 time-and-memory.md와 ADR 0006이다.
+검사는 nightly-extract·nightly-progress·nightly-prompts·schedule-time-update·schedule-dedupe·nightly-trace 6개다. 설계 원본은 time-and-memory.md와 ADR 0006이다.
 
 손볼 자리
 - 외부 지시서와 코드 안 프롬프트가 두 벌이 될 수 있어서 어느 쪽이 원본인지 정한다.
@@ -220,11 +220,11 @@ nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 app
 
 trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 17개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 23개, scripts 3개, 워크플로 2개, 커밋 훅이 여기다.
 
-고칠 때 같이 보는 곳은 슬랙 채널의 글 형식과 호출부 전부다. 검사는 proactive-fail-trace·reply-render·morning-plan 3개고, trace·feedback·nightly-trace는 테스트가 없다(#305). 설계 원본은 ADR 0008·0009다.
+고칠 때 같이 보는 곳은 슬랙 채널의 글 형식과 호출부 전부다. 검사는 proactive-fail-trace·reply-render·morning-plan·feedback 4개고, trace는 테스트가 없다. 설계 원본은 ADR 0008·0009다.
 
 손볼 자리
 - backfill-attitude는 일회성이라 tools/archive/로 옮길지 그때 정한다.
-- 테스트 공백이 가장 큰 파일은 bot이다. 어느 단계도 건드리지 않아 테스트가 없는 파일 8개는 #305에서 붙인다.
+- 테스트 공백이 가장 큰 파일은 bot이다. trace·index도 테스트가 없다.
 
 ## 리팩토링 원칙
 
