@@ -262,3 +262,12 @@ export const nightSleepOf = (
     enoughSleepFrom: wake.toISOString().slice(11, 16),
   };
 };
+
+/**
+ * 지금 시각을 저장용 문자열("YYYY-MM-DD HH:MM:SS", KST)로 만든다.
+ *
+ * messages·llm_calls·pending_replies가 같은 모양으로 시각을 적는다. 파일마다 따로 만들어
+ * 쓰던 것을 한 자리로 모았다 — 모양이 어긋나면 문자열 비교로 순서를 매기는 자리가 깨진다.
+ */
+export const kstStamp = (): string =>
+  getKstNow().toISOString().replace("T", " ").slice(0, 19);
