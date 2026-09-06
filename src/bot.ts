@@ -3,18 +3,15 @@
 // grammY long polling으로 받는다. 유저가 말을 나눠 보내면 디바운스로 모아 한 번에 읽고,
 // 기다리는 시간은 그 유저가 이어 보내던 간격을 학습해 20~40초 사이에서 정한다.
 //
-// 답장 순서는 텀 결정(reply-timing.ts) → 생성 → 대기 → 발송(pending.ts)이다.
+// 답장 순서는 텀 결정(reply-timing.ts) → 생성(reply-compose.ts) → 대기 → 발송(pending.ts)이다.
 // 답장 불가 구간에 온 말은 답장을 만들지 않고 깨우기 표시만 걸어 두고, 구간이 끝나면
 // wake 핸들러가 세 갈래로 나뉜다 — 쌓인 메시지에 몰아 답하거나, 예고하고 나간 자리면
-// 복귀 인사를 하거나, 아무것도 하지 않는다.
-// 예고한 블록이 시작하기 전까지 온 말에는 farewellSituation으로 배웅 답을 보낸다.
+// 복귀 인사를 하거나, 아무것도 하지 않는다. 몰아 답장도 같은 생성 순서를 타고, 상황 문단과
+// 시간 표시 기준만 다르게 준다. 예고한 블록이 시작하기 전까지 온 말에는 farewellSituation으로
+// 배웅 답을 보낸다.
 //
 // 부팅하면 recoverMissedReplies가 놓친 답장을 복구한다. 워터마크로 중복을 막고 최근
 // 3시간 것만 본다 — 더 멀리 보면 자정 경계에서 어제 것까지 딸려 온다.
-//
-// 모델이 답한 것은 parseReplyOutput(reply-signal.ts)이 본문과 신호로 가른다.
-// 대화 기록은 lastTurns/toTurns가 최근 40턴으로 자르고 시간 마커를 넣는다 — 이어 보낸
-// 말은 한 턴으로 세고, 몰아 답장은 markFrom으로 구간 첫 메시지에 마커를 강제한다.
 //
 // 선톡 틱과는 acquireProactive로 chat 단위 상호 배제를 건다(대기 중인 답장이 있으면
 // 선톡을 접는다). 발송과 깨우기 함수는 setPendingSender·setWakeHandler로 pending.ts에
@@ -38,12 +35,9 @@ import {
   type PlanBlock,
 } from "./day-plan.js";
 import { ensureMonthPlan } from "./life-plan.js";
-import { buildSystemBlocks, type BuildTrace } from "./context.js";
-import {
-  decideReplyTiming,
-  recordHold,
-  type TimingDecision,
-} from "./reply-timing.js";
+import { buildSystemBlocks } from "./context.js";
+import { decideReplyTiming, type TimingDecision } from "./reply-timing.js";
+import { composeReply, pendingUserTurn } from "./reply-compose.js";
 import {
   dropPendingReplies,
   dropWakeRows,
@@ -54,52 +48,33 @@ import {
   setWakeHandler,
 } from "./pending.js";
 import { traceProactiveSend } from "./reply-trace.js";
-import {
-  chat,
-  chatJson,
-  type CallMeta,
-  type ChatTurn,
-  type SystemBlock,
-} from "./llm.js";
-import { lastTurns, toTurns } from "./turns.js";
-import { REPLY_MAX_TOKENS, capBubbles } from "./reply-signal.js";
-import { askReply, type ReplyDraft } from "./reply-ask.js";
+import { chatJson } from "./llm.js";
+import { capBubbles } from "./reply-signal.js";
 import { saveTodayNote } from "./memory.js";
 import {
   ARRIVAL_WAIT_MAX_MS,
   ARRIVAL_WAIT_MIN_MS,
   PROACTIVE_RECENT_LINES,
-  RECENT_MESSAGE_FETCH_MAX,
-  RECENT_TURN_COUNT,
 } from "./thresholds.js";
-import { pickTags } from "./tag-pick.js";
-import {
-  applyReplySignals,
-  speechRatchet,
-  type RelChange,
-} from "./relationship-update.js";
 import {
   awayNoticeSent,
   db,
   getActiveCharacter,
   getDayPlan,
-  getRecentMessages,
   getRecoveryMark,
   hasWaitingWakeRow,
   lastMessage,
   logMessage,
   promoteWakeRow,
   recentUserGaps,
-  setCallContext,
   setRecoveryMark,
   type CharacterRow,
-  type MessageRow,
   type PendingReplyRow,
 } from "./db.js";
 import {
-  getKstNow,
   kstLogicalClock,
   kstLogicalDate,
+  kstStamp,
   clockLabel,
   logicalDayStartTs,
 } from "./kst.js";
@@ -172,9 +147,6 @@ export const keepConnectionWarm = (intervalMs = 30_000): void => {
     });
   }, intervalMs).unref();
 };
-
-const nowIso = (): string =>
-  getKstNow().toISOString().replace("T", " ").slice(0, 19);
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
@@ -302,7 +274,7 @@ export const sendProactive = async (
   const total = splitBubbles(text).length;
   const { sent, error } = await sendBubblesTo(chatId, text);
   if (sent.length === 0 && error) throw error;
-  logMessage(chatId, characterId, "assistant", sent.join("\n"), nowIso(), {
+  logMessage(chatId, characterId, "assistant", sent.join("\n"), kstStamp(), {
     proactive: true,
     kind,
     ...(sent.length < total ? { partial: `${sent.length}/${total}` } : {}),
@@ -411,7 +383,7 @@ const finishOnboarding = async (
     onboarding.delete(chatId);
     const { sent } = await sendBubblesTo(chatId, output.firstGreeting);
     if (sent.length > 0)
-      logMessage(chatId, id, "assistant", sent.join("\n"), nowIso(), {
+      logMessage(chatId, id, "assistant", sent.join("\n"), kstStamp(), {
         first: true,
       });
     // 월 리듬·오늘 각본 첫 실행. 첫 인사를 기다리게 하지 않으려고 뒤에서 돌린다 —
@@ -547,56 +519,6 @@ const computeWait = (chatId: string): number => {
 };
 
 // 답장 프롬프트에 넣는 대화 기록. 행을 넉넉히 읽어 최근 몇 턴에서 자른다 — 한 사람이
-// 연달아 보낸 말은 몇 통이든 한 턴이라, 유저가 끊어 보내도 남는 대화 길이가 같다.
-// markFrom을 주면 그 시각 이후 첫 메시지에 시간 표시를 강제한다(몰아 답장 자리, 이슈 #238).
-const replyHistory = (chatId: string, markFrom?: string): ChatTurn[] =>
-  toTurns(
-    lastTurns(
-      getRecentMessages(chatId, RECENT_MESSAGE_FETCH_MAX),
-      RECENT_TURN_COUNT,
-    ),
-    markFrom ? { markFrom } : {},
-  );
-
-// 답장 한 통을 받아 온다. 무엇을 고르고 무엇을 합치는지는 reply-ask.ts에 있다.
-const askReplyWith = (
-  system: string | SystemBlock[],
-  turns: ChatTurn[],
-  meta: CallMeta,
-): Promise<ReplyDraft> =>
-  askReply(async (attempt) => {
-    const callMeta: CallMeta = attempt === 1 ? meta : { ...meta, attempt };
-    const text = await chat(
-      system,
-      turns,
-      REPLY_MAX_TOKENS,
-      config.model,
-      callMeta,
-    );
-    return { text, callId: callMeta.callId ?? null };
-  });
-
-// 답장 대상이 되는 유저 발화. 마지막 캐릭터 발화 뒤에 온 유저 메시지를 모은다 —
-// 나눠 보낸 여러 줄이 한 덩어리로 붙잡기 판정에 들어간다.
-const pendingUserTurn = (
-  chatId: string,
-): { at: string; text: string; n: number } | null => {
-  const rows = getRecentMessages(chatId, 12);
-  const mine: MessageRow[] = [];
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const r = rows[i];
-    if (!r || r.role !== "user") break;
-    mine.unshift(r);
-  }
-  const last = mine[mine.length - 1];
-  if (!last) return null;
-  return {
-    at: last.sent_at,
-    text: mine.map((m) => m.text).join("\n"),
-    n: mine.length,
-  };
-};
-
 const toMinOfDay = (hhmm: string): number => {
   const [h, m] = hhmm.split(":").map(Number);
   return (h ?? 0) * 60 + (m ?? 0);
@@ -752,128 +674,36 @@ const respond = async (
         `[pending] 깨우기 ${droppedWake}건 거둠 — 지금 답장이 대신한다 (chat=${chatId})`,
       );
 
-    // 말투 래칫 — 프롬프트를 조립하기 전에 부른다. 저장해 두면 이번 답장은 물론 최근 대화를
-    // 안 보는 경로(선톡 문안)도 같은 값을 읽는다. 단계·호칭은 답을 읽은 뒤에 같은 목록에 쌓인다.
-    const relUpdates: RelChange[] = speechRatchet(
-      character.id,
-      chatId,
-      nowIso(),
-    );
-
-    // 2. 지금 만든다
-    // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
-    // 검색 태그는 답장을 만들기 전에 짧은 호출로 먼저 고른다 — 이번 답장에 바로 쓰기
-    // 때문에 여기서 돌아야 한다. 무엇을 찾아 넣었는지(검색 태그·기억)를 받아 둬서 답장
-    // 호출 기록에 함께 남긴다. 예고해 둔 자리 비움이 곧 시작되면 배웅 답 상황 문단을
-    // 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다).
-    const built: BuildTrace = {
-      tags: [],
-      tagPool: 0,
-      memories: [],
-      oldDiaries: [],
-      schedules: [],
-      dropped: [],
-    };
-    const pick = await pickTags(character.id, turn.text);
+    // 2. 지금 만든다 — 순서는 reply-compose.ts에 있다. 예고해 둔 자리 비움이 곧 시작되면
+    // 배웅 답 상황 문단을 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다). 호출 기록에는 텀 계산의
+    // 입력과 결과, 도착 대기, 붙잡기 판정이 접은 일정을 앞세워 붙인다.
     const away =
       kind === "reply" ? upcomingAnnouncedAway(chatId, character.id) : null;
-    const system = buildSystemBlocks(character.id, chatId, {
-      pick,
-      trace: built,
-      // 답장만 객체(JSON)로 받는다 — 본문과 신호가 한 덩이로 온다.
-      signals: true,
-      ...(away ? { situation: farewellSituation(away) } : {}),
-    });
-    const turns = replyHistory(chatId);
-    const meta: CallMeta = {
-      purpose: "reply",
+    const reply = await composeReply({
       characterId: character.id,
       chatId,
-    };
-    // 빈 답장은 여기서 걸러 낸다. 다시 불러도 비면 아래에서 보내지 않는다 — 빈 텍스트를
-    // 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.
-    const { bubbles, signals, parse, retryCallId } = await askReplyWith(
-      system,
-      turns,
-      meta,
-    );
-    // 이 답장이 어떤 근거로 나왔는지를 호출 기록에 붙인다 — 검색한 태그·기억, 텀 계산의
-    // 입력과 결과, 말풍선 수. 기록이 실패해도 답장은 그대로 나간다.
-    // 여러 번 나눠 부르므로 덮어쓰지 않고 쌓는다 — 뒤에 붙는 발송 예정 시각이 앞의
-    // 검색 기록을 지우면 안 된다.
-    const facts: Record<string, unknown> = {};
-    const attach = (extra: Record<string, unknown>): void => {
-      Object.assign(facts, extra);
-      if (!meta.callId) return;
-      try {
-        setCallContext(meta.callId, {
-          timing: {
-            waitMs: timing.waitMs,
-            ...timing.trace,
-            held: timing.held,
-          },
-          search: built,
-          turns: turns.length,
-          userMsgs: turn.n,
-          ...(arrival ? { arrival } : {}),
-          ...(relUpdates.length ? { relUpdate: relUpdates } : {}),
-          ...(retryCallId ? { retryCallId } : {}),
-          ...facts,
-        });
-      } catch (e) {
-        logErr("[llm] 판단 근거 기록 실패:", e);
-      }
-    };
-    // 재생성 호출은 답장 스레드에 딸린 것으로 표시한다 — 그냥 두면 판단 근거 없는
-    // 낱개 행으로 올라가 어느 답장의 두 번째 시도인지 알 수 없다.
-    if (retryCallId && meta.callId)
-      try {
-        setCallContext(retryCallId, { partOf: meta.callId });
-      } catch (e) {
-        logErr("[llm] 재생성 호출 표시 실패:", e);
-      }
-
-    // 관계 신호 — 이번 대화로 사이나 부르는 말이 달라졌으면 그 자리에서 저장한다.
-    // 조립 전에 굳힌 말투와 한 목록에 모아 트레이스가 *관계 갱신* 한 자리에서 읽는다.
-    relUpdates.push(...applyReplySignals(character.id, signals, nowIso()));
-    // 객체를 어느 길로 읽었는지는 답장을 버리는 경우에도 남긴다 — 형식이 깨진 날을 되짚는 자리다.
-    attach({ outputParse: parse });
-    // 조정 가능한(개인·사회) 자기 일정을 접거나 미루고 남기로 한 stay 신호.
-    // 붙잡기 판정이 이미 접었으면 그 기록이 남아 있어 recordHold가 알아서 넘어간다.
-    const staged = signals.stay ? recordHold(character.id) : null;
-    if (timing.held)
-      attach({
-        dayActual: {
-          blockStart: timing.trace.block?.start ?? null,
-          activity: timing.held.activity,
-          outcome: timing.held.outcome,
-          by: "judge",
-        },
-      });
-    else if (staged) attach({ dayActual: { ...staged, by: "stay" } });
-    if (!bubbles.length) {
-      attach({ dropped: "빈 답장" });
-      console.warn(`[bot] empty reply — skip (chat=${chatId})`);
-      return;
-    }
-    // 만드는 동안 유저가 말을 더 보냈으면 이 답장은 버린다 — 새 타이머가 합쳐서 다시 만든다.
-    const now = pendingUserTurn(chatId);
-    if (now && now.at !== turn.at) {
-      attach({ dropped: "생성 중 새 메시지 도착" });
-      console.log(`[send] 생성 중 새 메시지 도착 — 폐기 (chat=${chatId})`);
-      return;
-    }
+      turn,
+      ...(away ? { situation: farewellSituation(away) } : {}),
+      context: {
+        timing: { waitMs: timing.waitMs, ...timing.trace, held: timing.held },
+        ...(arrival ? { arrival } : {}),
+      },
+      ...(timing.held
+        ? {
+            heldActual: {
+              blockStart: timing.trace.block?.start ?? null,
+              activity: timing.held.activity,
+              outcome: timing.held.outcome,
+            },
+          }
+        : {}),
+      logTag: "[send]",
+    });
+    if (!reply) return;
+    const { bubbles, signals } = reply;
 
     // 3. 정한 시각에 나가게 저장한다. 대기가 0이어도 같은 길로 보낸다 —
     // 발송 직전에 죽어도 pending_replies에 남아 다시 뜰 때 이어진다.
-    attach({
-      stay: signals.stay,
-      note: signals.note,
-      userUpset: signals.userUpset,
-      bubbles: bubbles.length,
-      // 말풍선 사이 간격은 발송할 때 글자 수에서 나온다(1초 안쪽 흔들림) — 길이를 남겨 둔다.
-      bubbleLens: bubbles.map((b) => b.length),
-    });
     const scheduled = schedulePendingReply({
       chatId,
       characterId: character.id,
@@ -884,11 +714,11 @@ const respond = async (
       waitMs: timing.waitMs,
       kind,
       // 발송·폐기 결과를 이 답장을 만든 호출의 트레이스에 잇는다.
-      callId: meta.callId ?? null,
+      callId: reply.callId,
       // 상대가 서운해하는 기색을 읽었다는 표시 — 발송할 때 messages.meta_json으로 옮긴다.
       userUpset: signals.userUpset,
     });
-    attach({ sendAt: scheduled.sendAt });
+    reply.attach({ sendAt: scheduled.sendAt });
     // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
     setRecoveryMark(chatId, turn.at);
     console.log(
@@ -927,7 +757,7 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
     row.character_id,
     "assistant",
     sent.join("\n"),
-    nowIso(),
+    kstStamp(),
     {
       kind,
       ...(rowUpset(row.meta_json) ? { userUpset: true } : {}),
@@ -967,97 +797,28 @@ setWakeHandler(async (row: PendingReplyRow) => {
   if (last?.role === "user") {
     const turn = pendingUserTurn(chatId);
     if (!turn) return;
-    const built: BuildTrace = {
-      tags: [],
-      tagPool: 0,
-      memories: [],
-      oldDiaries: [],
-      schedules: [],
-      dropped: [],
-    };
-    // 이 길도 프롬프트를 스스로 조립한다 — 조립 전에 말투를 굳혀야 몰아 답장이 옛 말투로
-    // 나가지 않는다.
-    const relUpdates: RelChange[] = speechRatchet(
-      row.character_id,
-      chatId,
-      nowIso(),
-    );
-    const system = buildSystemBlocks(row.character_id, chatId, {
-      pick: await pickTags(row.character_id, turn.text),
-      trace: built,
-      signals: true,
-      situation: gatherSituation(activity),
-    });
-    // 구간에 처음 온 메시지에 시간 표시를 강제한다 — 자리를 비운 사이가 한 시간이 안 되면
-    // 마커가 안 붙어, 나가기 직전 발화와 그 뒤에 온 말이 기록에서 맞붙는다.
-    const turns = replyHistory(chatId, row.user_msg_at);
-    const wakeMeta: CallMeta = {
-      purpose: "reply",
+    // 순서는 답장과 같다(reply-compose.ts). 다른 것은 셋 — 방금 돌아왔다는 상황 문단, 구간에
+    // 처음 온 메시지에 강제하는 시간 표시(자리를 비운 사이가 한 시간이 안 되면 마커가 안 붙어
+    // 나가기 직전 발화와 그 뒤에 온 말이 기록에서 맞붙는다), 텀 대신 어느 구간이 끝나 답하는지를
+    // 남기는 근거. 이 길은 텀 표를 타지 않는다.
+    const reply = await composeReply({
       characterId: row.character_id,
       chatId,
-    };
-    const { bubbles, signals, parse, retryCallId } = await askReplyWith(
-      system,
-      turns,
-      wakeMeta,
-    );
-    // 몰아 답장의 근거. 텀 대신 어느 구간이 끝나 답하는지를 남긴다 — 이 길은 표를 타지 않는다.
-    const facts: Record<string, unknown> = {};
-    const attach = (extra: Record<string, unknown>): void => {
-      Object.assign(facts, extra);
-      if (!wakeMeta.callId) return;
-      try {
-        setCallContext(wakeMeta.callId, {
-          gathered: {
-            activity,
-            blockStart: meta.blockStart ?? null,
-            waitedMs,
-          },
-          search: built,
-          turns: turns.length,
-          userMsgs: turn.n,
-          ...(relUpdates.length ? { relUpdate: relUpdates } : {}),
-          ...(retryCallId ? { retryCallId } : {}),
-          ...facts,
-        });
-      } catch (e) {
-        logErr("[llm] 판단 근거 기록 실패:", e);
-      }
-    };
-    if (retryCallId && wakeMeta.callId)
-      try {
-        setCallContext(retryCallId, { partOf: wakeMeta.callId });
-      } catch (e) {
-        logErr("[llm] 재생성 호출 표시 실패:", e);
-      }
-    relUpdates.push(...applyReplySignals(row.character_id, signals, nowIso()));
-    attach({ outputParse: parse });
-    const staged = signals.stay ? recordHold(row.character_id) : null;
-    if (staged) attach({ dayActual: { ...staged, by: "stay" } });
-    if (!bubbles.length) {
-      attach({ dropped: "빈 답장" });
-      console.warn(`[wake] empty reply — skip (chat=${chatId})`);
-      return;
-    }
-    // 만드는 동안 유저가 말을 더 보냈으면 버린다 — 디바운스 타이머가 합쳐서 다시 만든다.
-    const now = pendingUserTurn(chatId);
-    if (now && now.at !== turn.at) {
-      attach({ dropped: "생성 중 새 메시지 도착" });
-      console.log(`[wake] 생성 중 새 메시지 도착 — 폐기 (chat=${chatId})`);
-      return;
-    }
-    // 바로 보낸다 — 구간이 끝나는 시각이 이미 이 답장의 텀이다.
-    attach({
-      stay: signals.stay,
-      note: signals.note,
-      userUpset: signals.userUpset,
-      bubbles: bubbles.length,
-      bubbleLens: bubbles.map((b) => b.length),
+      turn,
+      situation: gatherSituation(activity),
+      markFrom: row.user_msg_at,
+      context: {
+        gathered: { activity, blockStart: meta.blockStart ?? null, waitedMs },
+      },
+      logTag: "[wake]",
     });
+    if (!reply) return;
+    const { bubbles, signals } = reply;
+    // 바로 보낸다 — 구간이 끝나는 시각이 이미 이 답장의 텀이다.
     const { sent, error } = await sendBubbleList(chatId, bubbles);
     if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
     // 이 길은 pending을 타지 않아 발송 결과가 따로 붙지 않는다 — 여기서 남긴다.
-    attach({ sent: `${sent.length}/${bubbles.length}` });
+    reply.attach({ sent: `${sent.length}/${bubbles.length}` });
     if (error)
       console.warn(`[wake] 부분 발송 ${sent.length}/${bubbles.length}`);
     logMessage(
@@ -1065,7 +826,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
       row.character_id,
       "assistant",
       sent.join("\n"),
-      nowIso(),
+      kstStamp(),
       {
         kind: "reply",
         gathered: meta.blockStart ?? true,
@@ -1172,7 +933,7 @@ bot.on("message:text", async (ctx) => {
     await advanceOnboarding(chatId, ob, answer || null);
     return;
   }
-  logMessage(chatId, character.id, "user", ctx.message.text, nowIso());
+  logMessage(chatId, character.id, "user", ctx.message.text, kstStamp());
   // 만들어 두고 기다리던 답장이 있으면 버린다 — 유저가 말을 더 보탰으니 내용도 텀도 다시 정한다.
   const dropped = dropPendingReplies(chatId);
   if (dropped)

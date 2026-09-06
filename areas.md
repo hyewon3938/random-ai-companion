@@ -13,7 +13,7 @@
 | 1. 기반과 저장 | 기준값·이름표·시각 계산, 표와 컬럼, 모델 호출 방식 | config, kst, labels, thresholds, db, llm |
 | 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-pick, user-profile |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
-| 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, prompts/reply, turns, reply-signal, reply-ask, relationship-update, reply-timing, proactive-policy |
+| 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, prompts/reply, turns, reply-signal, reply-ask, reply-compose, relationship-update, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 3개, 크론표 | index, bot, pending, presence, followup, dispatch |
 | 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
 | 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, reply-trace, feedback, tools/*, eval/* |
@@ -26,7 +26,7 @@
 
 > 이 색인은 `node scripts/gen-modules.mjs`가 위 영역 표와 각 파일 맨 위 주석의 첫 줄에서 만든다. 손으로 고치지 않는다. 줄 수는 영역에 든 파일의 합이다.
 
-### 1. 기반과 저장 · 3,599줄
+### 1. 기반과 저장 · 3,608줄
 
 - `src/config.ts` — 환경변수를 한 번 읽어 두는 자리.
 - `src/kst.ts` — 시각을 다루는 자리 — 한국 시간과 논리일 경계.
@@ -50,18 +50,19 @@
 - `src/day-plan.ts` — 하루 각본 — 캐릭터가 그날 무엇을 하는지 블록으로 만든다.
 - `src/schedule-dedupe.ts` — 같은 일정인지 가리는 자리 — 공백·기호를 지운 내용으로 견준다.
 
-### 4. 대화 생성 · 2,034줄
+### 4. 대화 생성 · 2,274줄
 
 - `src/context.ts` — 프롬프트를 조립하는 자리 — 안정도 순 3층.
 - `src/prompts/reply.ts` — 답장 프롬프트의 고정 문안 — 캐릭터를 가리지 않고 매번 같은 글자가 들어가는 층이다.
 - `src/turns.ts` — 대화 기록을 모델에 넘길 턴으로 옮기는 자리.
 - `src/reply-signal.ts` — 답장 객체 — 모델이 코드에 신호를 넘기는 통로.
 - `src/reply-ask.ts` — 답장 한 통을 받아 오는 자리.
+- `src/reply-compose.ts` — 답장 한 통을 만드는 순서 — 말투 굳히기, 검색 태그, 프롬프트 조립, 호출, 신호 반영, 폐기 판정.
 - `src/relationship-update.ts` — 관계 항목을 답장 자리에서 갱신하는 한 자리.
 - `src/reply-timing.ts` — 답장 텀을 정하는 자리 — 두 태그 표 한 장.
 - `src/proactive-policy.ts` — 선제 발화 관제탑 — 오늘 먼저 연락해도 되는지, 무엇을 보낼지 한곳에서 정한다.
 
-### 5. 실행과 발송 · 2,709줄
+### 5. 실행과 발송 · 2,470줄
 
 - `src/index.ts` — 봇 프로세스의 시작점.
 - `src/bot.ts` — 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
@@ -125,7 +126,7 @@
 
 영역은 파일 단위로 나눴지만 파일 4개는 안에서 책임이 갈린다. 같이 바뀐 횟수가 높은 쌍은 대부분 이 자리에서 나온다. 줄 번호는 2026-09-06 기준이다.
 
-- **bot.ts** 1,238줄. 전송 인프라 133-328, 온보딩 330-503, 수신 디바운스 505-550과 1131-1197은 5번이다. 답장 파이프라인 respond 675-900과 몰아 답장 942-1128은 4번의 진입점이고, context.ts와 같이 바뀐 횟수가 20회로 모든 쌍 중 가장 많다.
+- **bot.ts** 1,001줄. 전송 인프라 96-303, 온보딩 305-467, 수신 디바운스 477-520과 891-953, 답장 텀과 예약·깨우기 588-889는 5번이다. 답장을 만드는 순서는 4번 reply-compose.ts로 나갔고(#296), 상황 문단 3종 527-586만 4번의 결로 남아 있다. context.ts와 같이 바뀐 횟수가 20회로 모든 쌍 중 가장 많았던 파일인데, 이제 그 변경은 reply-compose.ts로 간다.
 - **nightly.ts** 1,464줄. 수집 450-562와 반영 568-860, runNightly 1317-1464는 6번이다. 프롬프트 문안 8종 892-1131은 4번의 결이다.
 - **trace.ts** 400줄. 게시함 적재와 슬랙 발송 틱은 7번의 기반인데, 아침 각본 게시 enqueueMorningPlans 391-400이 같은 파일에 있어서 관측이 3번과 4번을 읽는 이유가 된다.
 - **db.ts** 2,558줄. 정책 함수 4개가 저장 함수 사이에 있다. currentSpeechLevel 1196-1226, recentUserGaps 1175-1191, TRACE_EVENT_KEEP 1721-1728, 선제 발화 카운터의 LIKE 패턴 1784-1833은 4번이나 7번의 판단이다.
@@ -144,7 +145,7 @@ kst는 파일 25개, config 18개, thresholds 14개, labels 14개, llm 11개, db
 - db.ts를 표 묶음으로 나눈다. 호출 기록 1541-1749, 발송 큐 1468-1539와 2405-2558, 기억 2037-2404, 캐릭터·관계 950-1108과 1841-1922, 대화·선제 발화 카운터 1109-1226과 1750-1974, 일정·각본·일기·리듬 1229-1467과 1975-2035 순서로 떼면 임포터가 적은 것부터 간다. db.ts를 재내보내기 파일로 남기면 임포터 24개를 안 건드린다.
 - db.ts 밖 raw SQL을 되가져온다. trace.ts 7건, nightly.ts 7건, reply-trace.ts 4건, feedback.ts 3건, nightly-trace.ts 2건, proactive-policy.ts 51-79의 lastUserTs 1건이다. 일기 INSERT와 call_feedback 함수는 db.ts에 아예 없다.
 - 위에 적은 정책 함수 4개를 4번으로 옮긴다.
-- thresholds로 안 옮긴 값이 남아 있다. bot.ts:154, reply-signal.ts:52·92, character.ts:136·360-362다.
+- thresholds로 안 옮긴 값이 남아 있다. bot.ts:129, reply-signal.ts:52·92, character.ts:136·360-362다.
 - 마이그레이션 v2와 v3 주석이 520-583에서 섞여 있고, 버전 번호 없는 후속 마이그레이션 4종이 786-945에 있다.
 
 ### 2. 기억
@@ -170,28 +171,27 @@ character.ts는 캐릭터를 두 번 호출로 만들고, arcs.ts는 삶의 큰 
 
 ### 4. 대화 생성
 
-context.ts가 안정도 순 3층을 조립하고, prompts/reply.ts가 캐릭터가 내보내는 모든 글의 규칙층 단일 소스다. 어느 층에 어느 순서로 넣을지는 context.ts가 정한다. turns.ts는 대화 기록을 턴으로 옮기고, reply-signal.ts는 답장 객체의 형식과 파서를 한 파일에 갖는다. reply-ask.ts는 한 통을 받아 오고 relationship-update.ts는 그 신호를 관계 컬럼에 반영한다. reply-timing.ts는 두 태그 표와 붙잡기 판정이고, proactive-policy.ts는 오늘 먼저 연락해도 되는지와 무엇을 보낼지를 정한다.
+context.ts가 안정도 순 3층을 조립하고, prompts/reply.ts가 캐릭터가 내보내는 모든 글의 규칙층 단일 소스다. 어느 층에 어느 순서로 넣을지는 context.ts가 정한다. turns.ts는 대화 기록을 턴으로 옮기고, reply-signal.ts는 답장 객체의 형식과 파서를 한 파일에 갖는다. reply-ask.ts는 한 통을 받아 오고 relationship-update.ts는 그 신호를 관계 컬럼에 반영한다. reply-compose.ts는 답장 한 통을 만드는 순서(말투 굳히기·검색 태그·조립·호출·신호 반영·폐기 판정)를 갖고, 5번의 즉답과 몰아 답장이 상황 문단과 시간 표시 기준만 다르게 주고 둘 다 이 함수를 부른다. reply-timing.ts는 두 태그 표와 붙잡기 판정이고, proactive-policy.ts는 오늘 먼저 연락해도 되는지와 무엇을 보낼지를 정한다.
 
-고칠 때 같이 보는 곳은 5번 bot.ts의 respond가 buildSystemBlocks에 넘기는 옵션이다. 선톡 문안 7곳도 같은 3층을 쓴다. presence 1곳, followup 3곳, nightly 2곳, bot 복귀 인사 1곳이다. 7번의 eval/output-rules는 이 영역을 고친 PR에 eval 라벨을 붙여 돌리고, reply-trace.ts의 렌더도 답장 형식이 바뀌면 따라온다.
+고칠 때 같이 보는 곳은 5번 bot.ts가 composeReply에 넘기는 상황 문단과 호출 근거다. 선톡 문안 7곳도 같은 3층을 쓴다. presence 1곳, followup 3곳, nightly 2곳, bot 복귀 인사 1곳이다. 7번의 eval/output-rules는 이 영역을 고친 PR에 eval 라벨을 붙여 돌리고, reply-trace.ts의 렌더도 답장 형식이 바뀌면 따라온다.
 
-검사는 reply-signal·reply-ask·output-rules·turns·held-draft 5개다. context·reply-timing·relationship-update는 테스트가 없다. 설계 원본은 ADR 0011·0012와 time-and-memory.md다.
+검사는 reply-signal·reply-ask·reply-compose·output-rules·turns·held-draft 6개다. context·reply-timing·relationship-update는 테스트가 없다. 설계 원본은 ADR 0011·0012와 time-and-memory.md다.
 
 손볼 자리
 - context.ts가 조립만 하지 않는다. 21-37에서 db 함수 12개를 직접 불러 읽고, 각본을 시간대로 나누는 dayProgress·sleepGap 96-146도 여기 있다. 읽기와 조립을 나누면 조립 쪽에 테스트를 붙일 수 있다.
-- 답장 밖 발화 표면 6곳의 문안이 각자 파일에 있다. 옮기기 쉬운 것은 followup 97-133, bot 630-673, tag-pick 32-38, reply-timing의 붙잡기 지시문이다.
+- 답장 밖 발화 표면 6곳의 문안이 각자 파일에 있다. 옮기기 쉬운 것은 followup 97-133, bot 527-586, tag-pick 32-38, reply-timing의 붙잡기 지시문이다.
 
 ### 5. 실행과 발송
 
-bot.ts가 텔레그램과 주고받고, pending.ts가 만들어 둔 답장을 정한 시각에 내보낸다. presence 10분, followup 15분, dispatch 3분 틱이 선톡을 내고, index.ts가 크론 7개를 건다. 텔레그램 발송은 bot.ts:224 한 곳이고 틱 3개는 sendProactive만 부른다.
+bot.ts가 텔레그램과 주고받고, pending.ts가 만들어 둔 답장을 정한 시각에 내보낸다. presence 10분, followup 15분, dispatch 3분 틱이 선톡을 내고, index.ts가 크론 7개를 건다. 텔레그램 발송은 bot.ts:196 한 곳이고 틱 3개는 sendProactive만 부른다.
 
 고칠 때 같이 보는 곳은 4번, 7번 reply-trace.ts의 결과 후기록 함수 5개, 그리고 6번이 만들어 둔 예약 발송 행이다. dispatch가 그 행을 내보낸다.
 
 검사는 pending-recovery·pending-retry·presence-situation·catchup-silence 4개다. bot·dispatch·index는 테스트가 없다.
 
 손볼 자리
-- respond 764-896과 몰아 답장 분기 966-1084가 같은 파이프라인을 2벌 갖고 있어서 이 영역에서 첫 번째로 손댈 자리다. 하나로 합쳐 bot.ts 밖 파일로 빼면 bot.ts는 전송·온보딩·수신만 남고, 4번과의 경계가 파일 경계가 된다.
 - followup 3종 190-237·260-301·323-367과 presence 294-388이 같은 뼈대를 4번 반복한다. 선톡 한 통을 보내는 공통 함수로 모으고, running 가드 3곳 dispatch:71·presence:153·followup:133도 같이 정리한다.
-- 정책과 실행이 한 함수에 있다. respond, 몰아 답장 핸들러, presenceTickBody 204-390, followupTickBody 145-370, runDispatchTick 73-152다.
+- 정책과 실행이 한 함수에 있다. respond 597-730(텀 결정과 깨우기 행·예약 저장), 몰아 답장 핸들러 778-889, presenceTickBody 204-390, followupTickBody 145-370, runDispatchTick 73-152다.
 - bot.ts의 acquireProactive는 락이고 proactive-policy.ts의 proactiveAllowed는 정책인데 이름이 비슷해 헷갈린다.
 
 ### 6. 새벽 정리
@@ -232,7 +232,7 @@ trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다.
 작은 것부터 시작해 영역 경계가 파일 경계가 되게 만든 뒤 큰 분해로 가며, 줄 하나가 이슈 하나·PR 하나다.
 
 1. 아크를 3번으로 옮기고 WAIT 상수 중복을 지우고 도구 4개를 보관 폴더로 옮긴다. 9/6에 끝났다(#294).
-2. bot.ts의 답장 파이프라인 2벌을 1벌로 합쳐 밖으로 뺀다. 4번과 5번의 경계가 확정된다.
+2. bot.ts의 답장 파이프라인 2벌을 1벌로 합쳐 밖으로 뺀다. 4번과 5번의 경계가 확정된다. 9/6에 끝났다(#296).
 3. nightly.ts에서 문안을 뗀다.
 4. 선톡 한 통을 보내는 공통 함수를 만들어 followup·presence를 줄인다.
 5. db.ts를 표 묶음으로 나누고 밖의 raw SQL과 안의 정책 함수를 제자리로 보낸다. 임포터가 24개라 가장 넓지만, 재내보내기 파일을 남기면 임포터는 안 건드린다.
