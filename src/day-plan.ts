@@ -112,6 +112,16 @@ export interface DayPlan {
 export const isAwayUnavail = (b: PlanBlock): boolean =>
   b.responsiveness === "unavailable" && !/잠|수면|숙면/.test(b.activity);
 
+// 잠 블록 — 답장 텀 판정(reply-timing)과 지금 상황 문단(context)이 같은 기준으로 잠을 가린다.
+// 활동 이름이 "잠·수면·숙면"이고 답장 여건이 불가면 잠이다. "잘 준비"처럼 준비 단계는 아직 깨어 있다.
+export const isSleeping = (b: {
+  activity: string;
+  responsiveness: string;
+}): boolean =>
+  toResponsiveness(b.responsiveness) === "unavailable" &&
+  /잠|수면|숙면/.test(b.activity) &&
+  !/준비/.test(b.activity);
+
 // trace.ts가 슬랙에 각본 생성 프롬프트를 올릴 때도 이 시스템 문장을 함께 보여준다.
 export const PLAN_SYSTEM = `너는 한 인물의 하루 흐름을 짜는 작가다. 과장 없이, 실제 그 직업과 성격의 사람이 보낼 법한 평범한 하루를 시간 블록으로 만든다. 루틴이 기본이고 변화는 잔잔하게 준다.`;
 

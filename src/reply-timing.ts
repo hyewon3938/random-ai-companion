@@ -14,7 +14,7 @@
 // 텀이 나온 경위는 TimingTrace로 남겨 판단 근거에 적는다.
 
 import { currentBlock } from "./context.js";
-import { blockCategory, type PlanBlock } from "./day-plan.js";
+import { blockCategory, isSleeping, type PlanBlock } from "./day-plan.js";
 import {
   recordDayActual,
   getDayActuals,
@@ -82,15 +82,6 @@ const toMin = (hhmm: string): number => {
 
 const stamp = (): string =>
   `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;
-
-// '취침 준비'는 아직 깨어 있는 것. 실제로 깊이 자는 시간만 잠으로 본다.
-export const isSleeping = (b: {
-  activity: string;
-  responsiveness: string;
-}): boolean =>
-  toResponsiveness(b.responsiveness) === "unavailable" &&
-  /잠|수면|숙면/.test(b.activity) &&
-  !/준비/.test(b.activity);
 
 /**
  * 이 잠 블록에서 이미 깨서 답한 적이 있는가.

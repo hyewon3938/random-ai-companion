@@ -90,6 +90,14 @@ export const kstLogicalClock = (): string => {
   return `${String(hh).padStart(2, "0")}:${String(now.getUTCMinutes()).padStart(2, "0")}`;
 };
 
+// 벽시계 문자열("YYYY-MM-DD HH:MM:SS")의 시각을 각본 표기로 옮긴다(02:30 → "26:30"). 각본 블록의
+// 시작·끝과 같은 좌표로 놓고 뺄셈해야 자정을 넘긴 시각이 어긋나지 않는다.
+export const logicalClockOf = (ts: string): string => {
+  const h = Number(ts.slice(11, 13));
+  const hh = h < DAY_BOUNDARY_HOUR ? h + 24 : h;
+  return `${String(hh).padStart(2, "0")}:${ts.slice(14, 16)}`;
+};
+
 // 각본 표기를 사람이 읽는 시계 표기로 되돌린다(26:30 → 02:30). 프롬프트·슬랙처럼 사람이나
 // 모델이 읽는 자리에만 쓰고, 저장 키로는 원래 표기를 그대로 둔다.
 export const clockLabel = (hhmm: string): string => {
