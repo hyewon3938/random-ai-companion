@@ -47,7 +47,7 @@ const columnNames = (table: string): string[] =>
   );
 
 test("빈 DB는 최신 버전으로 선다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 7);
+  assert.equal(db.pragma("user_version", { simple: true }), 8);
 });
 
 test("새로 만든 DB에도 호출 관측 칸 둘이 있다", () => {
@@ -81,6 +81,10 @@ test("남겨야 할 관계 항목과 유저 프로필 컬럼은 그대로다", (
     "cautions",
     "history",
     "feelings",
+    "user_state",
+    "user_state_cause",
+    "user_state_tone",
+    "user_state_since",
   ])
     assert.ok(relation.includes(c), `relationships.${c}이 없다`);
 

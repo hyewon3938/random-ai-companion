@@ -1,4 +1,4 @@
-// 답장 한 통을 만드는 순서 — 말투 굳히기, 검색 태그, 프롬프트 조립, 호출, 신호 반영, 폐기 판정.
+// 답장 한 통을 만드는 순서 — 말투 굳히기, 검색 태그와 상대 상태 판정, 프롬프트 조립, 호출, 신호 반영, 폐기 판정.
 //
 // 즉답·틈틈이 답장(bot.ts의 respond), 불가 구간이 끝난 뒤의 몰아 답장(bot.ts의 깨우기
 // 핸들러), 약속 시각의 답장(bot.ts의 약속 핸들러)이 같은 순서로 답장을 만든다. 서로 다른
@@ -12,8 +12,8 @@
 // 만드는 동안 유저가 말을 더 보냈거나 답이 비어 있으면 null을 돌려준다. 그때도 호출 기록에는
 // 버린 이유와 객체를 어느 길로 읽었는지가 남는다 — 형식이 깨진 날을 되짚는 자리다.
 //
-// 모델을 부르는 자리는 인자(ask)로 바꿔 끼울 수 있다. 검사는 정해 둔 답을 돌려주는 함수를
-// 넘겨 프롬프트에 무엇이 들어갔는지, 어느 답을 버렸는지를 본다(test/reply-compose.test.ts).
+// 모델을 부르는 자리는 인자(ask·judge)로 바꿔 끼울 수 있다. 검사는 정해 둔 답을 돌려주는
+// 함수를 넘겨 프롬프트에 무엇이 들어갔는지, 어느 답을 버렸는지를 본다(test/reply-compose.test.ts).
 
 import { config } from "./config.js";
 import { buildSystemBlocks, type BuildTrace } from "./context.js";
@@ -30,10 +30,14 @@ import { REPLY_MAX_TOKENS, type ReplySignals } from "./reply-signal.js";
 import { recordHold } from "./reply-timing.js";
 import {
   applyReplySignals,
+  applyUserState,
   speechRatchet,
   type RelChange,
 } from "./relationship-update.js";
 import { pickTags } from "./tag-pick.js";
+import { judgeUserState, userStateLabel, type UserStateVerdict } from "./user-state.js";
+import { getRelationship } from "./db.js";
+import { logicalDateOf } from "./kst.js";
 import { RECENT_MESSAGE_FETCH_MAX, RECENT_TURN_COUNT } from "./thresholds.js";
 import { lastTurns, toTurns } from "./turns.js";
 
@@ -138,6 +142,8 @@ export interface ComposeInput {
   /** 로그 머리말 — "[send]"·"[wake]"처럼 어느 길에서 만들었는지. */
   logTag: string;
   ask?: ReplyAsker;
+  /** 상대 상태 판정 자리 — 검사가 정해 둔 판정을 넘긴다. 없으면 모델을 부른다. */
+  judge?: (characterId: number, chatId: string) => Promise<UserStateVerdict>;
 }
 
 export interface ComposedReply {
@@ -152,7 +158,7 @@ export interface ComposedReply {
 /**
  * 답장 한 통을 만든다. 보내지 않으며, 버린 답장은 null이다.
  *
- * 순서: 말투 래칫 → 검색 태그 → 3층 프롬프트 조립 → 대화 기록 → 호출 → 관계 신호 저장 →
+ * 순서: 말투 래칫 → 검색 태그·상대 상태 판정 → 3층 프롬프트 조립 → 대화 기록 → 호출 → 관계 신호 저장 →
  * stay 신호로 일정 기록 → 빈 답·새 메시지 폐기 판정. 호출 기록(llm_calls)에는 검색한
  * 태그·기억, 대화 길이, 관계 갱신, 객체를 읽은 길, 말풍선 수가 붙고, 기록이 실패해도 답장은
  * 그대로 나간다.
@@ -162,6 +168,7 @@ export const composeReply = async (
 ): Promise<ComposedReply | null> => {
   const { characterId, chatId, turn, logTag } = input;
   const ask = input.ask ?? askReplyWith;
+  const judge = input.judge ?? judgeUserState;
 
   // 말투 래칫 — 프롬프트를 조립하기 전에 부른다. 저장해 두면 이번 답장은 물론 최근 대화를
   // 안 보는 경로(선톡 문안)도 같은 값을 읽는다. 단계·호칭은 답을 읽은 뒤에 같은 목록에 쌓인다.
@@ -178,7 +185,13 @@ export const composeReply = async (
     schedules: [],
     dropped: [],
   };
-  const pick = await pickTags(characterId, turn.text);
+  // 상대 상태 판정은 검색 태그와 나란히 돈다 — 둘 다 짧은 호출이고 서로 모른다. 바뀐 값은
+  // 조립 전에 저장해야 이번 답장이 읽는다(관계 갱신 목록에 같이 쌓인다).
+  const [pick, verdict] = await Promise.all([
+    pickTags(characterId, turn.text),
+    judge(characterId, chatId),
+  ]);
+  relUpdates.push(...applyUserState(characterId, verdict, kstStamp()));
   // 상황 문단은 호출부가 준 것 뒤에 붙잡기 판정의 결정을 잇는다 — 둘 다 있을 수 있다.
   const situation = [
     input.situation ?? "",
@@ -254,10 +267,17 @@ export const composeReply = async (
     console.log(`${logTag} 생성 중 새 메시지 도착 — 폐기 (chat=${chatId})`);
     return null;
   }
+  const rel = getRelationship(characterId);
   attach({
     stay: signals.stay,
     note: signals.note,
-    userUpset: signals.userUpset,
+    // 상대 상태 — 이번 판정이 바꿨는지와 지금 값. 판정 호출 번호는 트레이스가 답장 옆에 적는다.
+    userState: {
+      changed: verdict.changed,
+      failed: verdict.failed,
+      callId: verdict.callId,
+      label: rel ? userStateLabel(rel, logicalDateOf(kstStamp())) : null,
+    },
     bubbles: bubbles.length,
     // 말풍선 사이 간격은 발송할 때 글자 수에서 나온다(1초 안쪽 흔들림) — 길이를 남겨 둔다.
     bubbleLens: bubbles.map((b) => b.length),

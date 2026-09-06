@@ -792,8 +792,6 @@ const respond = async (
       kind,
       // 발송·폐기 결과를 이 답장을 만든 호출의 트레이스에 잇는다.
       callId: reply.callId,
-      // 상대가 서운해하는 기색을 읽었다는 표시 — 발송할 때 messages.meta_json으로 옮긴다.
-      userUpset: signals.userUpset,
     });
     reply.attach({ sendAt: scheduled.sendAt });
     // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
@@ -817,17 +815,6 @@ const respond = async (
 
 // 저장해 둔 답장을 실제로 내보내는 자리 — pending.ts가 정한 시각에 부른다.
 // (pending.ts가 bot.ts를 부르면 서로 물고 늘어져서, 발송만 여기서 끼워 넣는다.)
-// 답장을 만들 때 붙은 서운함 표시를 행에서 읽는다 — 발송 기록으로 옮겨야 나중에 침묵
-// 팔로업 틱이 messages만 보고 달래기를 보낼지 정할 수 있다.
-const rowUpset = (metaJson: string | null): boolean => {
-  if (!metaJson) return false;
-  try {
-    return (JSON.parse(metaJson) as { userUpset?: unknown }).userUpset === true;
-  } catch {
-    return false;
-  }
-};
-
 setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
   const kind = (row.kind === "recover" ? "recover" : "reply") as SendKind;
   const { sent, error } = await sendBubbleList(row.chat_id, bubbles);
@@ -846,7 +833,6 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
     kstStamp(),
     {
       kind,
-      ...(rowUpset(row.meta_json) ? { userUpset: true } : {}),
       ...(sent.length < bubbles.length
         ? { partial: `${sent.length}/${bubbles.length}` }
         : {}),
@@ -916,8 +902,6 @@ setWakeHandler(async (row: PendingReplyRow) => {
       {
         kind: "reply",
         gathered: meta.blockStart ?? true,
-        // 이 길은 pending을 타지 않아 표시를 옮길 자리가 여기다.
-        ...(signals.userUpset ? { userUpset: true } : {}),
         ...(sent.length < bubbles.length
           ? { partial: `${sent.length}/${bubbles.length}` }
           : {}),
@@ -1052,7 +1036,6 @@ setPromiseHandler(async (row: PendingReplyRow) => {
       {
         kind: "reply",
         promised: true,
-        ...(signals.userUpset ? { userUpset: true } : {}),
         ...(sent.length < bubbles.length
           ? { partial: `${sent.length}/${bubbles.length}` }
           : {}),

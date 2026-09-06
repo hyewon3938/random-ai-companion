@@ -259,20 +259,11 @@ export const proactiveSinceLastUser = (chatId: string): number =>
     like: [PROACTIVE],
   });
 
-// 달래기 선톡을 보낼지 정하는 질의 둘. 마지막 유저 발화 이후 구간을 통째로 본다 — 마지막
-// 메시지 하나만 보면 서운함 표시가 붙은 답장 뒤에 자리 비움 예고가 끼었을 때 표시가 가려져
-// 달래기가 영영 안 나간다.
-
-/** 그 구간의 캐릭터 답장에 상대 서운함 표시가 붙었는가(reply-signal의 userUpset). */
-export const upsetSinceLastUser = (chatId: string): boolean =>
-  hasAssistantMeta(chatId, sinceLastUser(chatId), {
-    after: true,
-    like: ['%"userUpset":true%'],
-  });
-
-/** 그 구간에 달래기 선톡이 이미 나갔는가 — 한 번 서운해한 것에 한 통이다. */
-export const mendSentSinceLastUser = (chatId: string): boolean =>
-  hasAssistantMeta(chatId, sinceLastUser(chatId), {
+/** 그 시각 이후 달래기 선톡이 이미 나갔는가 — 상대 상태 한 발현에 한 통이다. 기준 시각은
+ * 관계 행의 상태 시작 시각(user_state_since)이고, 그 상태가 이어지는 동안 자리 비움 예고가
+ * 끼어도 구간을 통째로 보므로 가려지지 않는다. */
+export const mendSentSince = (chatId: string, since: string): boolean =>
+  hasAssistantMeta(chatId, since, {
     after: true,
     like: [kindPattern("mend")],
   });

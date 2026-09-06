@@ -14,15 +14,22 @@
 //
 // 세 항목 모두 하루 동안 같은 데이터층(context.ts)에 실리므로 갱신하면 그 층의 프롬프트 캐시를
 // 새로 쓴다. 자주 바뀌는 값이 아니라 그 비용은 받아들인다.
+//
+// 관계 행에는 일곱 항목 밖에 상대의 오늘 상태 칸도 있다(이슈 #309). 이 값은 답장마다 판정
+// 호출(user-state)이 정하고 여기의 applyUserState가 바뀐 것만 적는다. 실시간 꼬리에 실리는
+// 값이라 캐시를 건드리지 않고, 새벽 정리가 읽은 뒤 비운다.
 
 import { currentSpeechLevel } from "./speech-level.js";
 import {
   getRelationship,
   setSpeechLevel,
+  setUserState,
   updateRelationshipNotes,
   type RelationshipNotes,
 } from "./db.js";
 import type { ReplySignals } from "./reply-signal.js";
+import { userStateLabel, type UserStateVerdict } from "./user-state.js";
+import { logicalDateOf } from "./kst.js";
 
 /** 관계 한 항목이 실제로 바뀐 기록. 트레이스의 *관계 갱신* 줄이 이 모양을 읽는다. */
 export interface RelChange {
@@ -92,4 +99,41 @@ export const applyReplySignals = (
 
   if (changes.length) updateRelationshipNotes(characterId, notes, now);
   return changes;
+};
+
+/**
+ * 상대 상태 판정을 반영한다. 판정이 그대로거나 실패했으면 건드리지 않고, 새 값이 지금 값과
+ * 글자까지 같으면 저장도 기록도 하지 않는다. 프롬프트를 조립하기 전에 불러야 이번 답장이
+ * 바뀐 상태를 읽는다. now는 트레이스 줄의 날짜 표기 기준이다.
+ */
+export const applyUserState = (
+  characterId: number,
+  verdict: UserStateVerdict,
+  now: string,
+): RelChange[] => {
+  if (!verdict.changed || !verdict.state) return [];
+  const rel = getRelationship(characterId);
+  const next = verdict.state;
+  if (
+    rel &&
+    rel.user_state === next.state &&
+    rel.user_state_cause === next.cause &&
+    rel.user_state_tone === next.tone &&
+    rel.user_state_since === next.since
+  )
+    return [];
+  setUserState(characterId, next);
+  const today = logicalDateOf(now);
+  const from = rel ? userStateLabel(rel, today) : null;
+  const to =
+    userStateLabel(
+      {
+        user_state: next.state,
+        user_state_cause: next.cause,
+        user_state_tone: next.tone,
+        user_state_since: next.since,
+      },
+      today,
+    ) ?? next.state;
+  return [{ field: "상대 상태", from, to }];
 };

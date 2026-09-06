@@ -34,6 +34,7 @@ import {
 } from "../recall.js";
 import { REPLY_ENVELOPE } from "../reply-signal.js";
 import { clockLabel } from "../kst.js";
+import { userStateLabel } from "../user-state.js";
 import {
   ACTIVITY_CATEGORY_NAME,
   RESPONSIVENESS_NAME,
@@ -287,6 +288,17 @@ export const assembleSystemBlocks = (
   const todaySection = input.notes.length
     ? `[오늘 메모 — 대화하며 적어 둔 것]\n${input.notes.map((n) => `- ${n}`).join("\n")}`
     : "";
+  // 상대의 지금 상태 — 답장마다 판정한 값. 하루 안에 몇 번이고 바뀌는 값이라 실시간 꼬리에 둔다.
+  const stateLabel = input.rel
+    ? userStateLabel(input.rel, input.logicalToday)
+    : null;
+  const userStateSection = stateLabel
+    ? [
+        `[상대의 지금 상태 — 답장마다 판정해 둔 것]`,
+        `- ${stateLabel}`,
+        `- 이 상태가 풀렸다는 말이 아래 대화에 없으면 아직 그렇다고 보고 답한다. 네가 사과했다고 풀린 것이 아니다. 나 때문에 안 좋은 상태면 웃어넘기지 않고, 상대의 다른 일 때문이면 그 일을 마음에 두고 있다는 것이 말에 드러나게 한다.`,
+      ].join("\n")
+    : "";
   // 직전에 대화한 날 — 실시간 꼬리에 둔다(매일 바뀌는 값이라 캐시 경계 앞에 두면 캐시를 깬다).
   const lastTalkSection = input.lastTalk
     ? `[직전 대화]\n마지막으로 대화한 날은 ${input.lastTalk}다. 그 뒤로는 오늘 다시 연락이 닿았다.`
@@ -297,6 +309,7 @@ export const assembleSystemBlocks = (
     oldDiarySection(input.search.oldDiaries),
     scheduleSearchSection(input.search.schedules, input.today),
     todaySection,
+    userStateSection,
     lastTalkSection,
     contactGapSection(input.contactGap),
     nowSection(input),

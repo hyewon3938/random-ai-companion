@@ -275,14 +275,11 @@ export const schedulePendingReply = (p: {
   kind: string;
   /** 이 답장을 만든 모델 호출 번호. 발송·폐기 결과를 그 호출의 트레이스에 잇는다. */
   callId?: number | null;
-  /** 상대가 서운해하는 기색을 답장이 읽었다(reply-signal의 userUpset). */
-  userUpset?: boolean;
 }): { id: number; sendAt: string } => {
   const sendAt = stampAfter(p.waitMs);
   const createdAt = stamp();
-  // 표시는 행에 실어 두고 발송할 때 messages.meta_json으로 옮긴다 — 달래기 선톡을 보낼지는
-  // 나중에 침묵 팔로업 틱이 messages만 읽고 정하므로, 답장이 나가는 자리에서 넘겨줘야 한다.
-  const metaJson = p.userUpset ? JSON.stringify({ userUpset: true }) : null;
+  // 답장 행은 meta_json을 쓰지 않는다 — 깨우기·약속 행만 자기 근거를 싣는다.
+  const metaJson = null;
   const id = insertPendingReply({
     chatId: p.chatId,
     characterId: p.characterId,

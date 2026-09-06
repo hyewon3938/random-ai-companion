@@ -65,6 +65,10 @@ const rel: RelationshipRow = {
   cautions: null,
   history: null,
   feelings: null,
+  user_state: null,
+  user_state_cause: null,
+  user_state_tone: null,
+  user_state_since: null,
   met_at: "2026-08-30 12:00:00",
   updated_at: "2026-09-05 04:00:00",
 };

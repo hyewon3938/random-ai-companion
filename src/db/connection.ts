@@ -48,6 +48,10 @@ const TABLES: Record<string, string> = {
   cautions TEXT,
   history TEXT,
   feelings TEXT,
+  user_state TEXT,
+  user_state_cause TEXT CHECK (user_state_cause IN ('char','other')),
+  user_state_tone TEXT CHECK (user_state_tone IN ('good','neutral','bad')),
+  user_state_since TEXT,
   updated_at TEXT`,
 
   // 기억 한 건 = 저장 항목(item_type) + 누구 쪽(owner) + 영역(area) + 무엇(subject) + 출처(origin)가 키.
@@ -362,7 +366,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -769,10 +773,43 @@ const migrateToV7 = (): void => {
   console.log(`[db] 스키마를 v7로 옮겼다`);
 };
 
+// v8: 관계에 상대의 오늘 상태 칸 넷을 더한다(#309).
+//
+// 답장마다 작은 판정 호출이 상대의 지금 상태를 정하고, 바뀐 것만 여기에 적는다. 하루짜리
+// 값이라 새벽 정리가 읽어 마음·조심할 것에 녹인 뒤 비운다. 관계 행 안에 두는 이유는 관계를
+// 적는 길이 relationship-update 한 파일로 모여 있어서다.
+const migrateToV8 = (): void => {
+  const cols = db.prepare(`PRAGMA table_info(relationships)`).all() as {
+    name: string;
+  }[];
+  const add: [string, string][] = [
+    ["user_state", "user_state TEXT"],
+    [
+      "user_state_cause",
+      "user_state_cause TEXT CHECK (user_state_cause IN ('char','other'))",
+    ],
+    [
+      "user_state_tone",
+      "user_state_tone TEXT CHECK (user_state_tone IN ('good','neutral','bad'))",
+    ],
+    ["user_state_since", "user_state_since TEXT"],
+  ];
+
+  db.transaction(() => {
+    for (const [column, ddl] of add)
+      if (!cols.some((c) => c.name === column))
+        db.exec(`ALTER TABLE relationships ADD COLUMN ${ddl}`);
+    db.pragma(`user_version = 8`);
+  })();
+
+  console.log(`[db] 스키마를 v8로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < 5) migrateToV5();
 if (schemaVersion() < 6) migrateToV6();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV7();
+if (schemaVersion() < 7) migrateToV7();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV8();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를

@@ -18,11 +18,10 @@ const { createFixtureCharacter } = await import("../src/eval/fixture-character.j
 const {
   awayNoticeCountToday,
   awayNoticeSent,
-  mendSentSinceLastUser,
+  mendSentSince,
   proactiveCountToday,
   proactiveKindCountToday,
   proactiveSinceLastUser,
-  upsetSinceLastUser,
 } = await import("../src/proactive-policy.js");
 const { userBurstGaps } = await import("../src/reply-timing.js");
 
@@ -39,9 +38,9 @@ before(() => {
   say("2026-09-06 08:00:00", { kind: "morning", proactive: true });
   say("2026-09-06 09:00:00", { kind: "away", proactive: true, block: "09:30" });
   say("2026-09-06 11:00:00", { kind: "away", proactive: true, return: true, block: "09:30" });
-  say("2026-09-06 12:00:00", { kind: "reply", userUpset: true });
+  say("2026-09-06 12:00:00", { kind: "reply" });
   logMessage(CHAT, characterId, "user", "응", "2026-09-06 12:30:00");
-  say("2026-09-06 13:00:00", { kind: "reply", userUpset: true });
+  say("2026-09-06 13:00:00", { kind: "reply" });
   say("2026-09-06 14:00:00", { kind: "checkin", proactive: true });
   say("2026-09-06 15:00:00", { kind: "mend", proactive: true });
 });
@@ -63,15 +62,16 @@ test("자리 비움 예고는 블록별로 찾고 복귀 인사는 빼고 센다
 
 test("마지막 유저 말 이후 구간만 본다", () => {
   assert.equal(proactiveSinceLastUser(CHAT), 2);
-  assert.equal(upsetSinceLastUser(CHAT), true);
-  assert.equal(mendSentSinceLastUser(CHAT), true);
+  // 달래기는 상대 상태가 시작된 시각 뒤로만 찾는다
+  assert.equal(mendSentSince(CHAT, "2026-09-06 12:30:00"), true);
+  assert.equal(mendSentSince(CHAT, "2026-09-06 15:30:00"), false);
   // 유저가 한 번도 말하지 않은 방은 대화 전체를 본다
   logMessage("chat-quiet", characterId, "assistant", "말", "2026-09-06 09:00:00", {
     kind: "checkin",
     proactive: true,
   });
   assert.equal(proactiveSinceLastUser("chat-quiet"), 1);
-  assert.equal(upsetSinceLastUser("chat-quiet"), false);
+  assert.equal(mendSentSince("chat-quiet", "2026-09-06 00:00:00"), false);
 });
 
 test("유저가 이어 보낸 텀만 세고 답장이 끼거나 2분을 넘으면 뺀다", () => {
