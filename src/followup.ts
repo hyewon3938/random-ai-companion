@@ -10,12 +10,10 @@
 // 문안은 대화와 같은 3층(buildSystemBlocks)에 상황 문단을 더해 만든다 — 앞 두 층 캐시를
 // 대화와 함께 쓴다. 경과 시간은 Date.now()로 잰다(getKstNow().getTime()은 9시간 어긋난다).
 //
-// 발송이 실패하면 만든 문안을 버리지 않고 proactive-policy의 보관함에 넣어 둔다. 다음 틱이
-// 같은 자리에 다시 오면 — 여기까지 온 것 자체가 창·침묵 조건이 아직 맞다는 뜻이라 — 모델을
-// 다시 부르지 않고 그 문안부터 보낸다.
+// 셋 다 문안을 만들어 보내는 일은 proactive-send의 sendProactiveDraft에 맡긴다 — 다른 틱과의
+// 잠금, 발송이 실패한 문안을 다음 틱까지 들고 있는 것, 발송 직전 재확인이 거기 있다. 이 파일은
+// 어느 종류를 언제 보낼지만 정한다.
 
-import { chatJson, type CallMeta } from "./llm.js";
-import { config } from "./config.js";
 import {
   db,
   getActiveCharacter,
@@ -25,31 +23,23 @@ import {
   mendSentSinceLastUser,
   proactiveKindCountToday,
   proactiveSinceLastUser,
-  recordSendFailure,
   upsetSinceLastUser,
   type CharacterRow,
 } from "./db.js";
+import { currentBlock } from "./context.js";
+import { proactiveAllowed } from "./proactive-policy.js";
 import {
-  sendProactive,
-  acquireProactive,
-  releaseProactive,
-  logErr,
-} from "./bot.js";
-import { buildSystemBlocks, currentBlock } from "./context.js";
-import {
-  holdFailedDraft,
-  proactiveAllowed,
-  takeHeldDraft,
-  type HeldDraft,
-} from "./proactive-policy.js";
-import { traceProactiveFail } from "./reply-trace.js";
+  noOverlap,
+  readSendText,
+  readText,
+  sendProactiveDraft,
+} from "./proactive-send.js";
 import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
 import {
   GOODNIGHT_SILENCE_MS,
   GOODNIGHT_WINDOW,
   MEND_SILENCE_MS,
   PROACTIVE_DAILY_MAX,
-  PROACTIVE_RECENT_LINES,
   RECENT_USER_MS,
 } from "./thresholds.js";
 
@@ -130,18 +120,6 @@ const catchupSituation = (): string =>
   ].join("\n");
 
 // 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
-let running = false;
-
-export const runFollowupTick = async (): Promise<void> => {
-  if (running) return;
-  running = true;
-  try {
-    await followupTickBody();
-  } finally {
-    running = false;
-  }
-};
-
 const followupTickBody = async (): Promise<void> => {
   const rows = db
     .prepare(`SELECT * FROM characters WHERE status = 'active'`)
@@ -187,54 +165,17 @@ const followupTickBody = async (): Promise<void> => {
       minutesSince(lu) >= GOODNIGHT_SILENCE_MS / 60_000 &&
       proactiveSinceLastUser(c.chat_id) < 1
     ) {
-      // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
-      if (!acquireProactive(c.chat_id)) continue;
-      // 호출 번호를 catch에서도 봐야 한다 — 발송에 실패하면 이 문안 스레드에 실패를 단다.
-      const meta: CallMeta = {
-        purpose: "goodnight",
+      await sendProactiveDraft({
         characterId: c.id,
         chatId: c.chat_id,
-      };
-      // 앞 틱에서 못 나간 문안이 있으면 모델을 다시 부르지 않고 그것부터 보낸다 — 여기까지
-      // 온 것이 곧 밤 인사 창과 침묵 조건이 아직 맞다는 뜻이다(이슈 #269).
-      let outgoing: HeldDraft | null = takeHeldDraft(c.chat_id, "goodnight");
-      try {
-        if (!outgoing) {
-          const g = await chatJson<{ text: string }>(
-            buildSystemBlocks(c.id, c.chat_id, {
-              recent: PROACTIVE_RECENT_LINES,
-              situation: goodnightSituation(),
-            }),
-            "위 상황 문단대로 문안을 만들어.",
-            300,
-            config.model,
-            meta,
-          );
-          if (g.text)
-            outgoing = { kind: "goodnight", text: g.text, madeAt: Date.now() };
-        }
-        // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 굿나잇은 필요 없다)
-        // 다른 경로가 뭔가 보냈으면(마지막 메시지가 바뀜) 접는다.
-        if (outgoing && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
-          await sendProactive(c.chat_id, c.id, outgoing.text, "goodnight");
-          outgoing = null; // 나갔으니 들고 있지 않는다
-          console.log(`[followup] goodnight to ${c.chat_id}`);
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        logErr("[followup] 굿나잇 전송 실패:", e);
-        recordSendFailure(c.chat_id, c.id, "goodnight", msg);
-        traceProactiveFail({
-          characterId: c.id,
-          kind: "goodnight",
-          error: msg,
-          callId: meta.callId,
-        });
-        // 한 통도 못 나갔으면 문안을 들고 있는다 — 다음 틱이 창 안이면 그대로 다시 보낸다.
-        if (outgoing) holdFailedDraft(c.chat_id, outgoing);
-      } finally {
-        releaseProactive(c.chat_id);
-      }
+        kind: "goodnight",
+        lastSentAt: last.sent_at,
+        situation: goodnightSituation(),
+        maxTokens: 300,
+        read: readText,
+        label: "[followup] 굿나잇",
+        sentLog: `[followup] goodnight to ${c.chat_id}`,
+      });
       continue;
     }
 
@@ -253,52 +194,17 @@ const followupTickBody = async (): Promise<void> => {
       !mendSentSinceLastUser(c.chat_id) &&
       proactiveCountToday(c.chat_id, dayStart()) < PROACTIVE_DAILY_MAX
     ) {
-      if (!acquireProactive(c.chat_id)) continue;
-      // 호출 번호를 catch에서도 봐야 한다 — 발송에 실패하면 이 문안 스레드에 실패를 단다.
-      const meta: CallMeta = {
-        purpose: "mend",
+      await sendProactiveDraft({
         characterId: c.id,
         chatId: c.chat_id,
-      };
-      // 앞 틱에서 못 나간 달래기 문안이 있으면 그것부터 보낸다 — 여기까지 온 것이 서운함 표시와
-      // 침묵이 아직 그대로라는 뜻이다.
-      let outgoing: HeldDraft | null = takeHeldDraft(c.chat_id, "mend");
-      try {
-        if (!outgoing) {
-          const m = await chatJson<{ text: string }>(
-            buildSystemBlocks(c.id, c.chat_id, {
-              recent: PROACTIVE_RECENT_LINES,
-              situation: mendSituation(),
-            }),
-            "위 상황 문단대로 문안을 만들어.",
-            300,
-            config.model,
-            meta,
-          );
-          if (m.text)
-            outgoing = { kind: "mend", text: m.text, madeAt: Date.now() };
-        }
-        // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나(그럼 달래기는 필요 없다)
-        // 다른 경로가 뭔가 보냈으면 접는다.
-        if (outgoing && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
-          await sendProactive(c.chat_id, c.id, outgoing.text, "mend");
-          outgoing = null; // 나갔으니 들고 있지 않는다
-          console.log(`[followup] mend to ${c.chat_id}`);
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        logErr("[followup] 달래기 전송 실패:", e);
-        recordSendFailure(c.chat_id, c.id, "mend", msg);
-        traceProactiveFail({
-          characterId: c.id,
-          kind: "mend",
-          error: msg,
-          callId: meta.callId,
-        });
-        if (outgoing) holdFailedDraft(c.chat_id, outgoing);
-      } finally {
-        releaseProactive(c.chat_id);
-      }
+        kind: "mend",
+        lastSentAt: last.sent_at,
+        situation: mendSituation(),
+        maxTokens: 300,
+        read: readText,
+        label: "[followup] 달래기",
+        sentLog: `[followup] mend to ${c.chat_id}`,
+      });
       continue;
     }
 
@@ -319,52 +225,18 @@ const followupTickBody = async (): Promise<void> => {
     const block = currentBlock(c.id);
     if (!block || block.responsiveness === "unavailable") continue; // 운전·잠 등엔 못 보냄
 
-    // 다른 선톡 틱·답장이 이 chat에 진행 중이면 이번 틱은 접는다
-    if (!acquireProactive(c.chat_id)) continue;
-    // 호출 번호를 catch에서도 봐야 한다 — 발송에 실패하면 이 문안 스레드에 실패를 단다.
-    const meta: CallMeta = {
-      purpose: "catchup",
+    await sendProactiveDraft({
       characterId: c.id,
       chatId: c.chat_id,
-    };
-    // 앞 틱에서 못 나간 근황 문안이 있으면 그것부터 보낸다 — 위 검사를 다 지나온 것이 네 시간
-    // 침묵도, 하루 한 통 상한도, 답할 수 있는 블록도 그대로라는 뜻이다.
-    let outgoing: HeldDraft | null = takeHeldDraft(c.chat_id, "catchup");
-    try {
-      if (!outgoing) {
-        const draft = await chatJson<{ send: boolean; text?: string }>(
-          buildSystemBlocks(c.id, c.chat_id, {
-            recent: PROACTIVE_RECENT_LINES,
-            situation: catchupSituation(),
-          }),
-          "위 상황 문단대로 문안을 만들어.",
-          500,
-          config.model, // 실시간성이라 대화 모델(sonnet)
-          meta,
-        );
-        if (draft.send && draft.text)
-          outgoing = { kind: "catchup", text: draft.text, madeAt: Date.now() };
-      }
-      // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 말을 걸었으면(답장이 담당) 근황톡을 접고,
-      // 다른 경로가 이미 보냈으면(마지막 메시지가 바뀜) 겹쳐 보내지 않는다.
-      if (outgoing && lastMessage(c.chat_id)?.sent_at === last.sent_at) {
-        await sendProactive(c.chat_id, c.id, outgoing.text, "catchup");
-        outgoing = null; // 나갔으니 들고 있지 않는다
-        console.log(`[followup] sent to ${c.chat_id} @ ${block.activity}`);
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      logErr("[followup] 전송 실패:", e);
-      recordSendFailure(c.chat_id, c.id, "catchup", msg);
-      traceProactiveFail({
-        characterId: c.id,
-        kind: "catchup",
-        error: msg,
-        callId: meta.callId,
-      });
-      if (outgoing) holdFailedDraft(c.chat_id, outgoing);
-    } finally {
-      releaseProactive(c.chat_id);
-    }
+      kind: "catchup",
+      lastSentAt: last.sent_at,
+      situation: catchupSituation(),
+      maxTokens: 500,
+      read: readSendText,
+      label: "[followup]",
+      sentLog: `[followup] sent to ${c.chat_id} @ ${block.activity}`,
+    });
   }
 };
+
+export const runFollowupTick = noOverlap(followupTickBody);
