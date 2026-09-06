@@ -191,6 +191,9 @@ const TABLES: Record<string, string> = {
   // 행이라 아직 답할 말이 없고, 유저가 그 구간에 말을 걸면 'wake'로 바뀐다. 이 구분이
   // 필요한 이유는 선톡을 막는 isWaiting이 'wake'만 세야 하기 때문이다 — 'return'까지 세면
   // 불가 구간 내내 모든 선톡 틱이 멈춰 다음 예고와 아침·점심 선톡이 창을 놓친다.
+  // 'promise'는 캐릭터가 답장에서 한 연락 약속이다(이슈 #308) — 문안 없이 약속 시각(각본 블록
+  // 경계)에 걸어 두고, 울리면 그때 모델을 불러 말을 만든다. meta_json에 약속 문장이 있다.
+  // 'return'처럼 선톡을 막지 않고, 유저가 말을 더 보내도 살아남는다.
   pending_replies: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id TEXT NOT NULL,
@@ -199,7 +202,7 @@ const TABLES: Record<string, string> = {
   bubbles_json TEXT NOT NULL,
   note_to_save TEXT,
   send_at TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover','wake','return')),
+  kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover','wake','return','promise')),
   meta_json TEXT,
   call_id INTEGER,
   status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','sent','superseded','failed')),
@@ -860,15 +863,16 @@ addColumn("llm_calls", "traced", "traced INTEGER NOT NULL DEFAULT 0", () => {
 // 이 답장을 만든 호출 번호. 발송·폐기 결과를 그 답장 스레드에 달 때 쓴다.
 addColumn("pending_replies", "call_id", "call_id INTEGER");
 
-// pending_replies.kind에 'return'을 더한다. 위 wake 이관과 같은 이유로 테이블을 다시 만들고,
-// 버전 번호 대신 CHECK 문구를 보고 판단한다.
-const migratePendingReturn = (): void => {
+// pending_replies.kind에 값을 더한다('return'·'promise'). 위 wake 이관과 같은 이유로 테이블을
+// 다시 만들고, 버전 번호 대신 CHECK 문구를 보고 판단한다 — 같은 스키마 판 안에서 값이 늘어난
+// 자리라 판 번호를 올리지 않았다. 새 값이 또 늘면 아래 호출에 한 줄 더한다.
+const rebuildPendingReplies = (marker: string): void => {
   const row = db
     .prepare(
       `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pending_replies'`,
     )
     .get() as { sql: string } | undefined;
-  if (!row || row.sql.includes("'return'")) return;
+  if (!row || row.sql.includes(`'${marker}'`)) return;
 
   db.pragma("foreign_keys = OFF");
   db.pragma("legacy_alter_table = ON");
@@ -900,20 +904,21 @@ const migratePendingReturn = (): void => {
       );
   })();
   db.pragma("legacy_alter_table = OFF");
-  console.log(`[db] pending_replies에 return을 더했다`);
+  console.log(`[db] pending_replies에 ${marker}를 더했다`);
 };
-migratePendingReturn();
+rebuildPendingReplies("return");
+rebuildPendingReplies("promise");
 
-// send_failures.kind에 'mend'(달래기 선톡)를 더한다. 위 두 이관과 같은 이유로 테이블을 다시
+// send_failures.kind에 값을 더한다('mend'). 위 이관과 같은 이유로 테이블을 다시
 // 만들고, 버전 번호 대신 CHECK 문구를 보고 판단한다. 이 표에는 인덱스가 없어 다시 만들 것도
 // 없다 — 실패 기록을 사람이 훑어보는 자리라 조회가 인덱스를 타지 않는다.
-const migrateSendFailureMend = (): void => {
+const rebuildSendFailures = (marker: string): void => {
   const row = db
     .prepare(
       `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'send_failures'`,
     )
     .get() as { sql: string } | undefined;
-  if (!row || row.sql.includes("'mend'")) return;
+  if (!row || row.sql.includes(`'${marker}'`)) return;
 
   db.pragma("foreign_keys = OFF");
   db.pragma("legacy_alter_table = ON");
@@ -931,8 +936,8 @@ const migrateSendFailureMend = (): void => {
       );
   })();
   db.pragma("legacy_alter_table = OFF");
-  console.log(`[db] send_failures에 mend를 더했다`);
+  console.log(`[db] send_failures에 ${marker}를 더했다`);
 };
-migrateSendFailureMend();
+rebuildSendFailures("mend");
 
 db.pragma("foreign_keys = ON");

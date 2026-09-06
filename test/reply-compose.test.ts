@@ -15,7 +15,7 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 
 const { db, logMessage, recordLlmCall } = await import("../src/db.js");
 const { createFixtureCharacter } = await import("../src/eval/fixture-character.js");
-const { composeReply, pendingUserTurn } = await import(
+const { composeReply, heldSituation, pendingUserTurn } = await import(
   "../src/reply-compose.js"
 );
 const { askReply } = await import("../src/reply-ask.js");
@@ -111,6 +111,34 @@ describe("composeReply", () => {
     const lastTurn = ask.turns[ask.turns.length - 1];
     assert.equal(lastTurn?.role, "user");
     assert.ok(lastTurn?.content.includes("오늘 뭐 했어"));
+  });
+
+  it("붙잡기 판정이 있으면 그 결과를 상황 문단으로 프롬프트 끝에 넣는다", async () => {
+    clearMessages();
+    logMessage(CHAT, characterId, "user", "가지 마", "2026-09-06 13:05:00");
+    const turn = pendingUserTurn(CHAT);
+    assert.ok(turn);
+    const ask = canned([reply(["알았어 안 갈게"])]);
+    await composeReply({
+      characterId,
+      chatId: CHAT,
+      turn,
+      situation: "[검사용 상황 문단] 자리를 비우려던 참이다.",
+      heldActual: { blockStart: "13:00", activity: "운동", outcome: "취소" },
+      context: {},
+      logTag: "[test]",
+      ask,
+    });
+    const last = ask.system[ask.system.length - 1]?.text ?? "";
+    assert.ok(last.includes("[검사용 상황 문단] 자리를 비우려던 참이다."));
+    assert.ok(last.includes("[붙잡기 판정 — 이미 정해진 것]"));
+    assert.ok(last.includes('"운동"을(를) 취소하고 남기로 했다'));
+    // 미룬 일정은 나중에 한다는 결로만 말하게 한다
+    assert.ok(
+      heldSituation({ activity: "팀 회식", outcome: "미룸" }).includes(
+        "미루고 지금은 상대 곁에 남기로 했다",
+      ),
+    );
   });
 
   it("markFrom을 주면 그 시각 이후 첫 메시지에 시간 표시가 붙는다", async () => {

@@ -53,6 +53,7 @@ export const SEND_KIND_NAME: Record<string, string> = {
   goodnight: "밤 인사 선톡",
   mend: "달래기 선톡",
   away: "자리비움 선톡",
+  promise: "약속 연락",
 };
 
 /** 토큰 네 칸만 있으면 어느 호출 행이든 받는다 — 전체 행과 요약 행이 같은 줄을 쓴다. */

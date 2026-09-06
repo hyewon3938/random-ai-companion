@@ -96,3 +96,30 @@ test("두 답의 신호를 합칠 때는 먼저 나온 값을 남긴다", () => 
   assert.equal(got.note, "먼저");
   assert.equal(got.stay, true);
 });
+
+test("연락 약속은 객체 안에서도 흘린 줄에서도 읽는다", () => {
+  const inside = parseReplyOutput(
+    '{"reply":["통화 끝나고 연락할게"],"promise":"통화 끝나고 다시 연락"}',
+  );
+  assert.equal(inside.parse, "json");
+  assert.equal(inside.signals.promise, "통화 끝나고 다시 연락");
+  const stray = parseReplyOutput(
+    '{"reply":["통화 끝나고 연락할게"]}\npromise: 통화 끝나고 다시 연락',
+  );
+  assert.equal(stray.parse, "stray");
+  assert.equal(stray.signals.promise, "통화 끝나고 다시 연락");
+});
+
+test("약속을 안 하면 null이고 합칠 때는 앞 것이 남는다", () => {
+  assert.equal(parseReplyOutput('{"reply":["응"]}').signals.promise, null);
+  const merged = mergeSignals(
+    { ...EMPTY_SIGNALS, promise: "회의 끝나고 연락" },
+    { ...EMPTY_SIGNALS, promise: "저녁 먹고 연락" },
+  );
+  assert.equal(merged.promise, "회의 끝나고 연락");
+  assert.equal(
+    mergeSignals(EMPTY_SIGNALS, { ...EMPTY_SIGNALS, promise: "저녁 먹고 연락" })
+      .promise,
+    "저녁 먹고 연락",
+  );
+});
