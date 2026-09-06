@@ -13,7 +13,7 @@
 | 1. 기반과 저장 | 기준값·이름표·시각 계산, 표와 컬럼, 모델 호출 방식 | config, kst, labels, thresholds, db, db/*, llm |
 | 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-pick, user-profile |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
-| 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, context/*, prompts/reply, turns, reply-signal, reply-ask, reply-compose, reply-promise, relationship-update, speech-level, reply-timing, proactive-policy |
+| 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, context/*, prompts/reply, turns, reply-signal, reply-ask, reply-compose, reply-promise, user-state, relationship-update, speech-level, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 3개, 크론표 | index, bot, pending, presence, followup, dispatch, proactive-send |
 | 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
 | 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, trace/*, reply-trace, feedback, tools/*, eval/* |
@@ -26,7 +26,7 @@
 
 > 이 색인은 `node scripts/gen-modules.mjs`가 위 영역 표와 각 파일 맨 위 주석의 첫 줄에서 만든다. 손으로 고치지 않는다. 줄 수는 영역에 든 파일의 합이다.
 
-### 1. 기반과 저장 · 4,033줄
+### 1. 기반과 저장 · 4,127줄
 
 - `src/config.ts` — 환경변수를 한 번 읽어 두는 자리.
 - `src/kst.ts` — 시각을 다루는 자리 — 한국 시간과 논리일 경계.
@@ -59,15 +59,16 @@
 - `src/day-plan.ts` — 하루 각본 — 캐릭터가 그날 무엇을 하는지 블록으로 만든다.
 - `src/schedule-dedupe.ts` — 같은 일정인지 가리는 자리 — 공백·기호를 지운 내용으로 견준다.
 
-### 4. 대화 생성 · 2,653줄
+### 4. 대화 생성 · 2,926줄
 
 - `src/context.ts` — 프롬프트를 조립하는 자리 — 읽기와 조립을 잇는 앞문.
 - `src/prompts/reply.ts` — 답장 프롬프트의 고정 문안 — 캐릭터를 가리지 않고 매번 같은 글자가 들어가는 층이다.
 - `src/turns.ts` — 대화 기록을 모델에 넘길 턴으로 옮기는 자리.
 - `src/reply-signal.ts` — 답장 객체 — 모델이 코드에 신호를 넘기는 통로.
 - `src/reply-ask.ts` — 답장 한 통을 받아 오는 자리.
-- `src/reply-compose.ts` — 답장 한 통을 만드는 순서 — 말투 굳히기, 검색 태그, 프롬프트 조립, 호출, 신호 반영, 폐기 판정.
+- `src/reply-compose.ts` — 답장 한 통을 만드는 순서 — 말투 굳히기, 검색 태그와 상대 상태 판정, 프롬프트 조립, 호출, 신호 반영, 폐기 판정.
 - `src/reply-promise.ts` — 답장에서 한 연락 약속을 코드가 지킬 시각으로 바꾼다.
+- `src/user-state.ts` — 답장마다 상대의 지금 상태를 판정하는 작은 호출.
 - `src/relationship-update.ts` — 관계 항목을 답장 자리에서 갱신하는 한 자리.
 - `src/speech-level.ts` — 지금 이 관계가 반말인지 존댓말인지 — 최근 캐릭터 답장의 종결어미로 판정한다.
 - `src/reply-timing.ts` — 답장 텀을 정하는 자리 — 두 태그 표 한 장.
@@ -76,7 +77,7 @@
 - `src/context/day-progress.ts` — 각본 위의 지금 — 지금 시각이 각본의 어느 블록인지, 지나온 블록, 빈자리를 메우는 잠.
 - `src/context/input.ts` — 프롬프트 재료 읽기 — 조립에 필요한 것을 DB와 시계에서 한 번에 읽어 값 묶음으로 만든다.
 
-### 5. 실행과 발송 · 2,665줄
+### 5. 실행과 발송 · 2,646줄
 
 - `src/index.ts` — 봇 프로세스의 시작점.
 - `src/bot.ts` — 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
@@ -86,7 +87,7 @@
 - `src/dispatch.ts` — 아침·점심·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 - `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
-### 6. 새벽 정리 · 2,112줄
+### 6. 새벽 정리 · 2,136줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 - `src/prompts/nightly.ts` — 새벽 정리가 모델에 넘기는 문안 — 일기·기억 정리·진행 반영 프롬프트와 선톡 상황 문단을 한 파일에 둔다.
@@ -95,7 +96,7 @@
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
-### 7. 관측과 운영 · 6,730줄
+### 7. 관측과 운영 · 6,746줄
 
 - `src/trace.ts` — 슬랙 트레이스 게시함 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
 - `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고를 게시함에 쌓는다.

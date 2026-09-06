@@ -4,7 +4,7 @@
 // 새벽 정리가 항목별로 고쳐 쓴다. 유저 프로필은 chat_id 기준이라 캐릭터가 바뀌어도 남는다.
 
 import { db } from "./connection.js";
-import type { SpeechLevel } from "../labels.js";
+import type { SpeechLevel, UserStateCause, UserStateTone } from "../labels.js";
 
 export interface CharacterRow {
   id: number;
@@ -107,6 +107,12 @@ export interface RelationshipRow {
   cautions: string | null;
   history: string | null;
   feelings: string | null;
+  /** 상대의 오늘 상태 — 답장마다 판정한 값 중 마지막으로 바뀐 것. 새벽 정리가 비운다. */
+  user_state: string | null;
+  user_state_cause: UserStateCause | null;
+  user_state_tone: UserStateTone | null;
+  /** 그 상태가 시작된 시각(KST 타임스탬프). */
+  user_state_since: string | null;
   met_at: string | null;
   updated_at: string | null;
 }
@@ -118,10 +124,38 @@ export const getRelationship = (
     .prepare(
       `SELECT stage, speech_level, speech_note, address_terms,
               rapport, cautions, history, feelings,
+              user_state, user_state_cause, user_state_tone, user_state_since,
               met_at, updated_at
          FROM relationships WHERE character_id = ?`,
     )
     .get(characterId) as RelationshipRow | undefined;
+
+/** 상대의 지금 상태 한 건 — 무엇인지, 무엇 때문인지, 결이 어떤지, 언제부터인지. */
+export interface UserStateValue {
+  state: string;
+  cause: UserStateCause;
+  tone: UserStateTone;
+  since: string;
+}
+
+/** 상대의 오늘 상태 칸 넷을 한 번에 쓴다. null이면 비운다. 관계의 updated_at은 새벽
+ * 정리가 항목을 고친 시각이라 여기서는 건드리지 않는다. */
+export const setUserState = (
+  characterId: number,
+  s: UserStateValue | null,
+): void => {
+  db.prepare(
+    `UPDATE relationships SET user_state = ?, user_state_cause = ?,
+       user_state_tone = ?, user_state_since = ?
+     WHERE character_id = ?`,
+  ).run(
+    s?.state ?? null,
+    s?.cause ?? null,
+    s?.tone ?? null,
+    s?.since ?? null,
+    characterId,
+  );
+};
 
 /** 말투 값만 바꾼다. 반말이 된 뒤 존댓말로 되돌리지 않는 판단은 부르는 쪽 몫. */
 export const setSpeechLevel = (

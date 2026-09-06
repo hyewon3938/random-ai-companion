@@ -1,4 +1,4 @@
-// 답장 자리에서 관계 세 항목을 갱신하는 relationship-update.ts를 검사한다 — 모델은 부르지 않는다.
+// 답장 자리에서 관계 세 항목과 상대의 오늘 상태를 갱신하는 relationship-update.ts를 검사한다 — 모델은 부르지 않는다.
 //
 // 말투는 존댓말에서 반말로만 가고 되돌아오지 않는다는 규칙과, 표본이 모자라면 손대지 않는 경계를
 // 본다. 답장 신호는 빈 값·공백·지금과 같은 값이면 저장도 기록도 없어야 하고, 달라진 항목만 골라
@@ -24,7 +24,7 @@ const { EMPTY_SIGNALS } = await import("../src/reply-signal.js");
 const { currentSpeechLevel } = await import("../src/speech-level.js");
 const { createFixtureCharacter } =
   await import("../src/eval/fixture-character.js");
-const { speechRatchet, applyReplySignals } =
+const { speechRatchet, applyReplySignals, applyUserState } =
   await import("../src/relationship-update.js");
 
 const reply = (
@@ -193,4 +193,50 @@ test("저장된 호칭이 없던 관계는 앞 값을 null로 기록한다", () 
   assert.equal(row.address_terms, "누나");
   assert.equal(row.stage, null);
   assert.equal(row.updated_at, NOW1);
+});
+
+test("상대 상태 판정은 바뀐 것만 저장하고 판정 실패·같은 값은 손대지 않는다", () => {
+  const stateId = createFixtureCharacter("chat-state");
+  const noChange = { changed: false, state: null, failed: false, callId: null };
+  assert.deepEqual(applyUserState(stateId, noChange, NOW1), []);
+  assert.deepEqual(applyUserState(stateId, { ...noChange, failed: true }, NOW1), []);
+  assert.equal(rel(stateId).user_state, null);
+
+  const verdict = {
+    changed: true,
+    failed: false,
+    callId: null,
+    state: {
+      state: "연락한다던 말을 안 지켜 서운함",
+      cause: "char" as const,
+      tone: "bad" as const,
+      since: "2026-09-06 13:50:00",
+    },
+  };
+  assert.deepEqual(applyUserState(stateId, verdict, NOW1), [
+    {
+      field: "상대 상태",
+      from: null,
+      to: "연락한다던 말을 안 지켜 서운함 (13:50부터 · 나 때문 · 안 좋음)",
+    },
+  ]);
+  const row = rel(stateId);
+  assert.equal(row.user_state, "연락한다던 말을 안 지켜 서운함");
+  assert.equal(row.user_state_cause, "char");
+  assert.equal(row.user_state_tone, "bad");
+  assert.equal(row.user_state_since, "2026-09-06 13:50:00");
+  // 같은 값은 저장도 기록도 없다
+  assert.deepEqual(applyUserState(stateId, verdict, NOW2), []);
+  // 바뀐 값은 앞 값과 함께 남고, 어제 시작한 상태는 날짜가 앞에 붙는다
+  const eased = {
+    ...verdict,
+    state: { ...verdict.state, state: "풀려서 평소대로", tone: "neutral" as const, since: "2026-09-07 09:10:00" },
+  };
+  assert.deepEqual(applyUserState(stateId, eased, "2026-09-07 09:15:00"), [
+    {
+      field: "상대 상태",
+      from: "연락한다던 말을 안 지켜 서운함 (9/6 13:50부터 · 나 때문 · 안 좋음)",
+      to: "풀려서 평소대로 (09:10부터 · 나 때문 · 보통)",
+    },
+  ]);
 });

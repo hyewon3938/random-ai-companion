@@ -189,7 +189,8 @@ test("답장 한 장은 유저 말과 호출 실패를 제자리에 붙인다", 
   assert.equal(lines[2], "> 이제 봤어 미안");
   assert.equal(lines[4], "> 뭐 하고 있었어?");
   assert.ok(text.includes(":x: *호출 실패* overloaded_error"));
-  assert.ok(text.includes("*답장 신호* 남음 없음 · 서운함 없음"));
+  assert.ok(text.includes("*답장 신호* 남음 없음"));
+  assert.ok(!text.includes("*상대 상태*"));
   assert.ok(text.includes("*오늘 메모* 추가 없음"));
 });
 

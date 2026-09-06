@@ -197,6 +197,7 @@ const REL_FIELDS: [keyof RelationshipRow, string][] = [
   ["cautions", "조심할 것"],
   ["history", "지나온 이야기"],
   ["feelings", "지금 마음"],
+  ["user_state", "상대의 오늘 상태"],
 ];
 
 const relValue = (

@@ -36,6 +36,7 @@ import {
   getDayPlanMadeBy,
   getDaySeed,
   getRelationship,
+  setUserState,
   updateRelationshipNotes,
   addSchedule,
   setScheduleTimeHint,
@@ -67,6 +68,7 @@ import {
   type RelationshipRow,
 } from "./db.js";
 import { buildSystemBlocks } from "./context.js";
+import { userStateLabel } from "./user-state.js";
 import { isSameScheduleContent } from "./schedule-dedupe.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import {
@@ -274,6 +276,7 @@ export interface NightlyGathered {
   // 그날 들은 것만 적었다(이슈 #264). 전부 싣지 않고 겹치는 것만 EXTRACT_USER_FACT_MAX까지.
   touchedUserFacts: string[];
   relationship: string; // 관계 일곱 항목의 지금 값
+  userState: string; // 상대의 오늘 상태 — 답장이 판정해 둔 마지막 값(없으면 빈 문자열)
   userProfile: string; // 대화로 채우는 상대 프로필 두 값(하는 일·사는 지역)의 지금 상태
   todayNotes: string[]; // 그 하루 동안 대화하며 적어 둔 오늘 메모
   dayActuals: string[]; // 각본과 달라진 블록 기록
@@ -442,6 +445,12 @@ const relationshipLines = (r: RelationshipRow | undefined): string => {
     .join("\n");
 };
 
+// 상대의 오늘 상태 — 답장이 판정해 둔 마지막 값. 일기와 기억 정리가 읽고, 적용 단계가 비운다.
+const userStateLine = (
+  r: RelationshipRow | undefined,
+  diaryDate: string,
+): string => (r ? (userStateLabel(r, diaryDate) ?? "") : "");
+
 // 아크 생성·갱신에 넣는 인물 재료 — 기억(정체성·주변 인물·진행 중인 일)과 관계로 만든다.
 // V2 생성 직후에는 character.ts의 arcMaterial이 생성 출력으로 같은 모양을 만든다.
 const arcMaterialOf = (g: NightlyGathered): string =>
@@ -516,6 +525,7 @@ export const gatherNightlyInput = (
       [convo, ...todayNotes].join("\n"),
     ),
     relationship: relationshipLines(getRelationship(character.id)),
+    userState: userStateLine(getRelationship(character.id), diaryDate),
     userProfile: userProfileLines(character.chat_id),
     todayNotes,
     // 결과 뒤의 시각은 그렇게 된 실제 시각이다. 잠 블록의 깸이면 그 시각에 깬 것이라, 일기가
@@ -831,8 +841,15 @@ const applyNightlyTxn = db.transaction(
       `${g.diaryDate} 05:00:00`,
       `${nextDate(g.diaryDate)} 05:00:00`,
     );
+    // 상대의 오늘 상태도 같은 창으로 비운다 — 위 기억 정리가 마음·조심할 것에 녹였다. 창이
+    // 닫힌 뒤에 판정된 값(새벽 정리가 늦게 돈 날의 새 대화)은 오늘 것이라 남긴다.
+    const relNow = getRelationship(g.characterId);
+    const stateCleared =
+      !!relNow?.user_state &&
+      (relNow.user_state_since ?? "") < `${nextDate(g.diaryDate)} 05:00:00`;
+    if (stateCleared) setUserState(g.characterId, null);
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 

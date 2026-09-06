@@ -69,6 +69,7 @@ const gathered = (over: Partial<NightlyGathered>): NightlyGathered => ({
   ongoingTouched: [],
   touchedUserFacts: [],
   relationship: "",
+  userState: "",
   userProfile: "",
   todayNotes: [],
   dayActuals: [],

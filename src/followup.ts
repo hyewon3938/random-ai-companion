@@ -4,8 +4,8 @@
 //   낮 근황   — 유저의 마지막 말도 캐릭터의 마지막 말도 4시간 넘게 지났으면 하루 1통. 보낸 뒤에도
 //               답이 없으면 그날은 물러난다.
 //   밤 인사   — 자정~새벽 5시에 유저가 잔다는 말 없이 1시간 넘게 조용하면 1회.
-//   달래기    — 답장이 유저의 서운함을 표시했는데(reply-signal의 userUpset) 그 뒤로 답이 끊기면
-//               30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다.
+//   달래기    — 관계 행의 상대 상태(user-state가 답장마다 판정)가 나 때문에 안 좋은데 그 뒤로
+//               답이 끊기면 30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다.
 //
 // 문안은 대화와 같은 3층(buildSystemBlocks)에 상황 문단을 더해 만든다 — 앞 두 층 캐시를
 // 대화와 함께 쓴다. 경과 시간은 Date.now()로 잰다(getKstNow().getTime()은 9시간 어긋난다).
@@ -17,17 +17,17 @@
 import {
   getActiveCharacter,
   getActiveCharacters,
+  getRelationship,
   lastMessage,
   lastUserTs,
 } from "./db.js";
 import { currentBlock } from "./context.js";
 import {
-  mendSentSinceLastUser,
+  mendSentSince,
   proactiveAllowed,
   proactiveCountToday,
   proactiveKindCountToday,
   proactiveSinceLastUser,
-  upsetSinceLastUser,
 } from "./proactive-policy.js";
 import {
   noOverlap,
@@ -51,8 +51,8 @@ import {
 // 자정을 넘겨 대화하다 유저가 자겠다는 말 없이 한 시간 답이 없으면 잠든 것으로 보고 밤 인사
 // 선톡을 한 통 남긴다. 두 종류 모두 그 순간의 각본을 봐야 하므로 문안은 모델이 쓴다.
 //
-// 유저가 캐릭터에게 서운해한 뒤 답을 멈추면 30분 뒤에 달래기를 한 통 보낸다. 서운함은 답장을
-// 쓴 모델이 표시해 두고(reply-signal의 userUpset), 이 틱은 그 표시가 messages에 남았는지만
+// 유저가 캐릭터 때문에 안 좋은 상태로 답을 멈추면 30분 뒤에 달래기를 한 통 보낸다. 상태는
+// 답장마다 판정 호출(user-state)이 정해 관계 행에 적어 두고, 이 틱은 그 값의 원인과 결만
 // 본다. 근황 선톡보다 앞에 두는 이유는 기다리는 시간이 다르기 때문이다 — 근황의 네 시간
 // 검사에 걸리면 30분짜리 달래기가 영영 나가지 못한다.
 //
@@ -98,7 +98,7 @@ const goodnightSituation = (): string =>
 const mendSituation = (): string =>
   [
     `[문안 — 지금 보낼 달래기 한 통]`,
-    `상대가 너에게 서운해하거나 화가 난 기색을 보인 뒤 답이 끊긴 지 30분쯤 됐다. 위 [방금까지 오간 말]을 읽고 무엇 때문인지 헤아려, 그 마음을 알아차렸다는 것만 짧게 전한다.`,
+    `위 [상대의 지금 상태]대로 상대가 너 때문에 안 좋은 상태인 채 답이 끊긴 지 30분쯤 됐다. 그 상태와 [방금까지 오간 말]을 읽고 무엇 때문인지 헤아려, 그 마음을 알아차렸다는 것만 짧게 전한다.`,
     `- 변명하지 않는다. 왜 그랬는지 설명하려 들면 달래기가 아니라 해명이 된다.`,
     `- 재촉하지 않는다. 답을 요구하거나 왜 말이 없냐고 묻지 않는다.`,
     `- 자러 간다는 말도, 어디 나간다는 말도 붙이지 않는다. 상대가 답할 자리를 여는 한 통인데 그런 말을 붙이면 그 자리를 네가 닫는다. 지금이 네 각본에서 자는 시간이어도 마찬가지다.`,
@@ -168,19 +168,20 @@ const followupTickBody = async (): Promise<void> => {
       continue;
     }
 
-    // 달래기 선톡: 유저가 캐릭터에게 서운해한 뒤 답을 멈추면 30분 뒤에 한 통.
+    // 달래기 선톡: 상대의 지금 상태가 나 때문에 안 좋은데 답을 멈추면 30분 뒤에 한 통.
     //
-    // 마지막 유저 발화 이후 구간을 통째로 본다 — 표시가 붙은 답장 뒤에 자리 비움 예고가 끼면
-    // 마지막 메시지만 봐서는 표시가 가려진다. 한 발현에 한 통이라, 같은 구간에 달래기가 이미
-    // 나갔으면 접는다(유저가 답한 뒤 다시 서운해하면 새 표시가 붙어 한 통 더 나간다).
+    // 상태는 관계 행에 있다(답장마다 판정). 한 발현에 한 통이라, 그 상태가 시작된 시각 뒤로
+    // 달래기가 이미 나갔으면 접는다 — 상태가 바뀌어 시작 시각이 새로 찍히면 한 통 더 나간다.
     //
     // 각본이 잠 블록이어도 보낸다. 근황 선톡에 있는 답장 가능 구간 검사를 여기엔 걸지 않는데,
     // 밤 인사가 이미 같은 대우를 받고 있어 새 동작이 아니고 서운하게 해 놓고 답도 못 받은 채
     // 그냥 자는 쪽이 오히려 사람과 멀다.
+    const rel = getRelationship(c.id);
     if (
       minutesSince(lu) >= MEND_SILENCE_MS / 60_000 &&
-      upsetSinceLastUser(c.chat_id) &&
-      !mendSentSinceLastUser(c.chat_id) &&
+      rel?.user_state_tone === "bad" &&
+      rel.user_state_cause === "char" &&
+      !mendSentSince(c.chat_id, rel.user_state_since ?? lu) &&
       proactiveCountToday(c.chat_id, dayStart()) < PROACTIVE_DAILY_MAX
     ) {
       await sendProactiveDraft({

@@ -111,7 +111,13 @@ export interface CallContext {
   /** 객체의 신호 칸 — 키 이름은 그대로 둔다(이미 올라간 기록과 어긋나지 않게). */
   stay?: boolean;
   note?: string | null;
-  userUpset?: boolean;
+  /** 상대 상태 판정 — 이번 답장에서 바뀌었는지, 판정을 못 받았는지, 지금 값. */
+  userState?: {
+    changed?: boolean;
+    failed?: boolean;
+    callId?: number | null;
+    label?: string | null;
+  };
   /** 이 답장에서 한 연락 약속과 코드가 정한 시각. 시각을 못 정했으면 dropped에 사유. */
   promise?: {
     text: string;
@@ -392,10 +398,18 @@ const outcomeLines = (ctx: CallContext): string[] => {
   // 붙였는지 안 붙였는지를 늘 적는다 — 없을 때 줄이 사라지면 모델이 안 붙인 건지
   // 기록이 안 된 건지 구별되지 않는다.
   out.push(
-    `*답장 신호* 남음 ${ctx.stay ? "붙임" : "없음"} · 서운함 ${
-      ctx.userUpset ? "붙임" : "없음"
-    }${ctx.outputParse ? ` · 형식 ${parseName(ctx.outputParse)}` : ""}`,
+    `*답장 신호* 남음 ${ctx.stay ? "붙임" : "없음"}${
+      ctx.outputParse ? ` · 형식 ${parseName(ctx.outputParse)}` : ""
+    }`,
   );
+  // 상대 상태 — 판정을 못 받은 것과 그대로인 것을 갈라 적는다. 지금 값은 있을 때만 잇는다.
+  if (ctx.userState) {
+    const u = ctx.userState;
+    const how = u.failed ? "판정 실패" : u.changed ? "바뀜" : "그대로";
+    out.push(
+      `*상대 상태* ${how}${u.label ? ` · ${esc(u.label)}` : " · 없음"}`,
+    );
+  }
   // 메모는 붙었는지와 무엇을 적었는지를 같은 줄에서 본다 — 다른 신호와 묶어 두면
   // '메모 없음' 세 글자가 줄 안에 묻혀 저장 여부를 확인하러 스레드를 뒤지게 된다.
   out.push(
@@ -443,6 +457,8 @@ const callsLine = (row: CallRow, ctx: CallContext): string | null => {
   if (hold) parts.push(`붙잡기 판정 ${hold}`);
   const picked = callBrief(ctx.search?.tagCallId);
   if (picked) parts.push(`주제 고르기 ${picked}`);
+  const judged = callBrief(ctx.userState?.callId);
+  if (judged) parts.push(`상대 상태 판정 ${judged}`);
   parts.push(
     `답장 #${row.id} ${row.created_at.slice(11, 19)} ${shortModel(row.model)}`,
   );

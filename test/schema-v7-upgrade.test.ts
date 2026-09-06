@@ -67,8 +67,8 @@ const columnNames = (table: string): string[] =>
     (c) => c.name,
   );
 
-test("v6 DB가 v7로 올라간다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 7);
+test("v6 DB가 지금 스키마 버전까지 올라간다", () => {
+  assert.equal(db.pragma("user_version", { simple: true }), 8);
 });
 
 test("호출 관측 칸 둘이 생긴다", () => {

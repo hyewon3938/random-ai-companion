@@ -117,11 +117,29 @@ export const SPEECH_LEVEL_NAME: Record<SpeechLevel, string> = {
   casual: "반말",
 };
 
+/** 상대의 지금 상태가 무엇 때문인지 — 캐릭터 때문인지, 상대의 다른 일 때문인지. */
+export type UserStateCause = "char" | "other";
+
+export const USER_STATE_CAUSE_NAME: Record<UserStateCause, string> = {
+  char: "나 때문",
+  other: "상대의 다른 일",
+};
+
+/** 상대의 지금 상태의 결 — 달래기 선톡과 웃음 표기 조건이 이 값을 본다. */
+export type UserStateTone = "good" | "neutral" | "bad";
+
+export const USER_STATE_TONE_NAME: Record<UserStateTone, string> = {
+  good: "좋음",
+  neutral: "보통",
+  bad: "안 좋음",
+};
+
 /** 모델을 부른 자리 — 호출 원본(llm_calls)에 무슨 일로 부른 것인지 적는다. */
 export type CallPurpose =
   | "reply"
   | "hold"
   | "tags"
+  | "user_state"
   | "day_plan"
   | "life_plan"
   | "arc"
@@ -145,6 +163,7 @@ export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
   reply: "답장",
   hold: "붙잡기 판정",
   tags: "주제 고르기",
+  user_state: "상대 상태 판정",
   day_plan: "하루 각본",
   life_plan: "월 리듬",
   arc: "아크",

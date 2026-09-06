@@ -1,7 +1,8 @@
 // 답장 파이프라인(reply-compose.ts)이 무엇을 프롬프트에 넣고 어느 답을 버리는지 붙잡아 두는 검사.
 //
-// 모델을 부르지 않는다 — 정해 둔 답을 돌려주는 함수를 ask 자리에 끼운다. 검색 태그는 태그
-// 이름이 하나도 없으면 호출 없이 비어 있는 결과를 돌려주고, 평가용 캐릭터는 태그가 없다.
+// 모델을 부르지 않는다 — 정해 둔 답을 돌려주는 함수를 ask 자리에, 정해 둔 판정을 돌려주는
+// 함수를 judge 자리에 끼운다. 검색 태그는 태그 이름이 하나도 없으면 호출 없이 비어 있는 결과를
+// 돌려주고, 평가용 캐릭터는 태그가 없다.
 
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -19,9 +20,12 @@ const { composeReply, heldSituation, pendingUserTurn } = await import(
   "../src/reply-compose.js"
 );
 const { askReply } = await import("../src/reply-ask.js");
+const { userStateLabel } = await import("../src/user-state.js");
+const { kstStamp, logicalDateOf } = await import("../src/kst.js");
 type ReplyAsker = import("../src/reply-compose.js").ReplyAsker;
 type SystemBlock = import("../src/llm.js").SystemBlock;
 type ChatTurn = import("../src/llm.js").ChatTurn;
+type UserStateVerdict = import("../src/user-state.js").UserStateVerdict;
 
 const CHAT = "chat-compose";
 let characterId = 0;
@@ -51,6 +55,11 @@ const canned = (
 
 const reply = (bubbles: string[], extra: Record<string, unknown> = {}): string =>
   JSON.stringify({ reply: bubbles, ...extra });
+
+/** 상대 상태를 그대로 두는 judge — 모델을 부르지 않는다. */
+const noJudge = async (): Promise<UserStateVerdict> => ({
+  changed: false, state: null, failed: false, callId: null,
+});
 
 const clearMessages = (): void => {
   db.prepare(`DELETE FROM messages WHERE chat_id = ?`).run(CHAT);
@@ -93,6 +102,7 @@ describe("composeReply", () => {
     assert.ok(turn);
     const ask = canned([reply(["집에 있었어", "너는?"], { note: "상대가 하루를 물었다" })]);
     const out = await composeReply({
+      judge: noJudge,
       characterId,
       chatId: CHAT,
       turn,
@@ -120,6 +130,7 @@ describe("composeReply", () => {
     assert.ok(turn);
     const ask = canned([reply(["알았어 안 갈게"])]);
     await composeReply({
+      judge: noJudge,
       characterId,
       chatId: CHAT,
       turn,
@@ -149,10 +160,12 @@ describe("composeReply", () => {
     assert.ok(turn);
     const plain = canned([reply(["나 왔어"])]);
     await composeReply({
+      judge: noJudge,
       characterId, chatId: CHAT, turn, context: {}, logTag: "[test]", ask: plain,
     });
     const marked = canned([reply(["나 왔어"])]);
     await composeReply({
+      judge: noJudge,
       characterId, chatId: CHAT, turn, markFrom: "2026-09-06 21:05:00",
       context: {}, logTag: "[test]", ask: marked,
     });
@@ -170,6 +183,7 @@ describe("composeReply", () => {
     assert.ok(turn);
     const ask = canned([reply([]), reply([])]);
     const out = await composeReply({
+      judge: noJudge,
       characterId, chatId: CHAT, turn, context: {}, logTag: "[test]", ask,
     });
     assert.equal(out, null);
@@ -185,6 +199,7 @@ describe("composeReply", () => {
       logMessage(CHAT, characterId, "user", "아 잠깐", "2026-09-06 19:00:20");
     });
     const out = await composeReply({
+      judge: noJudge,
       characterId, chatId: CHAT, turn, context: {}, logTag: "[test]", ask,
     });
     assert.equal(out, null);
@@ -203,6 +218,7 @@ describe("composeReply", () => {
       });
     });
     const out = await composeReply({
+      judge: noJudge,
       characterId, chatId: CHAT, turn,
       context: { timing: { waitMs: 3000, path: "table" } },
       heldActual: { blockStart: "08:00", activity: "운동", outcome: "cancel" },
@@ -226,5 +242,94 @@ describe("composeReply", () => {
     assert.equal(ctx.bubbles, 2);
     assert.deepEqual(ctx.bubbleLens, [6, 3]);
     assert.equal(ctx.sendAt, "2026-09-06 08:01:00");
+  });
+  it("상대 상태 판정이 바뀌면 저장하고 그 줄을 캐시 밖 블록에 넣고 관계 변경으로 남긴다", async () => {
+    clearMessages();
+    logMessage(CHAT, characterId, "user", "왜 연락 안 했어", "2026-09-06 21:30:00");
+    const turn = pendingUserTurn(CHAT);
+    assert.ok(turn);
+    const record = (meta: { callId?: number }): void => {
+      meta.callId = recordLlmCall({
+        purpose: "reply", model: "test", system: [], turns: "", latencyMs: 1,
+      });
+    };
+    const ask = canned([reply(["미안 진짜"])], record);
+    const judge = async (): Promise<UserStateVerdict> => ({
+      changed: true,
+      state: {
+        state: "연락한다던 말을 안 지켜 서운함",
+        cause: "char",
+        tone: "bad",
+        since: "2026-09-06 21:30:00",
+      },
+      failed: false,
+      callId: null,
+    });
+    const out = await composeReply({
+      judge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]", ask,
+    });
+    assert.ok(out);
+    const row = db
+      .prepare(
+        `SELECT user_state, user_state_cause, user_state_tone, user_state_since
+           FROM relationships WHERE character_id = ?`,
+      )
+      .get(characterId) as Record<string, string | null>;
+    assert.deepEqual(row, {
+      user_state: "연락한다던 말을 안 지켜 서운함",
+      user_state_cause: "char",
+      user_state_tone: "bad",
+      user_state_since: "2026-09-06 21:30:00",
+    });
+    // 표기는 실제 오늘 날짜에 따라 9/6이 앞에 붙기도 한다 — 같은 함수로 기대값을 만든다
+    const label = userStateLabel(
+      {
+        user_state: row.user_state,
+        user_state_cause: "char",
+        user_state_tone: "bad",
+        user_state_since: row.user_state_since,
+      },
+      logicalDateOf(kstStamp()),
+    );
+    assert.ok(label && label.endsWith("21:30부터 · 나 때문 · 안 좋음)"));
+    const all = ask.system.map((b) => b.text).join("\n");
+    assert.ok(all.includes("[상대의 지금 상태 — 답장마다 판정해 둔 것]"));
+    assert.ok(all.includes(label));
+    // 상태 줄은 캐시하지 않는 마지막 블록에만 있어야 한다
+    const cached = ask.system.filter((b) => b.cache).map((b) => b.text).join("\n");
+    assert.ok(!cached.includes("[상대의 지금 상태 — 답장마다 판정해 둔 것]"));
+    assert.ok(out.callId);
+    out.attach({});
+    const ctx = JSON.parse(
+      (db.prepare(`SELECT context_json FROM llm_calls WHERE id = ?`).get(out.callId) as {
+        context_json: string;
+      }).context_json,
+    ) as Record<string, unknown>;
+    assert.deepEqual(ctx.relUpdate, [{ field: "상대 상태", from: null, to: label }]);
+    assert.deepEqual(ctx.userState, { changed: true, failed: false, callId: null, label });
+
+    // 같은 값이 다시 오면 저장도 관계 변경 기록도 없다
+    clearMessages();
+    logMessage(CHAT, characterId, "user", "응", "2026-09-06 21:40:00");
+    const turn2 = pendingUserTurn(CHAT);
+    assert.ok(turn2);
+    const out2 = await composeReply({
+      judge, characterId, chatId: CHAT, turn: turn2, context: {}, logTag: "[test]",
+      ask: canned([reply(["…"])], record),
+    });
+    assert.ok(out2);
+    assert.ok(out2.callId);
+    out2.attach({});
+    const ctx2 = JSON.parse(
+      (db.prepare(`SELECT context_json FROM llm_calls WHERE id = ?`).get(out2.callId) as {
+        context_json: string;
+      }).context_json,
+    ) as Record<string, unknown>;
+    assert.equal(ctx2.relUpdate, undefined);
+    assert.deepEqual(ctx2.userState, { changed: true, failed: false, callId: null, label });
+    db.prepare(
+      `UPDATE relationships SET user_state = NULL, user_state_cause = NULL,
+         user_state_tone = NULL, user_state_since = NULL WHERE character_id = ?`,
+    ).run(characterId);
   });
 });
