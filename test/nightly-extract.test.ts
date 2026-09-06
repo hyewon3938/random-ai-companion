@@ -23,8 +23,9 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다 — 정적 import는 이 줄들보다 먼저 돈다.
 const { db } = await import("../src/db.js");
 const { saveMemory } = await import("../src/memory.js");
-const { gatherNightlyInput, extractPrompt, touchedUserFactLines } =
+const { gatherNightlyInput, touchedUserFactLines } =
   await import("../src/nightly.js");
+const { extractPrompt } = await import("../src/prompts/nightly.js");
 
 const DIARY_DATE = "2026-09-03";
 const CHAT_ID = "1";
