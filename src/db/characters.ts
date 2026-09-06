@@ -14,6 +14,17 @@ export interface CharacterRow {
   created_at: string;
 }
 
+// 살아 있는 캐릭터 전부. 부팅 복구·새벽 정리 폴백·아침 각본 게시·수집 도구가 같이 쓴다.
+export const getActiveCharacters = (): CharacterRow[] =>
+  db
+    .prepare(`SELECT * FROM characters WHERE status = 'active'`)
+    .all() as CharacterRow[];
+
+export const getCharacterById = (id: number): CharacterRow | undefined =>
+  db.prepare(`SELECT * FROM characters WHERE id = ?`).get(id) as
+    | CharacterRow
+    | undefined;
+
 // 캐릭터 번호만 아는 자리(각본 생성)에서 대화방을 찾는다.
 export const getCharacterChatId = (characterId: number): string | null =>
   (

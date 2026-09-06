@@ -15,11 +15,10 @@
 // 어느 종류를 언제 보낼지만 정한다.
 
 import {
-  db,
   getActiveCharacter,
+  getActiveCharacters,
   lastMessage,
   lastUserTs,
-  type CharacterRow,
 } from "./db.js";
 import { currentBlock } from "./context.js";
 import {
@@ -123,11 +122,7 @@ const catchupSituation = (): string =>
 
 // 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
 const followupTickBody = async (): Promise<void> => {
-  const rows = db
-    .prepare(`SELECT * FROM characters WHERE status = 'active'`)
-    .all() as CharacterRow[];
-
-  for (const c of rows) {
+  for (const c of getActiveCharacters()) {
     const active = getActiveCharacter(c.chat_id);
     if (!active) continue;
 
@@ -149,16 +144,8 @@ const followupTickBody = async (): Promise<void> => {
     const isNight = now >= GOODNIGHT_WINDOW.start && now < GOODNIGHT_WINDOW.end;
     // 자정 이후에 오간 대화여야 한다 — 어제 저녁에 끊긴 대화는 밤 인사를 붙일 자리가 아니다.
     const afterMidnight = lu >= `${kstDateString()} 00:00:00`;
-    const lastText =
-      (
-        db
-          .prepare(
-            `SELECT text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
-          )
-          .get(c.chat_id) as { text: string } | undefined
-      )?.text ?? "";
     const alreadyGoodnight = /잘\s*자|굿나잇|주무|좋은\s*꿈|good ?night/i.test(
-      lastText,
+      last.text,
     );
     if (
       isNight &&

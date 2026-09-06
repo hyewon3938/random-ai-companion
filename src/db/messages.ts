@@ -106,18 +106,55 @@ export const lastUserTs = (chatId: string): string | undefined =>
       .get(chatId) as { sent_at: string } | undefined
   )?.sent_at;
 
-// 마지막 메시지(유저·캐릭 무관)의 시각·역할 — 침묵 팔로업 판단용
-export const lastMessage = (
-  chatId: string,
-): { sent_at: string; role: string; meta_json: string | null } | undefined =>
+// 캐릭터가 마지막으로 말한 시각 — 자리 비움 복귀 인사가 침묵 길이를 재는 기준.
+export const lastAssistantTs = (chatId: string): string | undefined =>
+  (
+    db
+      .prepare(
+        `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`,
+      )
+      .get(chatId) as { sent_at: string } | undefined
+  )?.sent_at;
+
+export interface LastMessageRow {
+  sent_at: string;
+  role: string;
+  text: string;
+  meta_json: string | null;
+}
+
+// 마지막 메시지(유저·캐릭 무관)의 시각·역할·본문 — 침묵 팔로업 판단용
+export const lastMessage = (chatId: string): LastMessageRow | undefined =>
   db
     .prepare(
-      `SELECT sent_at, role, meta_json FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
+      `SELECT sent_at, role, text, meta_json FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1`,
     )
-    .get(chatId) as
-    { sent_at: string; role: string; meta_json: string | null } | undefined;
+    .get(chatId) as LastMessageRow | undefined;
 
 // 최근 메시지의 역할과 시각만, 오래된 것부터. 유저가 이어 보내는 텀을 재는 데 쓴다(reply-timing.ts).
+// 한 논리일 창(시작 포함, 끝 미포함)의 대화. 새벽 정리가 어제 하루치를 읽는다.
+export const getMessagesBetween = (
+  chatId: string,
+  from: string,
+  to: string,
+): { role: string; sent_at: string; text: string }[] =>
+  db
+    .prepare(
+      `SELECT role, sent_at, text FROM messages WHERE chat_id = ? AND sent_at >= ? AND sent_at < ? ORDER BY id`,
+    )
+    .all(chatId, from, to) as { role: string; sent_at: string; text: string }[];
+
+export const hasMessageBetween = (
+  chatId: string,
+  from: string,
+  to: string,
+): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at >= ? AND sent_at < ? LIMIT 1`,
+    )
+    .get(chatId, from, to);
+
 export const recentMessageTimes = (
   chatId: string,
   limit: number,

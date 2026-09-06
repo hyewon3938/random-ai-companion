@@ -21,12 +21,20 @@
 // 새벽 정리 쪽 호출(diary·extract·arc·day_plan·life_plan)은 여기서 건너뛴다 —
 // 구간 3이 이전 값과 함께 올린다. 두 곳이 같은 호출을 올리면 채널이 두 벌로 찬다.
 
-import { db, getBlob } from "./db.js";
+import {
+  db,
+  getBlob,
+  getLlmCallBrief,
+  hasTraceEvent,
+  markLlmCallTraced,
+  prevLayeredCall as prevLayeredCallRow,
+  untracedLlmCalls,
+  type LlmCallRow,
+} from "./db.js";
 import {
   chunked,
   dateLabel,
   esc,
-  hasTraceEvent,
   recordTraceEvent,
   traceEnabled,
 } from "./trace.js";
@@ -73,30 +81,7 @@ const POST_PURPOSES = [
 // 붙잡기 판정은 짧은 시스템 문장 한 덩이라 섞이면 매번 바뀐 것으로 보인다.
 const LAYERED = new Set<string>(POST_PURPOSES.filter((p) => p !== "hold"));
 
-const sqlList = (xs: readonly string[]): string =>
-  xs.map((x) => `'${x}'`).join(", ");
-
-interface CallRow {
-  id: number;
-  character_id: number | null;
-  chat_id: string | null;
-  purpose: string;
-  model: string;
-  attempt: number;
-  system_hashes: string | null;
-  turns_hash: string | null;
-  output_hash: string | null;
-  input_tokens: number | null;
-  cache_write_tokens: number | null;
-  cache_read_tokens: number | null;
-  output_tokens: number | null;
-  latency_ms: number | null;
-  stop_reason: string | null;
-  block_types: string | null;
-  error: string | null;
-  context_json: string | null;
-  created_at: string;
-}
+type CallRow = LlmCallRow;
 
 interface BlockHash {
   h: string;
@@ -297,9 +282,7 @@ const lastUserTurns = (hash: string | null): string[] => {
 /** 다른 호출을 한 줄로 가리킬 때 — 몇 번 호출을 언제 어느 모델로 불렀는지. */
 const callBrief = (id: number | null | undefined): string | null => {
   if (!id) return null;
-  const row = db
-    .prepare(`SELECT id, model, created_at FROM llm_calls WHERE id = ?`)
-    .get(id) as { id: number; model: string; created_at: string } | undefined;
+  const row = getLlmCallBrief(id);
   return row
     ? `#${row.id} ${row.created_at.slice(11, 19)} ${shortModel(row.model)}`
     : `#${id}`;
@@ -628,14 +611,7 @@ const LAYER_NAME = ["잘 바뀌지 않는 데이터", "하루 동안 같은 데�
 const LAYER_KEY = ["fixed", "daily"] as const;
 
 const prevLayeredCall = (row: CallRow): CallRow | undefined =>
-  db
-    .prepare(
-      `SELECT * FROM llm_calls
-        WHERE id < ? AND character_id IS ? AND system_hashes IS NOT NULL
-          AND purpose IN (${sqlList([...LAYERED])})
-        ORDER BY id DESC LIMIT 1`,
-    )
-    .get(row.id, row.character_id) as CallRow | undefined;
+  prevLayeredCallRow(row.id, row.character_id, [...LAYERED]);
 
 const postFullLayers = (
   row: CallRow,
@@ -860,20 +836,12 @@ const postCall = (row: CallRow): void => {
   })();
 };
 
-const markTraced = (id: number): void => {
-  db.prepare(`UPDATE llm_calls SET traced = 1 WHERE id = ?`).run(id);
-};
+const markTraced = markLlmCallTraced;
 
 /** 1분 틱. 아직 안 올린 호출을 번호 순서대로 게시함에 쌓는다. */
 export const enqueueReplyTraces = (): void => {
   if (!traceEnabled()) return;
-  const rows = db
-    .prepare(
-      `SELECT * FROM llm_calls
-        WHERE traced = 0 AND purpose IN (${sqlList(POST_PURPOSES)})
-        ORDER BY id LIMIT ?`,
-    )
-    .all(BATCH) as CallRow[];
+  const rows = untracedLlmCalls(POST_PURPOSES, BATCH);
   for (const row of rows) {
     const age = Date.now() - epochOf(row.created_at);
     // 판단 근거는 호출 행이 만들어진 뒤에 붙는다. 아직이면 다음 틱에 —

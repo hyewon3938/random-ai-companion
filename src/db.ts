@@ -11,4 +11,5 @@ export * from "./db/life.js";
 export * from "./db/sends.js";
 export * from "./db/llm-calls.js";
 export * from "./db/trace-events.js";
+export * from "./db/feedback.js";
 export * from "./db/memory-items.js";

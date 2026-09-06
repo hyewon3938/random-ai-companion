@@ -2,11 +2,9 @@
 // 외부 scheduled task가 ssh로 호출해 이 출력을 읽고, 자체 지능으로 일기·추출·각본·선톡 문안을
 // 생성한 뒤 nightly-write.ts로 반영한다.
 // 사용: docker exec random-ai-companion npx tsx src/tools/nightly-read.ts
-import { db, type CharacterRow } from "../db.js";
+import { getActiveCharacters } from "../db.js";
 import { gatherNightlyInput } from "../nightly.js";
 
-const rows = db
-  .prepare(`SELECT * FROM characters WHERE status = 'active'`)
-  .all() as CharacterRow[];
-
-console.log(JSON.stringify(rows.map((c) => gatherNightlyInput(c))));
+console.log(
+  JSON.stringify(getActiveCharacters().map((c) => gatherNightlyInput(c))),
+);

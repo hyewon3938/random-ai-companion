@@ -17,7 +17,17 @@
 // SLACK_BOT_TOKEN·SLACK_TRACE_CHANNEL 둘 중 하나라도 없으면 전체가 no-op이다.
 
 import { config } from "./config.js";
-import { db } from "./db.js";
+import {
+  activeReactionFeedback,
+  countReplyFeedback,
+  countSentChildren,
+  getFeedbackByDedupeKey,
+  hasLlmCall,
+  insertFeedback,
+  removeFeedback,
+  restoreFeedback,
+  traceEventBySlackTs,
+} from "./db.js";
 import { getKstNow } from "./kst.js";
 import { toFeedbackKind, type FeedbackKind } from "./labels.js";
 
@@ -56,14 +66,7 @@ interface Target {
 }
 
 const resolveTarget = (slackTs: string): Target | null => {
-  const row = db
-    .prepare(
-      `SELECT character_id, kind, dedupe_key FROM trace_events
-        WHERE slack_ts = ? ORDER BY id DESC LIMIT 1`,
-    )
-    .get(slackTs) as
-    | { character_id: number | null; kind: string; dedupe_key: string | null }
-    | undefined;
+  const row = traceEventBySlackTs(slackTs);
   // 우리가 올린 글이 아니면(사람이 채널에 직접 쓴 말) 표시를 붙일 자리가 없다.
   if (!row) return null;
 
@@ -71,13 +74,7 @@ const resolveTarget = (slackTs: string): Target | null => {
   let callId = matched ? Number(matched[1]) : null;
   // 게시함은 30일, 호출 기록은 그보다 오래 남지만 순서가 뒤집힐 여지를 남기지 않는다 —
   // 없는 호출을 가리키면 외래키에 걸려 그 회차 전체가 멈춘다.
-  if (callId !== null) {
-    const exists = db
-      .prepare(`SELECT 1 FROM llm_calls WHERE id = ?`)
-      .pluck()
-      .get(callId);
-    if (!exists) callId = null;
-  }
+  if (callId !== null && !hasLlmCall(callId)) callId = null;
   return { characterId: row.character_id, callId, traceKind: row.kind };
 };
 
@@ -98,36 +95,27 @@ interface SaveInput {
 }
 
 const save = (f: SaveInput): SaveResult => {
-  const existing = db
-    .prepare(`SELECT id, removed_at FROM call_feedback WHERE dedupe_key = ?`)
-    .get(f.dedupeKey) as { id: number; removed_at: string | null } | undefined;
+  const existing = getFeedbackByDedupeKey(f.dedupeKey);
   if (existing) {
     // 같은 표시를 다시 읽은 것뿐이면 그대로 둔다.
     if (!existing.removed_at) return "known";
     // 뗐다가 다시 붙인 표시는 되살린다.
-    db.prepare(`UPDATE call_feedback SET removed_at = NULL WHERE id = ?`).run(
-      existing.id,
-    );
+    restoreFeedback(existing.id);
     return "restored";
   }
-  db.prepare(
-    `INSERT INTO call_feedback
-       (character_id, call_id, slack_ts, trace_kind, source, kind,
-        slack_user, text, reply_ts, dedupe_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    f.target.characterId,
-    f.target.callId,
-    f.slackTs,
-    f.target.traceKind,
-    f.source,
-    f.kind,
-    f.slackUser,
-    f.text,
-    f.replyTs,
-    f.dedupeKey,
-    f.createdAt,
-  );
+  insertFeedback({
+    characterId: f.target.characterId,
+    callId: f.target.callId,
+    slackTs: f.slackTs,
+    traceKind: f.target.traceKind,
+    source: f.source,
+    kind: f.kind,
+    slackUser: f.slackUser,
+    text: f.text,
+    replyTs: f.replyTs,
+    dedupeKey: f.dedupeKey,
+    createdAt: f.createdAt,
+  });
   return "new";
 };
 
@@ -154,12 +142,7 @@ export const syncReactions = (
   slackTs: string,
   live: LiveReaction[],
 ): ReactionSync => {
-  const stored = db
-    .prepare(
-      `SELECT id, dedupe_key FROM call_feedback
-        WHERE slack_ts = ? AND source = 'reaction' AND removed_at IS NULL`,
-    )
-    .all(slackTs) as { id: number; dedupe_key: string }[];
+  const stored = activeReactionFeedback(slackTs);
   if (!live.length && !stored.length)
     return { added: 0, restored: 0, removed: 0 };
 
@@ -194,10 +177,7 @@ export const syncReactions = (
   const stamp = nowIso();
   for (const row of stored) {
     if (seen.has(row.dedupe_key)) continue;
-    db.prepare(`UPDATE call_feedback SET removed_at = ? WHERE id = ?`).run(
-      stamp,
-      row.id,
-    );
+    removeFeedback(row.id, stamp);
     removed += 1;
   }
   return { added, restored, removed };
@@ -302,32 +282,11 @@ const liveReactionsOf = (m: SlackMessage): LiveReaction[] => {
 // 두고 그보다 많을 때만 스레드를 연다 — 리액션을 조건으로 걸면 분류 네 가지 중 맞는 것이
 // 없어 이유만 적은 글을 통째로 놓친다(이슈 #236).
 const knownReplyCount = (slackTs: string): number => {
-  const threadKey = db
-    .prepare(
-      `SELECT thread_key FROM trace_events
-        WHERE slack_ts = ? ORDER BY id DESC LIMIT 1`,
-    )
-    .pluck()
-    .get(slackTs) as string | null | undefined;
+  const threadKey = traceEventBySlackTs(slackTs)?.thread_key;
   // 부모 행을 못 찾으면 0으로 둔다. 스레드를 한 번 헛읽는 비용이 사람이 적은 이유를
   // 놓치는 것보다 싸서, 모를 때는 읽는 쪽으로 기운다.
-  const ours = threadKey
-    ? (db
-        .prepare(
-          `SELECT COUNT(*) FROM trace_events
-            WHERE parent_key = ? AND status = 'sent'`,
-        )
-        .pluck()
-        .get(threadKey) as number)
-    : 0;
-  const collected = db
-    .prepare(
-      `SELECT COUNT(*) FROM call_feedback
-        WHERE slack_ts = ? AND source = 'reply'`,
-    )
-    .pluck()
-    .get(slackTs) as number;
-  return ours + collected;
+  const ours = threadKey ? countSentChildren(threadKey) : 0;
+  return ours + countReplyFeedback(slackTs);
 };
 
 const hasUnreadReply = (m: SlackMessage): boolean => {

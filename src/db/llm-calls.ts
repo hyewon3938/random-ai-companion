@@ -138,6 +138,114 @@ export const setCallContext = (callId: number, context: unknown): void => {
 // 본문 보관 기간. 지나면 본문을 가리키는 해시와 판단 근거를 지우고 메타(언제·무슨 호출·
 // 토큰·지연)만 남긴다 — 본문에는 실제 대화가 통째로 들어 있어 오래 들고 있을 것이 아니고,
 // 며칠 뒤에 다시 열어 보는 일도 없다. 메타는 가벼워서 계속 둔다.
+// ── 게시가 읽는 호출 행 ──────────────────────────────────────────────────
+
+export interface LlmCallRow {
+  id: number;
+  character_id: number | null;
+  chat_id: string | null;
+  purpose: string;
+  model: string;
+  attempt: number;
+  system_hashes: string | null;
+  turns_hash: string | null;
+  output_hash: string | null;
+  input_tokens: number | null;
+  cache_write_tokens: number | null;
+  cache_read_tokens: number | null;
+  output_tokens: number | null;
+  latency_ms: number | null;
+  stop_reason: string | null;
+  block_types: string | null;
+  error: string | null;
+  context_json: string | null;
+  created_at: string;
+}
+
+/** 새벽 정리 게시가 읽는 열만 고른 행. */
+export type LlmCallSummaryRow = Pick<
+  LlmCallRow,
+  | "id"
+  | "purpose"
+  | "model"
+  | "attempt"
+  | "system_hashes"
+  | "turns_hash"
+  | "output_hash"
+  | "input_tokens"
+  | "cache_write_tokens"
+  | "cache_read_tokens"
+  | "output_tokens"
+  | "latency_ms"
+  | "error"
+  | "created_at"
+>;
+
+const sqlList = (xs: readonly string[]): string =>
+  xs.map((x) => `'${x}'`).join(", ");
+
+export const hasLlmCall = (id: number): boolean =>
+  !!db.prepare(`SELECT 1 FROM llm_calls WHERE id = ?`).pluck().get(id);
+
+export const getLlmCallBrief = (
+  id: number,
+): { id: number; model: string; created_at: string } | undefined =>
+  db
+    .prepare(`SELECT id, model, created_at FROM llm_calls WHERE id = ?`)
+    .get(id) as { id: number; model: string; created_at: string } | undefined;
+
+/** 같은 캐릭터의 바로 앞 호출 중 프롬프트 층 해시가 있고 목적이 목록에 든 것. */
+export const prevLayeredCall = (
+  beforeId: number,
+  characterId: number | null,
+  purposes: readonly string[],
+): LlmCallRow | undefined =>
+  db
+    .prepare(
+      `SELECT * FROM llm_calls
+        WHERE id < ? AND character_id IS ? AND system_hashes IS NOT NULL
+          AND purpose IN (${sqlList(purposes)})
+        ORDER BY id DESC LIMIT 1`,
+    )
+    .get(beforeId, characterId) as LlmCallRow | undefined;
+
+export const markLlmCallTraced = (id: number): void => {
+  db.prepare(`UPDATE llm_calls SET traced = 1 WHERE id = ?`).run(id);
+};
+
+/** 아직 게시 안 한 호출을 번호 순서로. */
+export const untracedLlmCalls = (
+  purposes: readonly string[],
+  limit: number,
+): LlmCallRow[] =>
+  db
+    .prepare(
+      `SELECT * FROM llm_calls
+        WHERE traced = 0 AND purpose IN (${sqlList(purposes)})
+        ORDER BY id LIMIT ?`,
+    )
+    .all(limit) as LlmCallRow[];
+
+/** 한 캐릭터의 아직 게시 안 한 호출 중 시각 이후 것. 새벽 정리 게시가 시간 창으로 읽는다. */
+export const untracedCallsSince = (
+  characterId: number,
+  purposes: readonly string[],
+  since: string,
+): LlmCallSummaryRow[] =>
+  db
+    .prepare(
+      `SELECT id, purpose, model, attempt, system_hashes, turns_hash, output_hash,
+              input_tokens, cache_write_tokens, cache_read_tokens, output_tokens,
+              latency_ms, error, created_at
+         FROM llm_calls
+        WHERE traced = 0 AND character_id = ? AND purpose IN (${sqlList(purposes)})
+          AND created_at >= ?
+        ORDER BY id`,
+    )
+    .all(characterId, since) as LlmCallSummaryRow[];
+
+// ── 보관 기간 ──────────────────────────────────────────────────────────
+
 export const LLM_CALL_RETENTION_DAYS = 90;
 
 // 슬랙 채널에서 표시를 받은 호출은 기간이 지나도 본문을 비우지 않는다. 답장이 왜 그렇게

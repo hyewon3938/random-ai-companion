@@ -62,8 +62,8 @@ import {
   PROACTIVE_RECENT_LINES,
 } from "./thresholds.js";
 import {
-  db,
   getActiveCharacter,
+  getActiveCharacters,
   getDayPlan,
   getRecoveryMark,
   hasWaitingWakeRow,
@@ -71,7 +71,6 @@ import {
   logMessage,
   promoteWakeRow,
   setRecoveryMark,
-  type CharacterRow,
   type PendingReplyRow,
 } from "./db.js";
 import {
@@ -961,10 +960,7 @@ bot.on("message:text", async (ctx) => {
 // 워터마크로 중복을 막는다: 이미 답장 책임을 진 유저 메시지(같은 ts)에는 다시 답하지 않는다.
 // (답장을 보냈지만 로그 전에 죽어 마지막 메시지가 여전히 유저로 보이는 배포 연쇄 상황 방지)
 export const recoverMissedReplies = async (): Promise<void> => {
-  const rows = db
-    .prepare(`SELECT * FROM characters WHERE status = 'active'`)
-    .all() as CharacterRow[];
-  for (const c of rows) {
+  for (const c of getActiveCharacters()) {
     const last = lastMessage(c.chat_id);
     if (!last || last.role !== "user") continue;
     // 최근(3시간 내) 놓친 것만 복구한다 — 그보다 오래된 건 아침 안부·팔로업이 담당.

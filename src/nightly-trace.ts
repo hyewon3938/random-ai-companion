@@ -15,12 +15,17 @@
 import {
   db,
   getBlob,
+  getDiaryOn,
   getMemoryItemById,
   getRelationship,
   getScheduleById,
+  getScheduledSendsOn,
   getTags,
   getUserProfile,
   listMemoryItems,
+  markLlmCallTraced,
+  untracedCallsSince,
+  type LlmCallSummaryRow,
   type MemoryRow,
   type RelationshipRow,
   type StoredUserProfile,
@@ -474,13 +479,7 @@ const progressChild = (
 };
 
 const diaryChild = (g: NightlyGathered, parentKey: string): void => {
-  const row = db
-    .prepare(
-      `SELECT id, entry_json FROM diary_entries WHERE character_id = ? AND date = ?`,
-    )
-    .get(g.characterId, g.diaryDate) as
-    | { id: number; entry_json: string }
-    | undefined;
+  const row = getDiaryOn(g.characterId, g.diaryDate);
   if (!row) return;
   let e: DiaryOutput;
   try {
@@ -513,17 +512,7 @@ const SEND_KIND_NAME: Record<string, string> = {
 };
 
 const sendChild = (g: NightlyGathered, parentKey: string): void => {
-  const rows = db
-    .prepare(
-      `SELECT window_start, window_end, text, kind FROM scheduled_messages
-        WHERE character_id = ? AND date = ? ORDER BY id`,
-    )
-    .all(g.characterId, g.today) as {
-    window_start: string;
-    window_end: string;
-    text: string;
-    kind: string;
-  }[];
+  const rows = getScheduledSendsOn(g.characterId, g.today);
   if (!rows.length) return;
   const body = rows
     .map((r) =>
@@ -536,22 +525,7 @@ const sendChild = (g: NightlyGathered, parentKey: string): void => {
   pushChunks(g.characterId, parentKey, "nightly_send", "선톡 문안", body);
 };
 
-interface NightlyCallRow {
-  id: number;
-  purpose: string;
-  model: string;
-  attempt: number;
-  system_hashes: string | null;
-  turns_hash: string | null;
-  output_hash: string | null;
-  input_tokens: number | null;
-  cache_write_tokens: number | null;
-  cache_read_tokens: number | null;
-  output_tokens: number | null;
-  latency_ms: number | null;
-  error: string | null;
-  created_at: string;
-}
+type NightlyCallRow = LlmCallSummaryRow;
 
 const tokenLine = (row: NightlyCallRow): string | null => {
   const bits: string[] = [];
@@ -584,18 +558,11 @@ const systemText = (raw: string | null): string => {
  * 외부 스케줄러 경로는 모델을 부르지 않으므로 붙을 호출이 없다.
  */
 const callChildren = (g: NightlyGathered, parentKey: string): void => {
-  const list = NIGHTLY_PURPOSES.map((p) => `'${p}'`).join(", ");
-  const rows = db
-    .prepare(
-      `SELECT id, purpose, model, attempt, system_hashes, turns_hash, output_hash,
-              input_tokens, cache_write_tokens, cache_read_tokens, output_tokens,
-              latency_ms, error, created_at
-         FROM llm_calls
-        WHERE traced = 0 AND character_id = ? AND purpose IN (${list})
-          AND created_at >= ?
-        ORDER BY id`,
-    )
-    .all(g.characterId, stampMinusMs(CALL_WINDOW_MS)) as NightlyCallRow[];
+  const rows = untracedCallsSince(
+    g.characterId,
+    NIGHTLY_PURPOSES,
+    stampMinusMs(CALL_WINDOW_MS),
+  );
   for (const row of rows) {
     const bits = [
       `호출 #${row.id}`,
@@ -642,7 +609,7 @@ const callChildren = (g: NightlyGathered, parentKey: string): void => {
         esc(output),
         true,
       );
-    db.prepare(`UPDATE llm_calls SET traced = 1 WHERE id = ?`).run(row.id);
+    markLlmCallTraced(row.id);
   }
 };
 

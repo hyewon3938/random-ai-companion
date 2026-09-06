@@ -7,7 +7,7 @@
 //            "plan": {...}|null, "send": {"window_start","window_end","text","kind"?}|null,
 //            "arcs": {...}|null, "rhythm": [...]|null}}
 // 사용: cat out.json | docker exec -i random-ai-companion npx tsx src/tools/nightly-write.ts
-import { db, type CharacterRow } from "../db.js";
+import { getCharacterById } from "../db.js";
 import {
   gatherNightlyInput,
   applyNightlyOutput,
@@ -21,9 +21,7 @@ const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
   output: NightlyOutput;
 };
 
-const row = db
-  .prepare(`SELECT * FROM characters WHERE id = ?`)
-  .get(input.characterId) as CharacterRow | undefined;
+const row = getCharacterById(input.characterId);
 
 if (!row) {
   console.log(`error: character ${input.characterId} not found`);

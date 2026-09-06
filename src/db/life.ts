@@ -282,6 +282,37 @@ export const getDayPlanMadeBy = (
       .get(characterId, date) as { made_by: string } | undefined
   )?.made_by;
 
+export const hasDiaryOn = (characterId: number, date: string): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM diary_entries WHERE character_id = ? AND date = ? LIMIT 1`,
+    )
+    .get(characterId, date);
+
+export const getDiaryOn = (
+  characterId: number,
+  date: string,
+): { id: number; entry_json: string } | undefined =>
+  db
+    .prepare(
+      `SELECT id, entry_json FROM diary_entries WHERE character_id = ? AND date = ?`,
+    )
+    .get(characterId, date) as { id: number; entry_json: string } | undefined;
+
+// 일기 한 편을 넣고 행 번호를 돌려준다. 태그는 이 번호로 단다.
+export const insertDiary = (
+  characterId: number,
+  date: string,
+  entryJson: string,
+): number =>
+  Number(
+    db
+      .prepare(
+        `INSERT INTO diary_entries (character_id, date, entry_json) VALUES (?, ?, ?)`,
+      )
+      .run(characterId, date, entryJson).lastInsertRowid,
+  );
+
 export const getRecentDiaries = (
   characterId: number,
   limit: number,

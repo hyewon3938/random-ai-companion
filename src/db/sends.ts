@@ -40,6 +40,30 @@ export const insertScheduledSend = (
   ).run(characterId, chatId, date, windowStart, windowEnd, text, now, kind);
 };
 
+export const hasScheduledSendOn = (characterId: number, date: string): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM scheduled_messages WHERE character_id = ? AND date = ? LIMIT 1`,
+    )
+    .get(characterId, date);
+
+// 그날 미리 만들어 둔 선톡 문안 전부. 새벽 정리 게시가 스레드에 붙인다.
+export const getScheduledSendsOn = (
+  characterId: number,
+  date: string,
+): { window_start: string; window_end: string; text: string; kind: string }[] =>
+  db
+    .prepare(
+      `SELECT window_start, window_end, text, kind FROM scheduled_messages
+        WHERE character_id = ? AND date = ? ORDER BY id`,
+    )
+    .all(characterId, date) as {
+    window_start: string;
+    window_end: string;
+    text: string;
+    kind: string;
+  }[];
+
 export const getPendingSends = (date: string): ScheduledSendRow[] =>
   db
     .prepare(

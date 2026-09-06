@@ -14,12 +14,11 @@ import {
   logErr,
 } from "./bot.js";
 import {
-  db,
+  getActiveCharacters,
   pruneLlmCalls,
   LLM_CALL_RETENTION_DAYS,
   pruneTraceEvents,
   TRACE_EVENT_RETENTION_DAYS,
-  type CharacterRow,
 } from "./db.js";
 import { runNightly } from "./nightly.js";
 import { runDispatchTick } from "./dispatch.js";
@@ -38,10 +37,7 @@ import { runFeedbackTick } from "./feedback.js";
 cron.schedule(
   "40 5 * * *",
   () => {
-    const rows = db
-      .prepare(`SELECT * FROM characters WHERE status = 'active'`)
-      .all() as CharacterRow[];
-    for (const c of rows)
+    for (const c of getActiveCharacters())
       runNightly(c)
         .then((r) => console.log(`[nightly-fallback] #${c.id} ${r}`))
         .catch((e) => logErr(`[nightly-fallback] #${c.id} error:`, e));

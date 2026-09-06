@@ -13,7 +13,7 @@
 
 import {
   countAssistantMeta,
-  db,
+  getCharacterById,
   hasAssistantMeta,
   hasUserScheduleOn,
   lastUserTs,
@@ -50,23 +50,17 @@ const daysBetween = (a: string, b: string): number =>
       86_400_000,
   );
 
+// 선톡 메시지의 meta_json을 고르는 LIKE 패턴. 선톡은 전부 proactive를, 종류는 kind를 달고 저장된다.
+const PROACTIVE = "%proactive%";
+const AWAY = '%"kind":"away"%';
+const kindPattern = (kind: string): string => `%"kind":"${kind}"%`;
+
 export const silenceState = (
   chatId: string,
   characterId: number,
 ): SilenceState => {
-  const lastUser = db
-    .prepare(
-      `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
-    )
-    .get(chatId) as { sent_at: string } | undefined;
   // 유저 메시지가 아직 없으면 관계 시작 시점을 기준으로 센다(첫 인사 후 무응답도 백오프 대상)
-  const anchor =
-    lastUser?.sent_at ??
-    (
-      db
-        .prepare(`SELECT created_at FROM characters WHERE id = ?`)
-        .get(characterId) as { created_at: string } | undefined
-    )?.created_at;
+  const anchor = lastUserTs(chatId) ?? getCharacterById(characterId)?.created_at;
   if (!anchor) return { tier: "normal", days: 0 };
 
   const days = Math.max(
@@ -77,11 +71,10 @@ export const silenceState = (
   if (days < QUIET_AFTER_DAYS) return { tier: "normal", days };
   if (days < RECONNECT_AT_DAYS) return { tier: "quiet", days };
   // 안부 선톡이 실제로 나갔는가 — 마지막 유저 메시지 이후 kind=checkin 발화가 있으면 dormant
-  const sent = db
-    .prepare(
-      `SELECT 1 FROM messages WHERE chat_id = ? AND sent_at > ? AND meta_json LIKE '%"kind":"checkin"%' LIMIT 1`,
-    )
-    .get(chatId, anchor);
+  const sent = hasAssistantMeta(chatId, anchor, {
+    after: true,
+    like: [kindPattern("checkin")],
+  });
   return { tier: sent ? "dormant" : "checkin", days };
 };
 
@@ -217,9 +210,6 @@ export const takeHeldDraft = (
 // 캐릭터 말의 meta_json으로 무엇이 선톡이고 어떤 종류인지 가른다. 패턴은 여기서만 정하고
 // db 쪽은 패턴을 받아 세기만 한다.
 
-const PROACTIVE = "%proactive%";
-const AWAY = '%"kind":"away"%';
-const kindPattern = (kind: string): string => `%"kind":"${kind}"%`;
 
 // 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸 선톡 수 — 하루 총량 상한을 지키는 데 쓴다.
 // followup·dispatch가 공유한다. 채널별 상한만 있으면 합이 통제되지 않아서, 각자 자기 몫을

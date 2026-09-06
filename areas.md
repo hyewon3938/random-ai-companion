@@ -26,7 +26,7 @@
 
 > 이 색인은 `node scripts/gen-modules.mjs`가 위 영역 표와 각 파일 맨 위 주석의 첫 줄에서 만든다. 손으로 고치지 않는다. 줄 수는 영역에 든 파일의 합이다.
 
-### 1. 기반과 저장 · 3,597줄
+### 1. 기반과 저장 · 4,010줄
 
 - `src/config.ts` — 환경변수를 한 번 읽어 두는 자리.
 - `src/kst.ts` — 시각을 다루는 자리 — 한국 시간과 논리일 경계.
@@ -36,12 +36,13 @@
 - `src/llm.ts` — 모델을 부르는 자리.
 - `src/db/characters.ts` — 캐릭터·관계·유저 프로필 표의 저장 함수.
 - `src/db/connection.ts` — SQLite 연결과 스키마.
+- `src/db/feedback.ts` — 슬랙에서 사람이 남긴 표시를 모아 두는 call_feedback 표의 저장 함수.
 - `src/db/life.ts` — 아크·월 리듬·일정·하루 각본·일기 표의 저장 함수.
 - `src/db/llm-calls.ts` — 모델 호출 기록·사용량·본문 보관 표의 저장 함수와 보관 기간.
 - `src/db/memory-items.ts` — 기억·태그·영역·오늘 메모·오늘 실제 표의 저장 함수.
 - `src/db/messages.ts` — 대화 기록 표의 저장·조회 함수와 답장 복구 표시.
 - `src/db/sends.ts` — 예약 발송과 대기 중인 답장 표의 저장 함수.
-- `src/db/trace-events.ts` — 게시함 표의 보관 기간과 정리.
+- `src/db/trace-events.ts` — 게시함 표의 저장 함수와 보관 기간.
 
 ### 2. 기억 · 766줄
 
@@ -58,7 +59,7 @@
 - `src/day-plan.ts` — 하루 각본 — 캐릭터가 그날 무엇을 하는지 블록으로 만든다.
 - `src/schedule-dedupe.ts` — 같은 일정인지 가리는 자리 — 공백·기호를 지운 내용으로 견준다.
 
-### 4. 대화 생성 · 2,415줄
+### 4. 대화 생성 · 2,405줄
 
 - `src/context.ts` — 프롬프트를 조립하는 자리 — 안정도 순 3층.
 - `src/prompts/reply.ts` — 답장 프롬프트의 고정 문안 — 캐릭터를 가리지 않고 매번 같은 글자가 들어가는 층이다.
@@ -71,7 +72,7 @@
 - `src/reply-timing.ts` — 답장 텀을 정하는 자리 — 두 태그 표 한 장.
 - `src/proactive-policy.ts` — 선제 발화 관제탑 — 오늘 먼저 연락해도 되는지, 무엇을 보낼지 한곳에서 정한다.
 
-### 5. 실행과 발송 · 2,426줄
+### 5. 실행과 발송 · 2,392줄
 
 - `src/index.ts` — 봇 프로세스의 시작점.
 - `src/bot.ts` — 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
@@ -81,7 +82,7 @@
 - `src/dispatch.ts` — 아침·점심·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 - `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
-### 6. 새벽 정리 · 2,233줄
+### 6. 새벽 정리 · 2,168줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 - `src/prompts/nightly.ts` — 새벽 정리가 모델에 넘기는 문안 — 일기·기억 정리·진행 반영 프롬프트와 선톡 상황 문단을 한 파일에 둔다.
@@ -90,7 +91,7 @@
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
-### 7. 관측과 운영 · 6,741줄
+### 7. 관측과 운영 · 6,632줄
 
 - `src/trace.ts` — 슬랙 트레이스 채널 — 캐릭터 파이프라인이 안에서 내린 판단을 슬랙에 게시한다.
 - `src/reply-trace.ts` — 답장 트레이스 — 답장 한 건이 무엇을 보고 나왔는지 슬랙 채널에 올린다.
@@ -144,14 +145,13 @@
 
 ### 1. 기반과 저장
 
-config는 환경변수, kst는 한국 시간과 논리일 경계, labels는 닫힌 목록의 이름표, thresholds는 숫자 기준값이다. db.ts는 `src/db/` 아래 표 묶음 8개를 다시 내보내는 입구라 부르는 쪽은 이 파일 하나만 import한다. 연결과 스키마·마이그레이션은 db/connection.ts에 있고, 캐릭터·관계·유저 프로필은 characters, 대화 기록은 messages, 아크·월 리듬·일정·각본·일기는 life, 예약 발송과 대기 중인 답장은 sends, 호출 기록과 본문 보관은 llm-calls, 게시함은 trace-events, 기억·태그·오늘 메모·오늘 실제는 memory-items가 갖는다. 묶음 파일끼리는 connection과 형제만 부르고 db.ts를 부르지 않는다. 저장 함수 사이에 있던 판단 4개 중 셋은 4번으로 갔고(말투 높낮이는 speech-level.ts, 유저가 이어 보내는 텀은 reply-timing.ts, 선제 발화를 가르는 meta_json 패턴은 proactive-policy.ts), 게시함 행의 보관 기한은 저장 규칙이라 db/trace-events.ts에 남겼다. llm.ts는 chat·chatJson 둘만 내보내는 얇은 게이트웨이다.
+config는 환경변수, kst는 한국 시간과 논리일 경계, labels는 닫힌 목록의 이름표, thresholds는 숫자 기준값이다. db.ts는 `src/db/` 아래 표 묶음 9개를 다시 내보내는 입구라 부르는 쪽은 이 파일 하나만 import한다. 연결과 스키마·마이그레이션은 db/connection.ts에 있고, 캐릭터·관계·유저 프로필은 characters, 대화 기록은 messages, 아크·월 리듬·일정·각본·일기는 life, 예약 발송과 대기 중인 답장은 sends, 호출 기록과 본문 보관은 llm-calls, 게시함은 trace-events, 슬랙에서 모은 표시는 feedback, 기억·태그·오늘 메모·오늘 실제는 memory-items가 갖는다. 묶음 파일끼리는 connection과 형제만 부르고 db.ts를 부르지 않는다. SQL 문장은 이 폴더와 손으로 돌리는 도구·평가에만 있고, 그 밖의 파일은 저장 함수를 부르거나 여러 저장을 하나로 묶는 `db.transaction`만 쓴다. 저장 함수 사이에 있던 판단 4개 중 셋은 4번으로 갔고(말투 높낮이는 speech-level.ts, 유저가 이어 보내는 텀은 reply-timing.ts, 선제 발화를 가르는 meta_json 패턴은 proactive-policy.ts), 게시함 행의 보관 기한은 저장 규칙이라 db/trace-events.ts에 남겼다. llm.ts는 chat·chatJson 둘만 내보내는 얇은 게이트웨이다.
 
 kst는 파일 25개, config 18개, thresholds 14개, labels 14개, llm 11개, db는 24개가 읽어서 고칠 때 같이 보는 곳이 넓다. 컬럼을 더하면 erd.md와 tools/check-writes·tools/db-view가 따라온다.
 
 검사는 schema-fresh·schema-v6-upgrade·schema-v7-upgrade·contact-gap·kst 5개다. 설계 원본은 erd.md와 ADR 0001·0005·0006·0007이다.
 
 손볼 자리
-- db.ts 밖 raw SQL을 되가져온다. trace.ts 7건, nightly.ts 7건, reply-trace.ts 4건, feedback.ts 3건, nightly-trace.ts 2건, proactive-policy.ts 51-79의 lastUserTs 1건이다. 일기 INSERT와 call_feedback 함수는 db.ts에 아예 없다.
 - thresholds로 안 옮긴 값이 남아 있다. bot.ts:129, reply-signal.ts:52·92, character.ts:136·360-362다.
 - db/connection.ts에서 마이그레이션 v2와 v3 주석이 섞여 있고, 버전 번호 없는 후속 마이그레이션 4종이 그 뒤에 있다.
 
@@ -240,7 +240,7 @@ trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다.
 2. bot.ts의 답장 파이프라인 2벌을 1벌로 합쳐 밖으로 뺀다. 4번과 5번의 경계가 확정된다. 9/6에 끝났다(#296).
 3. nightly.ts에서 문안을 뗀다. 9/6에 끝났다(#298).
 4. 선톡 한 통을 보내는 공통 함수를 만들어 followup·presence를 줄인다. 9/6에 끝났다(#300).
-5. db.ts를 표 묶음으로 나누고 밖의 raw SQL과 안의 정책 함수를 제자리로 보낸다. 임포터가 24개라 가장 넓지만, 재내보내기 파일을 남기면 임포터는 안 건드린다.
+5. db.ts를 표 묶음으로 나누고 밖의 raw SQL과 안의 정책 함수를 제자리로 보낸다. 임포터가 24개라 가장 넓지만, 재내보내기 파일을 남기면 임포터는 안 건드린다. 9/6에 끝났다(#302).
 6. trace.ts와 reply-trace.ts를 나누고 context.ts의 읽기와 조립을 나눈다. 테스트를 붙이며 한다.
 
 ## 이 문서를 관리하는 방법

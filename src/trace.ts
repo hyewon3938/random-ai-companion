@@ -10,11 +10,20 @@
 import { config } from "./config.js";
 import {
   db,
+  getActiveCharacters,
   getDayPlan,
   getDayPlanMadeBy,
   getDaySeed,
+  hasTraceEvent,
+  insertTraceEvent,
+  markTraceEventSent,
+  pendingTraceEvents,
+  setTraceEventFailure,
+  skipTraceEvent,
+  traceParentOf,
   type CharacterRow,
   type DaySeed,
+  type PendingTraceRow,
 } from "./db.js";
 import {
   blockCategory,
@@ -55,19 +64,15 @@ export interface TraceEventInput {
 export const recordTraceEvent = (e: TraceEventInput): void => {
   if (!traceEnabled()) return;
   try {
-    db.prepare(
-      `INSERT OR IGNORE INTO trace_events
-         (character_id, kind, dedupe_key, thread_key, parent_key, text, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      e.characterId ?? null,
-      e.kind,
-      e.dedupeKey ?? null,
-      e.threadKey ?? null,
-      e.parentKey ?? null,
-      e.text,
-      nowIso(),
-    );
+    insertTraceEvent({
+      characterId: e.characterId ?? null,
+      kind: e.kind,
+      dedupeKey: e.dedupeKey ?? null,
+      threadKey: e.threadKey ?? null,
+      parentKey: e.parentKey ?? null,
+      text: e.text,
+      createdAt: nowIso(),
+    });
   } catch (err) {
     // 트레이스 기록 실패가 본 기능(답장·선톡)을 멈추면 안 된다 — 적고 넘어간다.
     console.error("[trace] 기록 실패:", err);
@@ -118,35 +123,18 @@ const PERMANENT_ERRORS = new Set([
 const MAX_ATTEMPTS = 3;
 const BATCH = 20;
 
-interface TraceRow {
-  id: number;
-  kind: string;
-  parent_key: string | null;
-  text: string;
-  attempts: number;
-  created_at: string;
-}
-
 // 부모를 이만큼 기다려도 안 생기면 접는다. 자식이 부모보다 먼저 쌓이는 자리가 있어서
 // (발송 결과가 답장 게시 준비보다 빠를 수 있다) 잠깐은 기다리되, 영영 기다리지는 않는다.
 const ORPHAN_WAIT_MS = 30 * 60_000;
 
-const parentOf = (
-  parentKey: string,
-): { status: string; slack_ts: string | null } | undefined =>
-  db
-    .prepare(
-      `SELECT status, slack_ts FROM trace_events
-        WHERE thread_key = ? ORDER BY id DESC LIMIT 1`,
-    )
-    .get(parentKey) as { status: string; slack_ts: string | null } | undefined;
-
-const markFailure = (row: TraceRow, error: string, permanent: boolean): void => {
+const markFailure = (
+  row: PendingTraceRow,
+  error: string,
+  permanent: boolean,
+): void => {
   const attempts = row.attempts + 1;
   const giveUp = permanent || attempts >= MAX_ATTEMPTS;
-  db.prepare(
-    `UPDATE trace_events SET status = ?, attempts = ?, last_error = ? WHERE id = ?`,
-  ).run(giveUp ? "failed" : "pending", attempts, error, row.id);
+  setTraceEventFailure(row.id, giveUp ? "failed" : "pending", attempts, error);
   if (giveUp)
     console.error(
       `[trace] 게시 포기 (${row.kind}): ${error}${error === "not_in_channel" ? " — 슬랙 앱을 채널에 초대해야 한다" : ""}`,
@@ -161,43 +149,29 @@ export const runTraceTick = async (): Promise<void> => {
   } catch (err) {
     console.error("[trace] 아침 각본 게시 준비 실패:", err);
   }
-  const rows = db
-    .prepare(
-      `SELECT id, kind, parent_key, text, attempts, created_at
-         FROM trace_events WHERE status = 'pending' ORDER BY id LIMIT ?`,
-    )
-    .all(BATCH) as TraceRow[];
+  const rows = pendingTraceEvents(BATCH);
   for (const row of rows) {
     let threadTs: string | undefined;
     if (row.parent_key) {
-      const parent = parentOf(row.parent_key);
+      const parent = traceParentOf(row.parent_key);
       // 부모가 아직 안 나갔으면 다음 틱에 — 스레드 순서를 지킨다.
       if (!parent || parent.status === "pending") {
         const waited =
           Date.now() -
           new Date(row.created_at.replace(" ", "T") + "+09:00").getTime();
         if (!parent && waited > ORPHAN_WAIT_MS)
-          db.prepare(
-            `UPDATE trace_events SET status = 'skipped', last_error = '부모 행이 없다' WHERE id = ?`,
-          ).run(row.id);
+          skipTraceEvent(row.id, "부모 행이 없다");
         continue;
       }
       if (parent.status !== "sent" || !parent.slack_ts) {
-        db.prepare(
-          `UPDATE trace_events SET status = 'skipped', last_error = '부모 게시 실패' WHERE id = ?`,
-        ).run(row.id);
+        skipTraceEvent(row.id, "부모 게시 실패");
         continue;
       }
       threadTs = parent.slack_ts;
     }
     try {
       const res = await postToSlack(row.text, threadTs);
-      if (res.ok && res.ts)
-        db.prepare(
-          `UPDATE trace_events
-              SET status = 'sent', slack_ts = ?, attempts = attempts + 1, last_error = NULL
-            WHERE id = ?`,
-        ).run(res.ts, row.id);
+      if (res.ok && res.ts) markTraceEventSent(row.id, res.ts);
       else {
         const error = res.error ?? "unknown_error";
         markFailure(row, error, PERMANENT_ERRORS.has(error));
@@ -283,16 +257,6 @@ const promptSections = (prompt: string): { label: string; body: string }[] => {
     },
   ];
 };
-
-export const hasTraceEvent = (dedupeKey: string): boolean =>
-  Boolean(
-    db.prepare(`SELECT 1 FROM trace_events WHERE dedupe_key = ?`).get(dedupeKey),
-  );
-
-const activeCharacters = (): CharacterRow[] =>
-  db
-    .prepare(`SELECT * FROM characters WHERE status = 'active'`)
-    .all() as CharacterRow[];
 
 const enqueuePlanPost = (c: CharacterRow, date: string, raw: string): void => {
   const madeBy = getDayPlanMadeBy(c.id, date) ?? "nightly";
@@ -392,7 +356,7 @@ const enqueueMorningPlans = (): void => {
   const hour = getKstNow().getUTCHours();
   if (hour < PLAN_POST_HOUR) return;
   const date = kstLogicalDate();
-  for (const c of activeCharacters()) {
+  for (const c of getActiveCharacters()) {
     const raw = getDayPlan(c.id, date);
     if (raw) enqueuePlanPost(c, date, raw);
     else enqueueNoPlanNote(c, date, hour);
