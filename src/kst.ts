@@ -9,6 +9,8 @@
 
 import {
   CONTACT_GAP_NOTICE_MS,
+  CONTACT_GAP_LONGING_MS,
+  CONTACT_GAP_OVERNIGHT_MS,
   DAY_BOUNDARY_HOUR,
   ENOUGH_SLEEP_HOURS,
   LATE_TALK_FROM,
@@ -196,22 +198,50 @@ export const lastTalkedLabel = (
   return `${rel}(${date}) ${ts.slice(11, 16)}`;
 };
 
-// 유저 연락이 캐릭터의 마지막 말에서 얼마 만에 온 건지 사람 말로. 같은 논리일 안에서 기준
-// 이상 벌어졌을 때만 문구를 만들고, 아니면 null이다 — 날짜가 바뀐 자리는 직전 대화 절이
-// 다루고, 짧은 틈은 화제가 아니다(이슈 #284). 분 단위는 반 시간으로 뭉갠다. 모델이 그 값을
-// 그대로 말에 옮기는데, 4시간 27분 만이라고 하면 사람 말이 아니다.
-export const contactGapLabel = (
+/** 유저 연락이 몇 만에 왔는지와, 기다렸다는 말을 얹어도 되는 텀인지. */
+export interface ContactGap {
+  /** 프롬프트에 그대로 들어가는 문구. */
+  label: string;
+  /** 오래 기다린 자리. 하루가 통째로 지난 텀과 날짜가 바뀐 텀이 여기 들어간다. */
+  longing: boolean;
+}
+
+// 유저 연락이 캐릭터의 마지막 말에서 얼마 만에 온 건지 사람 말로. 짧은 틈은 화제가 아니라서
+// 기준(CONTACT_GAP_NOTICE_MS) 이상일 때만 문구를 만든다(이슈 #284). 분 단위는 반 시간으로
+// 뭉갠다 — 모델이 그 값을 그대로 말에 옮기는데, 4시간 27분 만이라고 하면 사람 말이 아니다.
+//
+// 날짜가 바뀐 자리는 잣대가 다르다(이슈 #316). 밤에 끝난 대화에 다음 날 아침 답이 오는 텀까지
+// 화제로 삼으면 자고 일어날 때마다 기다렸다는 말이 나오므로, 하루가 통째로 지난 만큼
+// (CONTACT_GAP_OVERNIGHT_MS) 벌어졌을 때만 적고 그 자리는 전부 긴 텀으로 친다.
+export const contactGapOf = (
   lastCharTs: string,
   firstUserTs: string,
   minGapMs: number = CONTACT_GAP_NOTICE_MS,
-): string | null => {
-  if (logicalDateOf(lastCharTs) !== logicalDateOf(firstUserTs)) return null;
+): ContactGap | null => {
   const gap = kstDateOf(firstUserTs).getTime() - kstDateOf(lastCharTs).getTime();
-  if (gap < minGapMs) return null;
   const halves = Math.round(gap / 1_800_000);
   const hours = Math.floor(halves / 2);
+  const clock = firstUserTs.slice(11, 16);
+
+  if (logicalDateOf(lastCharTs) !== logicalDateOf(firstUserTs)) {
+    if (gap < CONTACT_GAP_OVERNIGHT_MS) return null;
+    const days = logicalDaysAgo(lastCharTs, logicalDateOf(firstUserTs));
+    const span = ["", "하루", "이틀", "사흘", "나흘"][days] ?? `${days}일`;
+    return {
+      label: `네가 ${lastTalkedLabel(lastCharTs, logicalDateOf(firstUserTs))}에 마지막으로 말한 뒤 상대 연락은 ${clock}에 왔다. ${span} 만이다.`,
+      longing: true,
+    };
+  }
+
+  if (gap < minGapMs) return null;
   const span = halves % 2 ? `${hours}시간 반` : `${hours}시간`;
-  return `네가 ${lastCharTs.slice(11, 16)}에 마지막으로 말한 뒤 상대 연락은 ${firstUserTs.slice(11, 16)}에 왔다. ${span} 만이다.`;
+  // 새벽에 온 연락은 캐릭터가 자던 시간이라 긴 텀으로 치지 않는다 — 논리일은 새벽 5시에 갈려서
+  // 자정을 넘긴 연락도 같은 날로 들어온다.
+  const daytime = firstUserTs.slice(11, 13) >= "05";
+  return {
+    label: `네가 ${lastCharTs.slice(11, 16)}에 마지막으로 말한 뒤 상대 연락은 ${clock}에 왔다. ${span} 만이다.`,
+    longing: daytime && gap >= CONTACT_GAP_LONGING_MS,
+  };
 };
 
 // 날짜 문자열을 며칠 옮긴다.
@@ -271,3 +301,11 @@ export const nightSleepOf = (
  */
 export const kstStamp = (): string =>
   getKstNow().toISOString().replace("T", " ").slice(0, 19);
+
+/** 지금에서 ms만큼 앞선 시각을 같은 저장용 문자열로. 최근 몇 분·몇 시간 안의 기록을 찾는
+ * 자리가 쓴다 — 경과 시간은 KST를 더한 Date로 재면 안 되고, 뺀 뒤에 문자열로 만들어야 한다. */
+export const kstStampBefore = (ms: number): string =>
+  new Date(getKstNow().getTime() - ms)
+    .toISOString()
+    .replace("T", " ")
+    .slice(0, 19);

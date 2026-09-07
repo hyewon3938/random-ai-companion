@@ -69,18 +69,27 @@ export const lastMessageBefore = (
     )
     .get(chatId, before) as MessageRow | undefined;
 
-// 캐릭터의 마지막 말과 그 뒤 처음 온 유저 말. 유저가 연달아 보냈으면 첫 통이 기준이다 —
-// 지금 답하려는 유저 말이 몇 시간 만에 온 건지는 그 첫 통이 정한다(이슈 #284). 캐릭터 말이
-// 아직 없거나 그 뒤로 유저 말이 없으면(선톡 자리) undefined.
-export const lastExchangeGap = (
+// 유저가 다시 말을 건 자리 — sinceTs 뒤 유저의 첫 말과, 그 앞에서 캐릭터가 마지막으로 한 말.
+// 그 둘 사이가 연락 텀이다(이슈 #284). 캐릭터 말을 먼저 찾지 않고 유저 말부터 찾는 이유는
+// 대화가 이어지는 동안에도 절을 잠깐 남겨 두기 위해서다(이슈 #316) — 유저가 30분 전에 말을
+// 건 뒤로 몇 마디가 오갔어도 그 재개 지점이 계속 나온다. 창 안에 유저 말이 없으면 값이 없다.
+export const reopenedGap = (
   chatId: string,
+  sinceTs: string,
 ): { lastChar: string; firstUser: string } | undefined => {
+  const u = db
+    .prepare(
+      `SELECT id FROM messages WHERE chat_id = ? AND role = 'user' AND sent_at >= ? ORDER BY id ASC LIMIT 1`,
+    )
+    .get(chatId, sinceTs) as { id: number } | undefined;
+  if (!u) return undefined;
   const last = db
     .prepare(
-      `SELECT id, sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1`,
+      `SELECT id, sent_at FROM messages WHERE chat_id = ? AND role = 'assistant' AND id < ? ORDER BY id DESC LIMIT 1`,
     )
-    .get(chatId) as { id: number; sent_at: string } | undefined;
+    .get(chatId, u.id) as { id: number; sent_at: string } | undefined;
   if (!last) return undefined;
+  // 유저가 연달아 보낸 말은 첫 통이 기준이다 — 창 안에 든 말이 그중 두 번째일 수 있다.
   const first = db
     .prepare(
       `SELECT sent_at FROM messages WHERE chat_id = ? AND role = 'user' AND id > ? ORDER BY id ASC LIMIT 1`,

@@ -199,7 +199,11 @@ test("첫 만남·첫 대화·연락 텀·상황 문단·답장 형식은 켤 �
     input({
       metAt: "2026-09-06 01:00:00",
       coldStart: true,
-      contactGap: "캐릭터가 12:00에 마지막으로 말했고 유저가 15:30에 다시 말을 걸었다. 3시간 30분 만이다.",
+      contactGap: {
+        label:
+          "캐릭터가 12:00에 마지막으로 말했고 유저가 15:30에 다시 말을 걸었다. 3시간 30분 만이다.",
+        longing: false,
+      },
       lastTalk: "어제",
       notes: ["두 시 반에 병원"],
       judgedSpeech: "반말",
@@ -212,7 +216,26 @@ test("첫 만남·첫 대화·연락 텀·상황 문단·답장 형식은 켤 �
   assert.ok(live.text.includes("[오늘 메모 — 대화하며 적어 둔 것]\n- 두 시 반에 병원"));
   assert.ok(live.text.includes("[직전 대화]\n마지막으로 대화한 날은 어제다."));
   assert.ok(live.text.includes("[연락 텀]\n캐릭터가 12:00에 마지막으로 말했고"));
+  assert.ok(live.text.includes("- 그 사이 네가 각본대로 바빴으면"));
+  assert.ok(!live.text.includes("- 오래 기다린 자리다."));
   assert.ok(live.text.includes("- 말투: 서로 반말"));
   assert.ok(live.text.includes("지금은 몰아 답장 자리다.\n\n"));
   assert.ok(live.text.endsWith(REPLY_ENVELOPE));
+});
+
+test("긴 텀에는 기다렸다는 말 규칙이 붙고 바빴으면 접으라는 줄은 빠진다", () => {
+  const [, , live] = assembleSystemBlocks(
+    input({
+      contactGap: {
+        label:
+          "네가 09:10에 마지막으로 말한 뒤 상대 연락은 19:10에 왔다. 10시간 만이다.",
+        longing: true,
+      },
+    }),
+  );
+  assert.ok(live.text.includes("[연락 텀]\n네가 09:10에 마지막으로"));
+  assert.ok(live.text.includes("- 오래 기다린 자리다."));
+  assert.ok(live.text.includes("일하는 틈틈이 확인했다는 결로 말한다."));
+  assert.ok(live.text.includes("몇 마디 주고받다가 꺼내도 된다."));
+  assert.ok(!live.text.includes("- 그 사이 네가 각본대로 바빴으면"));
 });
