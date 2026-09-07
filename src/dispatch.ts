@@ -1,9 +1,8 @@
-// 아침·점심·안부 선톡을 창 안에 내보내는 자리(3분 틱).
+// 아침·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 //
 // 밤에 준비해 둔 문안을 발송 창 안에서 보낸다. 모델을 부르지 않는다. 유저가 최근 4시간 안에
 // 먼저 연락했으면 보내지 않고, 관제탑이 그날 보낼 종류로 지목하지 않아도 보내지 않는다.
 //
-// 점심 선톡은 발송 창만 12:05~12:50인 morning 종류 행이다(스키마를 늘리지 않으려고).
 // 창을 놓치면 유예 안에서 보내고(창 종료 +90분, 시간대별 상한 11·14·22시), 넘기면 폐기
 // 사유와 시도 횟수를 적는다.
 
@@ -74,12 +73,9 @@ export const runDispatchTick = noOverlap(async () => {
 
     // 발송 직전 재확인(관제탑): 밤에 정한 종류가 지금도 맞는지 본다. 문안 준비 단계에서
     // 이미 같은 판정을 거쳤지만, 날짜 경계를 넘긴 문안을 거르는 이중 가드다.
-    // 점심 문안은 아침 문안과 같은 종류로 저장하므로 둘을 함께 통과시킨다.
     const plan = dailySendPlan(r.chat_id, r.character_id, today);
     const allowed =
-      r.kind === "checkin"
-        ? plan.kind === "checkin"
-        : plan.kind === "morning" || plan.kind === "lunch";
+      r.kind === "checkin" ? plan.kind === "checkin" : plan.kind === "morning";
     if (!allowed) {
       markScheduledSend(r.id, "skipped", `보내지 않는 날 (${plan.reason})`, null);
       continue;

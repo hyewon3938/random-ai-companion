@@ -97,6 +97,7 @@ import {
 // reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 선톡,
 // checkin=긴 침묵 뒤 안부 선톡, away=자리비움 선톡(나갈 때·돌아왔을 때),
 // catchup=낮의 근황 선톡, goodnight=밤 인사 선톡, mend=서운해한 뒤 보내는 달래기 선톡,
+// lunch=무응답 이틀째에 아침 선톡과 함께 나가는 점심 선톡(이슈 #314),
 // promise=답장에서 한 연락 약속을 지키는 연락(이슈 #308)
 export type SendKind =
   | "reply"
@@ -107,6 +108,7 @@ export type SendKind =
   | "catchup"
   | "goodnight"
   | "mend"
+  | "lunch"
   | "promise";
 
 // 텔레그램 API 연결 풀.
