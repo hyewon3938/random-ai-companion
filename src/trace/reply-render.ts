@@ -9,8 +9,9 @@
 // 저장하는 본문은 텍스트 블록뿐이라, 출력 토큰이 글자 수보다 클 때 그 몫이 생각 과정으로
 // 갔는지 이 줄에서 가른다.
 //
-// 하루 고정 두 덩이가 하루 중에 바뀌었을 때의 줄 단위 비교(lineDiff·changedSections)도
-// 여기 있다. 무엇을 언제 게시함에 쌓을지는 trace/reply-post.ts가 정한다.
+// 하루 고정 두 덩이가 하루 중에 바뀌었을 때 어느 대목이 바뀌었는지 이름을 대는 것
+// (changedSections·changeLabel)도 여기 있다. 줄 단위 비교 자체는 trace/diff.ts에 있고,
+// 무엇을 언제 게시함에 쌓을지는 trace/reply-post.ts가 정한다.
 
 import { getBlob, getLlmCallBrief, type LlmCallRow } from "../db.js";
 import {
@@ -32,11 +33,9 @@ import {
   tokenLine,
 } from "./format.js";
 
-
 // 저장된 문자열이 지금 아는 길 이름인지 대조해 이름을 붙인다 — 옛 기록·모르는 값은 그대로 적는다.
 const parseName = (v: string): string =>
   v in PARSE_NAME ? PARSE_NAME[v as ReplyParse] : v;
-
 
 export type CallRow = LlmCallRow;
 
@@ -111,20 +110,28 @@ export interface CallContext {
   /** 객체의 신호 칸 — 키 이름은 그대로 둔다(이미 올라간 기록과 어긋나지 않게). */
   stay?: boolean;
   note?: string | null;
-  /** 상대 상태 판정 — 이번 답장에서 바뀌었는지, 판정을 못 받았는지, 지금 값. */
+  /**
+   * 상대 상태 판정 — 이번 답장에서 바뀌었는지, 판정을 못 받았는지, 지금 값. 바뀌었으면
+   * prev에 바로 전 값이 있어 슬랙에서 이전 → 지금으로 읽는다(이슈 #312).
+   */
   userState?: {
     changed?: boolean;
     failed?: boolean;
     callId?: number | null;
     label?: string | null;
+    prev?: string | null;
   };
-  /** 이 답장에서 한 연락 약속과 코드가 정한 시각. 시각을 못 정했으면 dropped에 사유. */
+  /**
+   * 이 답장에서 한 연락 약속과 코드가 정한 시각. 시각을 못 정했으면 dropped에 사유,
+   * 이 약속을 걸며 거둔 앞 약속이 있으면 replaced에 건수.
+   */
   promise?: {
     text: string;
     sendAt?: string;
     block?: string;
     activity?: string;
     dropped?: string;
+    replaced?: number;
   };
   /** 객체를 어느 길로 읽었는지(json·stray·salvage·plain·empty). */
   outputParse?: string;
@@ -402,12 +409,17 @@ const outcomeLines = (ctx: CallContext): string[] => {
       ctx.outputParse ? ` · 형식 ${parseName(ctx.outputParse)}` : ""
     }`,
   );
-  // 상대 상태 — 판정을 못 받은 것과 그대로인 것을 갈라 적는다. 지금 값은 있을 때만 잇는다.
+  // 상대 상태 — 판정을 못 받은 것과 그대로인 것을 갈라 적는다. 바뀐 턴은 이전 값에서
+  // 지금 값으로 가는 화살표로 적어 무엇이 어떻게 달라졌는지 이 줄에서 보이게 한다.
   if (ctx.userState) {
     const u = ctx.userState;
-    const how = u.failed ? "판정 실패" : u.changed ? "바뀜" : "그대로";
+    const now = u.label ? esc(u.label) : "없음";
     out.push(
-      `*상대 상태* ${how}${u.label ? ` · ${esc(u.label)}` : " · 없음"}`,
+      u.failed
+        ? `*상대 상태* 판정 실패 · ${now}`
+        : u.changed
+          ? `*상대 상태* 바뀜 · ${u.prev ? esc(u.prev) : "없음"} → ${now}`
+          : `*상대 상태* 그대로 · ${now}`,
     );
   }
   // 메모는 붙었는지와 무엇을 적었는지를 같은 줄에서 본다 — 다른 신호와 묶어 두면
@@ -422,7 +434,9 @@ const outcomeLines = (ctx: CallContext): string[] => {
     out.push(
       p.dropped
         ? `*약속* ${esc(p.text)} — 못 걸었다: ${esc(p.dropped)}`
-        : `*약속* ${esc(p.text)} → ${esc(p.sendAt ?? "")}${p.activity ? ` (${esc(p.activity)} 끝)` : ""}`,
+        : `*약속* ${esc(p.text)} → ${esc(p.sendAt ?? "")}${p.activity ? ` (${esc(p.activity)} 끝)` : ""}${
+            p.replaced ? ` · 앞 약속 ${p.replaced}건 거둠` : ""
+          }`,
     );
   }
   if (ctx.dayActual) {
@@ -540,9 +554,19 @@ export const renderHold = (row: CallRow, ctx: CallContext | null): string => {
   return lines.join("\n");
 };
 
-export const renderDraft = (row: CallRow): string => {
+export const renderDraft = (row: CallRow, ctx?: CallContext): string => {
   const name = purposeName(row.purpose);
   const lines = [headLine(row, ":memo:", `${name} 문안`)];
+  // 약속 시각에 부른 문안은 어느 약속을 지키는 자리였는지, 달래기 문안은 상대가 어떤
+  // 상태라 나가는지를 머리에 둔다 — 문안만 보면 왜 이 호출이 있었는지 알 수 없어서다.
+  if (ctx?.promised) {
+    const activity = ctx.promised.activity ?? "하던 일";
+    const start = ctx.promised.blockStart;
+    lines.push(
+      `*지킨 약속* ${esc(ctx.promised.promise ?? "")} — ${esc(start ? `${start} ${activity}` : activity)} 구간이 끝나 약속대로 연락하는 자리`,
+    );
+  }
+  if (ctx?.userState?.label) lines.push(`*상대 상태* ${esc(ctx.userState.label)}`);
   const raw = row.output_hash ? getBlob(row.output_hash) : null;
   if (raw) {
     let shown = false;
@@ -568,43 +592,10 @@ export const renderDraft = (row: CallRow): string => {
 
 // ── 하루 고정 두 덩이의 비교 ────────────────────────────────────────────
 
-export const LAYER_NAME = ["잘 바뀌지 않는 데이터", "하루 동안 같은 데이터"] as const;
-
-export const lineDiff = (
-  before: string,
-  after: string,
-  maxLines = 60,
-): string => {
-  const a = before.split("\n");
-  const b = after.split("\n");
-  if (a.length * b.length > 250_000)
-    return `(줄 수 ${a.length} → ${b.length} — 너무 커서 줄 단위 비교는 생략)`;
-  const w = b.length + 1;
-  const dp = new Int32Array((a.length + 1) * w);
-  for (let i = a.length - 1; i >= 0; i--)
-    for (let j = b.length - 1; j >= 0; j--)
-      dp[i * w + j] =
-        a[i] === b[j]
-          ? dp[(i + 1) * w + j + 1] + 1
-          : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
-  const out: string[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i++;
-      j++;
-    } else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1])
-      out.push(`- ${a[i++]}`);
-    else out.push(`+ ${b[j++]}`);
-  }
-  while (i < a.length) out.push(`- ${a[i++]}`);
-  while (j < b.length) out.push(`+ ${b[j++]}`);
-  if (!out.length) return "(줄 단위로는 같다 — 공백만 바뀌었다)";
-  return out.length > maxLines
-    ? [...out.slice(0, maxLines), `… ${out.length - maxLines}줄 더`].join("\n")
-    : out.join("\n");
-};
+export const LAYER_NAME = [
+  "잘 바뀌지 않는 데이터",
+  "하루 동안 같은 데이터",
+] as const;
 
 /** 프롬프트를 대괄호 머리글로 갈라 대목 이름 → 본문으로 만든다. 머리글 앞의 글은 이름 없이 담는다. */
 const sectionsOf = (text: string): Map<string, string> => {

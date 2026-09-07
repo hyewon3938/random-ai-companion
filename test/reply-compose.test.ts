@@ -58,7 +58,7 @@ const reply = (bubbles: string[], extra: Record<string, unknown> = {}): string =
 
 /** 상대 상태를 그대로 두는 judge — 모델을 부르지 않는다. */
 const noJudge = async (): Promise<UserStateVerdict> => ({
-  changed: false, state: null, failed: false, callId: null,
+  changed: false, state: null, failed: false, callId: null, prev: null,
 });
 
 const clearMessages = (): void => {
@@ -264,6 +264,7 @@ describe("composeReply", () => {
       },
       failed: false,
       callId: null,
+      prev: null,
     });
     const out = await composeReply({
       judge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]", ask,
@@ -306,7 +307,7 @@ describe("composeReply", () => {
       }).context_json,
     ) as Record<string, unknown>;
     assert.deepEqual(ctx.relUpdate, [{ field: "상대 상태", from: null, to: label }]);
-    assert.deepEqual(ctx.userState, { changed: true, failed: false, callId: null, label });
+    assert.deepEqual(ctx.userState, { changed: true, failed: false, callId: null, label, prev: null });
 
     // 같은 값이 다시 오면 저장도 관계 변경 기록도 없다
     clearMessages();
@@ -326,7 +327,7 @@ describe("composeReply", () => {
       }).context_json,
     ) as Record<string, unknown>;
     assert.equal(ctx2.relUpdate, undefined);
-    assert.deepEqual(ctx2.userState, { changed: true, failed: false, callId: null, label });
+    assert.deepEqual(ctx2.userState, { changed: true, failed: false, callId: null, label, prev: null });
     db.prepare(
       `UPDATE relationships SET user_state = NULL, user_state_cause = NULL,
          user_state_tone = NULL, user_state_since = NULL WHERE character_id = ?`,

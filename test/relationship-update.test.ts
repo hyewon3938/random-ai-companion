@@ -197,7 +197,7 @@ test("저장된 호칭이 없던 관계는 앞 값을 null로 기록한다", () 
 
 test("상대 상태 판정은 바뀐 것만 저장하고 판정 실패·같은 값은 손대지 않는다", () => {
   const stateId = createFixtureCharacter("chat-state");
-  const noChange = { changed: false, state: null, failed: false, callId: null };
+  const noChange = { changed: false, state: null, failed: false, callId: null, prev: null };
   assert.deepEqual(applyUserState(stateId, noChange, NOW1), []);
   assert.deepEqual(applyUserState(stateId, { ...noChange, failed: true }, NOW1), []);
   assert.equal(rel(stateId).user_state, null);
@@ -206,6 +206,7 @@ test("상대 상태 판정은 바뀐 것만 저장하고 판정 실패·같은 �
     changed: true,
     failed: false,
     callId: null,
+    prev: null,
     state: {
       state: "연락한다던 말을 안 지켜 서운함",
       cause: "char" as const,

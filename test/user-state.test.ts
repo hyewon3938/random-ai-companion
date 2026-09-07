@@ -159,11 +159,13 @@ test("최근 대화에 유저 말이 없으면 판정 호출 없이 그대로라
     state: null,
     failed: false,
     callId: null,
+    prev: null,
   });
   assert.deepEqual(await judgeUserState(characterId, "chat-nobody"), {
     changed: false,
     state: null,
     failed: false,
     callId: null,
+    prev: null,
   });
 });
