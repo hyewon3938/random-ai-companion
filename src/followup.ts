@@ -100,7 +100,7 @@ export const catchupSilenceOk = (
   );
 };
 
-const goodnightSituation = (): string =>
+export const goodnightSituation = (): string =>
   [
     `[문안 — 지금 보낼 굿나잇 한 통]`,
     `자정을 넘겨 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 한 시간쯤 됐다. 잠든 것 같다. 너도 자러 가며 다정하게 굿나잇 인사를 남긴다 — 상대가 아침에 보면 기분 좋을 결로.`,
@@ -110,7 +110,7 @@ const goodnightSituation = (): string =>
     `JSON으로만 답한다: {"text":"..."}`,
   ].join("\n");
 
-const mendSituation = (): string =>
+export const mendSituation = (): string =>
   [
     `[문안 — 지금 보낼 달래기 한 통]`,
     `위 [상대의 지금 상태]대로 상대가 너 때문에 안 좋은 상태인 채 답이 끊긴 지 30분쯤 됐다. 그 상태와 [방금까지 오간 말]을 읽고 무엇 때문인지 헤아려, 그 마음을 알아차렸다는 것만 짧게 전한다.`,
@@ -122,7 +122,7 @@ const mendSituation = (): string =>
     `JSON으로만 답한다: {"text":"..."}`,
   ].join("\n");
 
-const lunchSituation = (): string =>
+export const lunchSituation = (): string =>
   [
     `[문안 — 지금 보낼 점심 한 통]`,
     `상대가 이틀째 답이 없다. 아침에 한 통 보냈고 이게 오늘의 마지막 한 통이다. 재촉하지 않고 위 [지금]에서 네가 하는 일만 가볍게 한 마디 전한다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,
@@ -134,7 +134,7 @@ const lunchSituation = (): string =>
     `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
   ].join("\n");
 
-const catchupSituation = (): string =>
+export const catchupSituation = (): string =>
   [
     `[문안 — 지금 보낼 근황 한 통]`,
     `상대가 네 시간 넘게 조용하다. 재촉하지 않고 위 [지금]에서 네가 하는 일만 가볍게 한 마디 전한다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,

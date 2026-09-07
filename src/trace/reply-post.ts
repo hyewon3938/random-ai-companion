@@ -39,10 +39,10 @@ import { lineDiff } from "./diff.js";
 // 한 틱에 준비하는 호출 수. 슬랙 발송은 게시함이 따로 조절하므로 여기서는 읽기 상한만 둔다.
 const BATCH = 20;
 // 판단 근거(context_json)가 붙기를 기다리는 시간. 답장은 행이 먼저 생기고 근거가 나중에 붙는다.
-const CONTEXT_GRACE_MS = 5 * 60_000;
+export const CONTEXT_GRACE_MS = 5 * 60_000;
 // 이보다 오래된 호출은 올리지 않고 표시만 한다 — 토큰을 뒤늦게 넣거나 오래 멈춰 있었을 때
 // 지난 기록이 한꺼번에 채널로 쏟아지지 않게.
-const MAX_AGE_MS = 3 * 3600_000;
+export const MAX_AGE_MS = 3 * 3600_000;
 
 /** 올리는 호출. 답장·붙잡기 판정·선톡 문안. */
 const POST_PURPOSES = [

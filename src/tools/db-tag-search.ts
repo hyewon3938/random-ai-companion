@@ -30,7 +30,7 @@ import type { MemoryRow, ScheduleStateRow } from "../db.js";
  * [다가오는 일정] 슬롯이 싣는 최대 행 수. src/db.ts의 getUpcomingSchedules 기본값과 같은 값이고,
  * 여기 실린 행은 태그 검색 결과에서 빠지므로 그 경계를 화면에서도 같게 잡아야 한다.
  */
-const UPCOMING_LIMIT = 12;
+export const UPCOMING_LIMIT = 12;
 
 export interface CharacterBrief {
   id: number;

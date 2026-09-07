@@ -174,7 +174,7 @@ const clamp = (n: number, lo: number, hi: number): number =>
 
 // 방어적 로그 위생 — 에러 출력에 봇 토큰 같은 민감 값이 섞여 남지 않도록 로그 직전에 가린다.
 // 외부 라이브러리가 에러에 요청 정보를 담을 수 있어, 만약을 대비해 값 자체 + 토큰 형태 둘 다 마스킹.
-const redactToken = (s: string): string =>
+export const redactToken = (s: string): string =>
   s
     .split(config.telegramToken)
     .join("<TOKEN>")
@@ -187,7 +187,7 @@ export const logErr = (prefix: string, e: unknown): void => {
 
 // 줄바꿈으로 끊은 말풍선 — 선톡 문안이 쓴다(문안 여섯 곳은 자기 형식으로 답해 본문이 통글이다).
 // 답장은 객체의 reply 배열에서 나오므로 이 길을 타지 않는다. 상한 계산만 한곳(capBubbles)에서 쓴다.
-const splitBubbles = (text: string): string[] => {
+export const splitBubbles = (text: string): string[] => {
   const parts = text
     .split("\n")
     .map((s) => s.trim())
@@ -544,7 +544,7 @@ const toMinOfDay = (hhmm: string): number => {
 
 // 예고를 이미 보낸 자리 비움 블록이 곧 시작되는가 — 그 사이에 온 말은 배웅 답이 된다.
 // 예고가 아직 안 나갔으면(닥친 일이거나 예고 틱이 못 돌았으면) 평범한 답장으로 간다.
-const upcomingAnnouncedAway = (
+export const upcomingAnnouncedAway = (
   chatId: string,
   characterId: number,
 ): PlanBlock | null => {
@@ -567,7 +567,7 @@ const upcomingAnnouncedAway = (
 };
 
 // 배웅 답 — 나간다고 이미 알린 뒤, 나가기 전까지 온 말에 짧게 받는 상황 문단.
-const farewellSituation = (b: PlanBlock): string =>
+export const farewellSituation = (b: PlanBlock): string =>
   [
     `[배웅 답 — 곧 자리를 비운다]`,
     `너는 곧 ${clockLabel(b.start)}부터 "${b.activity}" 때문에 자리를 비운다. 상대에게는 이미 예고해 뒀다.`,
@@ -575,7 +575,7 @@ const farewellSituation = (b: PlanBlock): string =>
   ].join("\n");
 
 // 몰아 답장 — 불가 구간이 끝나 깨어난 자리. 그 사이 온 메시지를 한 번에 읽고 답하는 상황 문단.
-const gatherSituation = (activity: string): string =>
+export const gatherSituation = (activity: string): string =>
   [
     `[몰아 답장 — 방금 자리에서 돌아왔다]`,
     `너는 방금 "${activity}"을(를) 끝냈다. 대화 기록 끝의 상대 메시지들은 그 동안 온 것이라 이제야 본다.`,
@@ -590,7 +590,7 @@ const gatherSituation = (activity: string): string =>
 // 알지만, 예고 없이 답장 안에서 이따 보자고 해 둔 경우도 많아 예고 여부만으로는 어느 쪽인지
 // 정해지지 않는다. 둘 다 되는 문안을 주고 대화 기록을 보고 고르게 한다 — 아니라고 못 박으면
 // 방금 그 말을 해 놓고도 못 했다고 하는 답이 나온다.
-const returnSituation = (activity: string): string =>
+export const returnSituation = (activity: string): string =>
   [
     `[문안 — 지금 보낼 복귀 인사 한 통]`,
     `너는 방금 "${activity}"을(를) 끝내고 돌아왔다. 그 사이 상대에게선 말이 없었다.`,
@@ -609,7 +609,7 @@ const returnSituation = (activity: string): string =>
 // 않는다(답장 형식은 REPLY_ENVELOPE가 정한다). 거짓이면 선톡과 같은 형식으로 문안을 받는다.
 // 약속을 이미 지켰거나 대화가 그 뒤로 이어졌으면 send=false로 접게 한다 — 약속 시각은 각본
 // 경계에서 코드가 고른 것이라 실제로는 그 전에 대화가 재개됐을 수 있다.
-const promiseSituation = (
+export const promiseSituation = (
   promise: string,
   activity: string,
   replying: boolean,
