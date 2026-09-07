@@ -20,7 +20,7 @@ import {
   type ScheduleRow,
   type ScheduleStateRow,
   lastMessageBefore,
-  lastExchangeGap,
+  reopenedGap,
   getRecentMessages,
   type MessageRow,
   getDayActuals,
@@ -37,7 +37,11 @@ import {
 } from "../memory.js";
 import { capHits } from "../recall.js";
 import type { TagPick, TagPicker } from "../tag-pick.js";
-import { RECENT_DIARY_DAYS, SEARCH_LIMIT } from "../thresholds.js";
+import {
+  CONTACT_GAP_HOLD_MS,
+  RECENT_DIARY_DAYS,
+  SEARCH_LIMIT,
+} from "../thresholds.js";
 import {
   kstDescription,
   kstDateString,
@@ -47,7 +51,9 @@ import {
   kstLogicalClock,
   logicalDayStartTs,
   lastTalkedLabel,
-  contactGapLabel,
+  contactGapOf,
+  kstStampBefore,
+  type ContactGap,
 } from "../kst.js";
 import { WOKE_OUTCOME } from "../labels.js";
 import { dayProgressOf, type DayProgress } from "./day-progress.js";
@@ -137,8 +143,8 @@ export interface ContextInput {
   notes: string[];
   /** 직전에 대화한 날의 표시. 오늘이 첫 대화면 null. */
   lastTalk: string | null;
-  /** 오늘 안의 연락 텀 문구. 기준에 못 미치면 null. */
-  contactGap: string | null;
+  /** 연락 텀 — 문구와, 기다렸다는 말을 얹어도 되는 텀인지. 기준에 못 미치면 null. */
+  contactGap: ContactGap | null;
   /** 방금까지 오간 말 — opts.recent를 켠 선톡 문안 경로에서만 채운다. */
   recent: MessageRow[];
 }
@@ -248,9 +254,10 @@ export const readContextInput = (
 
   // 직전에 대화한 날 — 오늘 기록만 보면 모델이 공백 자체를 인지하지 못한다.
   const prev = lastMessageBefore(chatId, logicalDayStartTs());
-  // 오늘 안에서 몇 시간 만에 온 연락 — 기록의 시간 표시만으로는 모델이 그 텀을 화제로 삼지
-  // 않는다. 텀이 기준에 못 미치거나 날짜가 바뀌었으면 null이다(이슈 #284).
-  const gap = lastExchangeGap(chatId);
+  // 몇 시간 만에 온 연락인지 — 기록의 시간 표시만으로는 모델이 그 텀을 화제로 삼지 않는다.
+  // 텀이 기준에 못 미치면 null이다(이슈 #284). 재개 지점을 30분 동안 붙들어 두므로, 유저가
+  // 다시 말을 건 뒤 몇 마디가 오가는 동안에도 절이 남는다(이슈 #316).
+  const gap = reopenedGap(chatId, kstStampBefore(CONTACT_GAP_HOLD_MS));
 
   return {
     identity,
@@ -277,7 +284,7 @@ export const readContextInput = (
     search: { memories: found, oldDiaries, schedules: foundSchedules },
     notes: todayNotes(characterId),
     lastTalk: prev ? lastTalkedLabel(prev.sent_at) : null,
-    contactGap: gap ? contactGapLabel(gap.lastChar, gap.firstUser) : null,
+    contactGap: gap ? contactGapOf(gap.lastChar, gap.firstUser) : null,
     recent: opts.recent ? getRecentMessages(chatId, opts.recent) : [],
   };
 };
