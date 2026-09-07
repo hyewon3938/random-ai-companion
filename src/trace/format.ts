@@ -19,7 +19,7 @@ export const dateLabel = (date: string): string => {
 };
 
 // 슬랙 메시지 한 개 상한(4000자)보다 여유 있게 자른다. 프롬프트 전문이 대상이다.
-const CHUNK = 3500;
+export const CHUNK = 3500;
 export const chunked = (s: string): string[] => {
   const out: string[] = [];
   for (let i = 0; i < s.length; i += CHUNK) out.push(s.slice(i, i + CHUNK));

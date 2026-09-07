@@ -1,0 +1,362 @@
+// 답장 텀을 두 태그 표 한 장에서 정하는 자리(reply-timing.ts)를 검사한다 — 모델은 부르지 않는다.
+//
+// 각본이 없을 때, 자는 시간에 온 첫 연락과 그 뒤 연락, 이미 붙잡혀 접힌 블록, 즉답·틈틈이의
+// 세 칸, 공적 불가 구간까지 표의 길마다 어느 경로로 나오고 텀이 어느 범위에 드는지 본다.
+// 개인·사회 불가 구간은 붙잡기 판정 모델을 부르는 자리라 여기서는 다루지 않는다. 붙잡힘 표시를
+// 읽고 적는 isHeldNow·recordHold와 유저 이어 보내기 텀을 기록에서 읽는 recentUserGaps도 본다.
+//
+// 지금 시각은 코드가 kstLogicalClock()으로 읽고 그 밑은 Date.now()라, node:test의 mock.timers로
+// Date만 고정해 각본 표기 시각을 정확히 짚는다. SQLite 쪽 now는 이 경로에 없다. DB는 임시
+// 파일로 새로 만들고, 모델 주소는 닫힌 로컬 포트로 돌려 호출이 기계 밖으로 나가지 않게 한다.
+import assert from "node:assert/strict";
+import { after, before, mock, test } from "node:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { PlanBlock } from "../src/day-plan.js";
+import type { ActivityCategory, Responsiveness } from "../src/labels.js";
+import {
+  INSTANT_MIN_MS,
+  INSTANT_MAX_MS,
+  INTERMITTENT_PERSONAL_MIN_MS,
+  INTERMITTENT_PERSONAL_MAX_MS,
+  INTERMITTENT_SOCIAL_MIN_MS,
+  INTERMITTENT_SOCIAL_MAX_MS,
+  INTERMITTENT_OFFICIAL_MIN_MS,
+  INTERMITTENT_OFFICIAL_MAX_MS,
+  BLOCK_END_JITTER_MS,
+} from "../src/thresholds.js";
+
+process.env.DB_PATH = join(
+  mkdtempSync(join(tmpdir(), "companion-test-")),
+  "test.db",
+);
+process.env.TELEGRAM_BOT_TOKEN ??= "test-token";
+process.env.ANTHROPIC_API_KEY ??= "test-key";
+// 모델 클라이언트는 모듈을 읽을 때 이 주소를 잡는다. 아무것도 듣지 않는 포트라 연결이 바로 끊긴다.
+process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:1";
+
+// DB 경로와 모델 주소를 정한 뒤에 읽어야 한다 — 정적 import는 이 줄들보다 먼저 돈다.
+const { db, getDayActuals, logMessage, recordDayActual, saveDayPlan } =
+  await import("../src/db.js");
+const { createFixtureCharacter } =
+  await import("../src/eval/fixture-character.js");
+const { decideReplyTiming, isHeldNow, recordHold, recentUserGaps } =
+  await import("../src/reply-timing.js");
+const { HOLD_OUTCOME, WOKE_OUTCOME } = await import("../src/labels.js");
+
+// 각본이 담는 논리일 하나에 시각만 옮겨 가며 본다. 각본 표기(05:00~28:59)를 그날 KST의
+// epoch로 바꾼다 — 24를 넘는 시는 Date.UTC가 다음 날로 넘긴다.
+const PLAN_DATE = "2026-09-07";
+const clockToEpoch = (hhmm: string): number => {
+  const [h, m] = hhmm.split(":").map(Number);
+  return Date.UTC(2026, 8, 7, h, m) - 9 * 3600_000;
+};
+const setClock = (hhmm: string): void => {
+  mock.timers.setTime(clockToEpoch(hhmm));
+};
+
+const block = (
+  start: string,
+  end: string,
+  activity: string,
+  responsiveness: Responsiveness,
+  category: ActivityCategory,
+): PlanBlock => ({
+  start,
+  end,
+  activity,
+  responsiveness,
+  advance_known: true,
+  category,
+});
+
+let seq = 0;
+/** 각본을 깐 방 하나. 실제 기록은 캐릭터마다 쌓이므로 검사마다 새로 만든다. */
+const roomWith = (
+  blocks: PlanBlock[] | null,
+): { chatId: string; characterId: number } => {
+  const chatId = `chat-timing-${++seq}`;
+  const characterId = createFixtureCharacter(chatId);
+  if (blocks)
+    saveDayPlan(
+      characterId,
+      PLAN_DATE,
+      JSON.stringify({ date: PLAN_DATE, blocks }),
+    );
+  return { chatId, characterId };
+};
+
+const actualsOf = (characterId: number) =>
+  getDayActuals(characterId, PLAN_DATE);
+
+const inRange = (v: number, min: number, max: number): boolean =>
+  v >= min && v <= max;
+
+before(() => {
+  mock.timers.enable({ apis: ["Date"], now: clockToEpoch("10:30") });
+});
+after(() => {
+  mock.timers.reset();
+  db.close();
+});
+
+// ── decideReplyTiming ──────────────────────────────────────────────────
+
+test("오늘 각본이 없으면 즉답 범위에서 텀을 정한다", async () => {
+  const { characterId } = roomWith(null);
+  setClock("10:30");
+  const d = await decideReplyTiming(characterId, "뭐 해?");
+  assert.equal(d.trace.path, "no_plan");
+  assert.equal(d.trace.block, null);
+  assert.equal(d.held, null);
+  assert.equal(d.gather, null);
+  assert.ok(inRange(d.waitMs, INSTANT_MIN_MS, INSTANT_MAX_MS));
+});
+
+test("자는 시간에 온 첫 연락은 깸 행을 남기고 틈틈이·개인 칸으로 답한다", async () => {
+  const { characterId } = roomWith([
+    block("23:30", "31:00", "잠", "unavailable", "personal"),
+  ]);
+  setClock("25:10");
+  assert.equal(actualsOf(characterId).length, 0);
+
+  const d = await decideReplyTiming(characterId, "자?");
+  assert.equal(d.trace.path, "sleeping");
+  assert.equal(d.trace.justWoke, true);
+  assert.equal(d.trace.asked, false);
+  assert.equal(d.gather, null);
+  assert.ok(
+    inRange(
+      d.waitMs,
+      INTERMITTENT_PERSONAL_MIN_MS,
+      INTERMITTENT_PERSONAL_MAX_MS,
+    ),
+  );
+  const rows = actualsOf(characterId);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].block_start, "23:30");
+  assert.equal(rows[0].outcome, WOKE_OUTCOME);
+});
+
+test("같은 잠 블록에서 이미 깼으면 즉답 칸으로 답하고 깸 행을 다시 남기지 않는다", async () => {
+  const { characterId } = roomWith([
+    block("23:30", "31:00", "잠", "unavailable", "personal"),
+  ]);
+  setClock("25:10");
+  recordDayActual(
+    characterId,
+    PLAN_DATE,
+    "23:30",
+    "잠",
+    WOKE_OUTCOME,
+    "자는데 연락이 와서",
+    "2026-09-08 01:00:00",
+  );
+
+  const d = await decideReplyTiming(characterId, "아직 안 자?");
+  assert.equal(d.trace.path, "sleeping");
+  assert.equal(d.trace.justWoke, false);
+  assert.ok(inRange(d.waitMs, INSTANT_MIN_MS, INSTANT_MAX_MS));
+  assert.equal(actualsOf(characterId).length, 1);
+});
+
+test("이미 붙잡혀 접힌 블록이면 텀 없이 바로 답한다", async () => {
+  const cancelled = roomWith([
+    block("10:00", "12:00", "달리기", "intermittent", "personal"),
+  ]);
+  const deferred = roomWith([
+    block("10:00", "12:00", "친구와 카페", "unavailable", "social"),
+  ]);
+  setClock("10:30");
+  recordDayActual(
+    cancelled.characterId,
+    PLAN_DATE,
+    "10:00",
+    "달리기",
+    HOLD_OUTCOME.cancelled,
+    "유저가 붙잡아서",
+    "2026-09-07 10:05:00",
+  );
+  recordDayActual(
+    deferred.characterId,
+    PLAN_DATE,
+    "10:00",
+    "친구와 카페",
+    HOLD_OUTCOME.deferred,
+    "유저가 붙잡아서",
+    "2026-09-07 10:05:00",
+  );
+
+  for (const { characterId } of [cancelled, deferred]) {
+    const d = await decideReplyTiming(characterId, "그래서?");
+    assert.equal(d.trace.path, "already_held");
+    assert.equal(d.waitMs, 0);
+    assert.equal(d.held, null);
+    assert.equal(d.gather, null);
+  }
+});
+
+test("즉답 블록은 표의 즉답 칸에서 텀을 정한다", async () => {
+  const { characterId } = roomWith([
+    block("10:00", "12:00", "집에서 쉼", "instant", "personal"),
+  ]);
+  setClock("10:30");
+  const d = await decideReplyTiming(characterId, "뭐 해?");
+  assert.equal(d.trace.path, "table");
+  assert.equal(d.trace.block?.responsiveness, "instant");
+  assert.equal(d.trace.asked, false);
+  assert.equal(d.gather, null);
+  assert.ok(inRange(d.waitMs, INSTANT_MIN_MS, INSTANT_MAX_MS));
+});
+
+test("틈틈이 블록은 활동 성격 칸(개인·사회·공적)의 범위에서 텀을 정한다", async () => {
+  const cells: [ActivityCategory, number, number][] = [
+    ["personal", INTERMITTENT_PERSONAL_MIN_MS, INTERMITTENT_PERSONAL_MAX_MS],
+    ["social", INTERMITTENT_SOCIAL_MIN_MS, INTERMITTENT_SOCIAL_MAX_MS],
+    ["official", INTERMITTENT_OFFICIAL_MIN_MS, INTERMITTENT_OFFICIAL_MAX_MS],
+  ];
+  setClock("10:30");
+  for (const [category, min, max] of cells) {
+    const { characterId } = roomWith([
+      block("10:00", "12:00", "할 일", "intermittent", category),
+    ]);
+    const d = await decideReplyTiming(characterId, "바빠?");
+    assert.equal(d.trace.path, "table", category);
+    assert.equal(d.trace.block?.category, category);
+    assert.ok(inRange(d.waitMs, min, max), `${category}: ${d.waitMs}`);
+  }
+});
+
+test("공적 불가 블록은 판정 없이 구간 끝까지 미루고 몰아 답장 정보를 넘긴다", async () => {
+  const { characterId } = roomWith([
+    block("13:00", "14:30", "팀 회의", "unavailable", "official"),
+  ]);
+  setClock("13:20");
+  const d = await decideReplyTiming(characterId, "회의 언제 끝나?");
+  assert.equal(d.trace.path, "until_end");
+  assert.equal(d.trace.asked, false);
+  assert.equal(d.held, null);
+  assert.deepEqual(d.gather, {
+    activity: "팀 회의",
+    blockStart: "13:00",
+    blockEnd: "14:30",
+  });
+  const untilEnd = 70 * 60_000;
+  assert.ok(inRange(d.waitMs, untilEnd, untilEnd + BLOCK_END_JITTER_MS));
+  // 판정을 안 불렀으니 실제 기록에도 아무것도 남지 않는다
+  assert.equal(actualsOf(characterId).length, 0);
+});
+
+// ── isHeldNow ──────────────────────────────────────────────────────────
+
+test("붙잡힘 표시는 지금 블록의 시작 시각으로 적힌 취소·미룸 행만 본다", () => {
+  setClock("10:30");
+  assert.equal(isHeldNow(roomWith(null).characterId), false);
+
+  const plan = [block("10:00", "12:00", "달리기", "intermittent", "personal")];
+
+  const held = roomWith(plan);
+  recordDayActual(
+    held.characterId,
+    PLAN_DATE,
+    "10:00",
+    "달리기",
+    HOLD_OUTCOME.cancelled,
+    "유저가 붙잡아서",
+    "2026-09-07 10:05:00",
+  );
+  assert.equal(isHeldNow(held.characterId), true);
+
+  // 다른 블록의 취소 행은 지금 블록에 걸리지 않는다
+  const other = roomWith(plan);
+  recordDayActual(
+    other.characterId,
+    PLAN_DATE,
+    "08:00",
+    "아침 산책",
+    HOLD_OUTCOME.cancelled,
+    "유저가 붙잡아서",
+    "2026-09-07 08:05:00",
+  );
+  assert.equal(isHeldNow(other.characterId), false);
+
+  // 깸은 붙잡힘이 아니다
+  const woke = roomWith(plan);
+  recordDayActual(
+    woke.characterId,
+    PLAN_DATE,
+    "10:00",
+    "달리기",
+    WOKE_OUTCOME,
+    "자는데 연락이 와서",
+    "2026-09-07 10:05:00",
+  );
+  assert.equal(isHeldNow(woke.characterId), false);
+});
+
+// ── recordHold ─────────────────────────────────────────────────────────
+
+test("답장의 stay 신호는 개인은 취소, 사회는 미룸으로 적고 공적은 적지 않는다", () => {
+  setClock("10:30");
+
+  const official = roomWith([
+    block("10:00", "12:00", "팀 회의", "unavailable", "official"),
+  ]);
+  assert.equal(recordHold(official.characterId), null);
+  assert.equal(actualsOf(official.characterId).length, 0);
+
+  const personal = roomWith([
+    block("10:00", "12:00", "달리기", "intermittent", "personal"),
+  ]);
+  assert.deepEqual(recordHold(personal.characterId), {
+    blockStart: "10:00",
+    activity: "달리기",
+    outcome: HOLD_OUTCOME.cancelled,
+  });
+  const personalRows = actualsOf(personal.characterId);
+  assert.equal(personalRows.length, 1);
+  assert.equal(personalRows[0].outcome, HOLD_OUTCOME.cancelled);
+
+  const social = roomWith([
+    block("10:00", "12:00", "친구와 카페", "unavailable", "social"),
+  ]);
+  assert.equal(recordHold(social.characterId)?.outcome, HOLD_OUTCOME.deferred);
+  assert.equal(
+    actualsOf(social.characterId)[0]?.outcome,
+    HOLD_OUTCOME.deferred,
+  );
+
+  // 이미 붙잡힌 블록은 다시 적지 않는다
+  assert.equal(recordHold(personal.characterId), null);
+  assert.equal(actualsOf(personal.characterId).length, 1);
+});
+
+// ── recentUserGaps ─────────────────────────────────────────────────────
+
+test("유저가 이어 보낸 텀을 기록에서 읽는다 — 답장이 끼거나 2분을 넘으면 뺀다", () => {
+  const { chatId, characterId } = roomWith(null);
+  const say = (role: "user" | "assistant", at: string): void =>
+    logMessage(chatId, characterId, role, "말", at);
+  say("user", "2026-09-07 10:00:00");
+  say("user", "2026-09-07 10:00:20");
+  say("assistant", "2026-09-07 10:01:00");
+  say("user", "2026-09-07 10:02:00");
+  say("user", "2026-09-07 10:05:00");
+  say("user", "2026-09-07 10:05:05");
+  assert.deepEqual(recentUserGaps(chatId), [20_000, 5_000]);
+  assert.deepEqual(recentUserGaps("chat-timing-empty"), []);
+});
+
+test("읽는 행 수를 줄이면 그 안의 이어 보내기만 센다", () => {
+  const { chatId, characterId } = roomWith(null);
+  const say = (at: string): void =>
+    logMessage(chatId, characterId, "user", "말", at);
+  say("2026-09-07 10:00:00");
+  say("2026-09-07 10:00:20");
+  say("2026-09-07 10:05:00");
+  say("2026-09-07 10:05:05");
+  assert.deepEqual(recentUserGaps(chatId, 2), [5_000]);
+  assert.deepEqual(recentUserGaps(chatId), [20_000, 5_000]);
+});

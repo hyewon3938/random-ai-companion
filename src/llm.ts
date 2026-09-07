@@ -77,7 +77,7 @@ const codeVersion = (): string => {
   return codeFingerprint;
 };
 
-const textOf = (blocks: Anthropic.ContentBlock[]): string =>
+export const textOf = (blocks: Anthropic.ContentBlock[]): string =>
   blocks
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
@@ -86,7 +86,7 @@ const textOf = (blocks: Anthropic.ContentBlock[]): string =>
 // 응답이 어떤 블록으로 왔는지 종류별 개수(예: `text:1` · `thinking:1,text:1`).
 // 저장하는 본문은 textOf가 고른 텍스트 블록뿐이라, 다른 종류로 나간 몫은 출력 토큰에만 남고
 // 글자 수에는 잡히지 않는다. 그 차이가 어디서 오는지 보려고 로그에 함께 적는다(이슈 #165).
-const blockTypes = (blocks: Anthropic.ContentBlock[]): string => {
+export const blockTypes = (blocks: Anthropic.ContentBlock[]): string => {
   const count = new Map<string, number>();
   for (const b of blocks) count.set(b.type, (count.get(b.type) ?? 0) + 1);
   return [...count].map(([type, n]) => `${type}:${n}`).join(",") || "none";

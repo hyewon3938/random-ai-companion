@@ -300,13 +300,13 @@ export interface NightlyGathered {
 }
 
 // 하루 창의 끝을 만드는 다음 날짜. 대화·오늘 메모를 05:00~다음날 05:00로 끊는 데 쓴다.
-const nextDate = (date: string): string =>
+export const nextDate = (date: string): string =>
   kstDateString(
     new Date(new Date(`${date}T00:00:00Z`).getTime() + 24 * 3600_000),
   );
 
 // 모델이 준 태그를 다듬는다. 배열이 아닐 수도, 빈 문자열이나 같은 말이 두 번 올 수도 있다.
-const cleanTags = (raw: unknown, max?: number): string[] => {
+export const cleanTags = (raw: unknown, max?: number): string[] => {
   const list = Array.isArray(raw) ? raw : [];
   const out: string[] = [];
   for (const t of list) {
@@ -324,7 +324,7 @@ const cleanTags = (raw: unknown, max?: number): string[] => {
 const diaryTags = (entry: DiaryOutput): string[] =>
   cleanTags(entry.tags, DIARY_TAG_MAX);
 
-const planBrief = (raw: string | undefined): string => {
+export const planBrief = (raw: string | undefined): string => {
   if (!raw) return "";
   try {
     const p = JSON.parse(raw) as DayPlan;
@@ -917,7 +917,7 @@ const draftReconnect = async (
   };
 };
 
-const addMin = (hhmm: string, m: number): string => {
+export const addMin = (hhmm: string, m: number): string => {
   const [h, mm] = hhmm.split(":").map(Number);
   const t = Math.min(23 * 60 + 59, (h ?? 0) * 60 + (mm ?? 0) + m);
   return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
@@ -931,7 +931,7 @@ interface MorningStyle {
   end: string;
 }
 
-const morningStyles = (raw: string | undefined): MorningStyle[] => {
+export const morningStyles = (raw: string | undefined): MorningStyle[] => {
   if (!raw) return [];
   try {
     const p = JSON.parse(raw) as DayPlan;
