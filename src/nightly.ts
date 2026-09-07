@@ -116,7 +116,6 @@ import {
   careSituation,
   diaryPrompt,
   extractPrompt,
-  lunchSituation,
   morningSituation,
   progressPrompt,
   quietDayPrompt,
@@ -218,8 +217,6 @@ export interface SendDraft {
   window_end: string;
   text: string;
   // 생략 시 morning. checkin=긴 침묵 뒤 안부 1통.
-  // 점심 선톡은 morning으로 저장하고 발송 창만 점심으로 둔다 — 발송 경로가 같아서
-  // 종류를 늘리면 scheduled_messages 이관만 늘고 얻는 게 없다.
   kind?: "morning" | "checkin";
 }
 
@@ -295,9 +292,10 @@ export interface NightlyGathered {
   // (normal=평소대로 / quiet·dormant=각본·선톡 생성 불필요 / checkin=저녁 재연결 문안만)
   silenceTier: "normal" | "quiet" | "checkin" | "dormant";
   silenceDays: number;
-  // 오늘 미리 만들어 둘 선톡 — morning=아침 한 통 / lunch=점심 한 통 /
-  // checkin=저녁 안부 한 통 / none=준비하지 않는 날. 외부 생성 경로는 이 값만 보면 된다.
-  sendPlan: "morning" | "lunch" | "checkin" | "none";
+  // 오늘 미리 만들어 둘 선톡 — morning=아침 한 통 / checkin=저녁 안부 한 통 /
+  // none=준비하지 않는 날. 외부 생성 경로는 이 값만 보면 된다. 무응답 이틀째에 더 나가는
+  // 점심 한 통은 여기서 준비하지 않는다 — 팔로업 틱이 점심 창에서 만들어 보낸다(이슈 #314).
+  sendPlan: "morning" | "checkin" | "none";
   sendPlanReason: string;
 }
 
@@ -807,16 +805,13 @@ const applyNightlyTxn = db.transaction(
         if (r.ym) applyMonthPlan(g.characterId, r.ym, r);
 
     // 선톡 문안 — 관제탑(dailySendPlan) 게이트를 지나야 저장된다. 외부 생성 경로가 그날의
-    // 판정을 모르고 문안을 보내와도 여기서 걸러진다. 점심 문안은 아침 문안과 같은 종류로
-    // 저장하므로 둘을 함께 통과시키고, 창은 생성 쪽이 정한 값을 그대로 쓴다.
+    // 판정을 모르고 문안을 보내와도 여기서 걸러진다. 창은 생성 쪽이 정한 값을 그대로 쓴다.
     let sendStored = false;
     if (out.send?.text) {
       const plan = dailySendPlan(g.chatId, g.characterId, g.today);
       const kind = out.send.kind ?? "morning";
       const allowed =
-        kind === "checkin"
-          ? plan.kind === "checkin"
-          : plan.kind === "morning" || plan.kind === "lunch";
+        kind === "checkin" ? plan.kind === "checkin" : plan.kind === "morning";
       if (allowed) {
         insertScheduledSend(
           g.characterId,
@@ -994,25 +989,21 @@ const windowTimes = (w: string): [string, string] => {
   return [f(s), f(range[1])];
 };
 
-// 미리 만들어 두는 선톡 한 통 — 그날 판정(morning·lunch)에 맞는 상황 문단으로 문안을 받는다.
-// 점심 문안은 창이 정해져 있고, 아침 문안은 각본에서 뽑은 순간(style)에 창을 맞춘다.
+// 미리 만들어 두는 아침 한 통 — 각본에서 뽑은 순간(style)에 발송 창을 맞춘다.
 const draftPrepared = async (
   g: NightlyGathered,
-  kind: "morning" | "lunch",
   tomorrow: string[],
   style: MorningStyle | null,
 ): Promise<SendDraft | null> => {
   // 오래 답이 없는 중에 나가는 아침 한 통은 상대 일정을 챙기는 자리라 결이 다르다.
-  const care = kind === "morning" && g.silenceTier !== "normal";
+  const care = g.silenceTier !== "normal";
   const situation = care
     ? careSituation(g)
-    : kind === "lunch"
-      ? lunchSituation(g, tomorrow)
-      : morningSituation(
-          g,
-          style ? style.moment : "아침 (여유로운 시간대)",
-          tomorrow,
-        );
+    : morningSituation(
+        g,
+        style ? style.moment : "아침 (여유로운 시간대)",
+        tomorrow,
+      );
   const draft = await chatJson<{
     send: boolean;
     window?: string;
@@ -1022,13 +1013,9 @@ const draftPrepared = async (
     "위 상황 문단대로 문안을 만들어.",
     800,
     config.modelDeep,
-    { purpose: kind, characterId: g.characterId, chatId: g.chatId },
+    { purpose: "morning", characterId: g.characterId, chatId: g.chatId },
   );
   if (!draft.send || !draft.text) return null;
-  if (kind === "lunch") {
-    const [ws, we] = windowTimes("점심");
-    return { window_start: ws, window_end: we, text: draft.text };
-  }
   if (draft.window && /점심|저녁/.test(draft.window)) {
     const [ws, we] = windowTimes(draft.window);
     return { window_start: ws, window_end: we, text: draft.text };
@@ -1057,7 +1044,7 @@ const ensurePreparedSend = async (
   const send =
     plan.kind === "checkin"
       ? await draftReconnect(g)
-      : await draftPrepared(g, plan.kind, [], style);
+      : await draftPrepared(g, [], style);
   if (send)
     insertScheduledSend(
       g.characterId,
@@ -1193,7 +1180,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   // 다만 그날 상대에게 일정이 있으면 그것만 챙기는 아침 한 통은 준비한다.
   if (g.silenceTier === "quiet" || g.silenceTier === "dormant") {
     if (plan.kind === "morning")
-      send = await draftPrepared(g, "morning", entry.tomorrow ?? [], null);
+      send = await draftPrepared(g, entry.tomorrow ?? [], null);
     return `${applyNightlyOutput(g, { entry, extract, progress, send })} (침묵 ${g.silenceDays}일 — ${plan.reason})`;
   }
   // 재연결 단계: 아침 인사 대신 저녁 안부 1통만 준비한다
@@ -1210,11 +1197,10 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
     ? styles[Math.floor(Math.random() * styles.length)]
     : null;
 
-  // 선톡 문안: 아침의 자기 삶 공유가 기본이고, 이틀째 답이 없으면 아침을 거르고 점심에 한 통만
-  // 보낸다. 대화와 같은 3층 프롬프트를 쓰므로 어제에서 이어갈 것(entry.tomorrow — 아직 DB에
-  // 없는 방금 쓴 일기의 것)만 상황 문단으로 넘긴다.
-  if (plan.kind === "morning" || plan.kind === "lunch")
-    send = await draftPrepared(g, plan.kind, entry.tomorrow ?? [], style);
+  // 선톡 문안: 아침의 자기 삶 공유가 기본이다. 대화와 같은 3층 프롬프트를 쓰므로 어제에서
+  // 이어갈 것(entry.tomorrow — 아직 DB에 없는 방금 쓴 일기의 것)만 상황 문단으로 넘긴다.
+  if (plan.kind === "morning")
+    send = await draftPrepared(g, entry.tomorrow ?? [], style);
 
   const result = applyNightlyOutput(g, { entry, extract, progress, send });
   return result;

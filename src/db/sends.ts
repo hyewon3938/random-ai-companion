@@ -47,6 +47,16 @@ export const hasScheduledSendOn = (characterId: number, date: string): boolean =
     )
     .get(characterId, date);
 
+/** 오늘 준비해 둔 선톡이 아직 안 나갔는가 — 낮 근황 선톡이 이 값을 보고 기다린다. 어제
+ *  대화가 끊긴 채 아침을 맞으면 근황의 네 시간 침묵 조건이 아침 문안의 발송 창보다 먼저
+ *  차서, 이 검사가 없으면 아침 인사보다 근황이 앞질러 나간다(이슈 #314). */
+export const hasPendingSendOn = (characterId: number, date: string): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM scheduled_messages WHERE character_id = ? AND date = ? AND status = 'pending' LIMIT 1`,
+    )
+    .get(characterId, date);
+
 // 그날 미리 만들어 둔 선톡 문안 전부. 새벽 정리 게시가 스레드에 붙인다.
 export const getScheduledSendsOn = (
   characterId: number,
@@ -95,7 +105,7 @@ export const recordSendAttempt = (id: number, error: string): void => {
 export const recordSendFailure = (
   chatId: string,
   characterId: number,
-  kind: "away" | "catchup" | "goodnight" | "mend",
+  kind: "away" | "catchup" | "goodnight" | "mend" | "lunch",
   error: string,
 ): void => {
   const failedAt = `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;

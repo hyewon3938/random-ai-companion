@@ -219,23 +219,6 @@ export const morningSituation = (
     `JSON으로만 답한다: {"send":true,"window":"아침|점심|저녁","text":"..."} 또는 {"send":false}`,
   ].join("\n");
 
-// 이틀째 답이 없는 날 — 아침을 거르고 점심 무렵에 한 통만 보낸다.
-export const lunchSituation = (g: NightlyGathered, tomorrow: string[]): string =>
-  [
-    `[문안 준비 — 오늘 점심 무렵에 보낼 한 통]`,
-    `상대가 이틀째 답이 없다. 아침 인사는 거르고 점심 무렵에 한 통만 보낸다. 이 문안은 지금(새벽) 미리 써 두고 점심에 나가니, 위의 '지금' 시각이 아니라 점심 무렵의 결로 쓴다.`,
-    `- 어제에서 이어갈 것: ${tomorrow.length ? tomorrow.join(" / ") : "(없음)"}`,
-    `- 상대의 다가오는 일정(들은 것): ${g.userSchedulesUpcoming || "(없음)"}`,
-    ``,
-    `문안 규칙:`,
-    `- 점심 무렵 네가 뭘 하고 있는지 가볍게 한 마디. 답을 재촉하지 않고 상대가 다시 말 걸 자리를 만들어 두는 것이다.`,
-    `- 답이 없는 걸 따지거나 캐묻지 않고 걱정을 앞세우지도 않는다. 기다리고 있다는 티는 네 성격대로 한 마디까지다.`,
-    `- 상대의 일정이 오늘이면 그것만 가볍게 챙긴다.`,
-    `- 1~2개 말풍선(줄바꿈 구분).`,
-    ``,
-    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
-  ].join("\n");
-
 // 오래 답이 없는 중에도 상대에게 오늘 일정이 있는 날 — 그 일정만 챙기는 한 통.
 export const careSituation = (g: NightlyGathered): string =>
   [

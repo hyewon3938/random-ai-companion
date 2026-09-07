@@ -1,8 +1,11 @@
 // 침묵 팔로업 — 답이 끊긴 자리에 한 통 보낸다(15분 틱).
 //
-// 관제탑을 통과할 때만 보낸다. 셋이다.
+// 관제탑을 통과할 때만 보낸다. 넷이다.
 //   낮 근황   — 유저의 마지막 말도 캐릭터의 마지막 말도 4시간 넘게 지났으면 하루 1통. 보낸 뒤에도
-//               답이 없으면 그날은 물러난다.
+//               답이 없으면 그날은 물러난다. 그날 미리 만들어 둔 선톡이 아직 안 나갔으면 그것을
+//               먼저 내보내고 기다린다.
+//   점심      — 무응답 이틀째 12:05~12:50에 1통. 그날은 아침 선톡과 이 한 통이 나가고 낮 근황은
+//               겹치지 않는다(이슈 #314).
 //   밤 인사   — 자정~새벽 5시에 유저가 잔다는 말 없이 1시간 넘게 조용하면 1회.
 //   달래기    — 관계 행의 상대 상태(user-state가 답장마다 판정)가 나 때문에 안 좋은데 그 뒤로
 //               답이 끊기면 30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다. 어떤 상태를
@@ -19,11 +22,13 @@ import {
   getActiveCharacter,
   getActiveCharacters,
   getRelationship,
+  hasPendingSendOn,
   lastMessage,
   lastUserTs,
 } from "./db.js";
 import { currentBlock } from "./context.js";
 import {
+  lunchDueToday,
   mendSentSince,
   proactiveAllowed,
   proactiveCountToday,
@@ -39,6 +44,7 @@ import {
 import {
   kstClock,
   kstDateString,
+  kstLogicalDate,
   kstStamp,
   logicalDateOf,
   logicalDayStartTs,
@@ -47,6 +53,7 @@ import { userStateLabel } from "./user-state.js";
 import {
   GOODNIGHT_SILENCE_MS,
   GOODNIGHT_WINDOW,
+  LUNCH_WINDOW,
   MEND_SILENCE_MS,
   PROACTIVE_DAILY_MAX,
   RECENT_USER_MS,
@@ -113,6 +120,18 @@ const mendSituation = (): string =>
     `- 1~2개 말풍선(줄바꿈 구분).`,
     ``,
     `JSON으로만 답한다: {"text":"..."}`,
+  ].join("\n");
+
+const lunchSituation = (): string =>
+  [
+    `[문안 — 지금 보낼 점심 한 통]`,
+    `상대가 이틀째 답이 없다. 아침에 한 통 보냈고 이게 오늘의 마지막 한 통이다. 재촉하지 않고 위 [지금]에서 네가 하는 일만 가볍게 한 마디 전한다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,
+    `- 답이 없는 걸 따지거나 캐묻지 않고 걱정을 앞세우지도 않는다. 기다리고 있다는 티는 네 성격대로 한 마디까지다.`,
+    `- 상대에게 오늘 일정이 있는 걸 안다면 그것만 가볍게 챙긴다.`,
+    `- 지금 상황에서 이 말이 억지스러우면 send=false.`,
+    `- 1~2개 말풍선(줄바꿈 구분).`,
+    ``,
+    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
   ].join("\n");
 
 const catchupSituation = (): string =>
@@ -210,14 +229,48 @@ const followupTickBody = async (): Promise<void> => {
       continue;
     }
 
+    // 점심 선톡: 무응답 이틀째에 아침 한 통과 함께 나가는 낮의 한 통(이슈 #314).
+    //
+    // 새벽에 미리 쓰지 않고 여기서 만드는 건, 점심에 무엇을 하고 있는지를 계획이 아니라 그
+    // 시각의 각본에서 읽어 쓰기 위해서다. 침묵 조건은 걸지 않는다 — 아침 선톡에서 세 시간쯤
+    // 지난 자리라 네 시간을 채우지 못하는데, 이 한 통은 그 침묵과 무관하게 그날 몫으로 나간다.
+    // 15분 틱이 창 안에 세 번 들어오므로 불가 구간에 걸려 한 번 접혀도 다시 온다.
+    if (
+      lunchDueToday(c.chat_id, c.id) &&
+      now >= LUNCH_WINDOW.start &&
+      now < LUNCH_WINDOW.end &&
+      proactiveKindCountToday(c.chat_id, dayStart(), "lunch") < 1 &&
+      proactiveCountToday(c.chat_id, dayStart()) < PROACTIVE_DAILY_MAX
+    ) {
+      const lunchBlock = currentBlock(c.id);
+      if (lunchBlock && lunchBlock.responsiveness !== "unavailable") {
+        await sendProactiveDraft({
+          characterId: c.id,
+          chatId: c.chat_id,
+          kind: "lunch",
+          lastSentAt: last.sent_at,
+          situation: lunchSituation(),
+          maxTokens: 500,
+          read: readSendText,
+          label: "[followup] 점심",
+          sentLog: `[followup] lunch to ${c.chat_id} @ ${lunchBlock.activity}`,
+        });
+        continue;
+      }
+    }
+
     // (이하 근황 선톡)
     // 네 시간 조용할 때 한 통. 조건을 이 하나로 두는 건, 각본 전환점까지 겹쳐 보면 언제 오는
     // 말인지 설명할 수 없고 두 시간은 낮에 흔한 간격이라 답이 늦은 것과 대화가 끝난 것을 가르지
     // 못해서다. 네 시간은 유저의 마지막 말과 캐릭터의 마지막 말 둘 다에서 잰다 — 예고·복귀 인사가
     // 방금 나갔으면 그 말에 답할 시간을 먼저 준다(이슈 #274). last는 위에서 캐릭터 차례로 확인했다.
     if (!catchupSilenceOk(lu, last.sent_at)) continue;
-    // 오늘 시작 이후에 유저가 말한 적이 있어야 (어제 끊긴 건 아침 선톡이 담당)
-    if (lu < dayStart()) continue;
+    // 오늘 미리 만들어 둔 선톡이 아직 안 나갔으면 기다린다. 어제 대화가 끊긴 채 아침을 맞으면
+    // 네 시간 조건이 아침 문안의 발송 창보다 먼저 차므로, 이 검사가 없으면 근황이 아침 인사를
+    // 앞질러 나간다(이슈 #314).
+    if (hasPendingSendOn(c.id, kstLogicalDate())) continue;
+    // 점심 선톡이 나간 날은 그 통이 그날 낮의 한 통이다. 겹쳐 보내지 않는다.
+    if (proactiveKindCountToday(c.chat_id, dayStart(), "lunch") >= 1) continue;
     // 근황은 하루 한 통. 보낸 뒤에도 답이 없으면 그날은 더 보내지 않고 다음 날 아침으로 넘긴다.
     if (proactiveKindCountToday(c.chat_id, dayStart(), "catchup") >= 1) continue;
     // 하루 절대 상한(안전장치, 자리비움을 뺀 선톡 합산)

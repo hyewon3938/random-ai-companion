@@ -1,7 +1,7 @@
 // 선제 발화 관제탑 — 오늘 먼저 연락해도 되는지, 무엇을 보낼지 한곳에서 정한다.
 //
 // silenceState가 유저가 답하지 않은 논리일 수를 세어 단계를 매긴다(normal·quiet·checkin·
-// dormant). dailySendPlan은 그날 보낼 종류 하나를 고른다(morning·lunch·checkin·none) —
+// dormant). dailySendPlan은 그날 미리 만들어 둘 종류 하나를 고른다(morning·checkin·none) —
 // 새벽에 문안을 준비할 때, 반영 게이트에서, 발송 직전 재확인에서 모두 이 함수를 부른다.
 // 세 자리가 각자 판단하면 준비한 것과 보내는 것이 어긋난다.
 //
@@ -85,18 +85,18 @@ export const proactiveAllowed = (
 ): boolean => silenceState(chatId, characterId).tier === "normal";
 
 
-// 미리 만들어 두는 선톡(아침·점심·안부)을 그날 무엇으로 보낼지 정한다. 새벽 정리의 문안
-// 준비, 반영 직전 확인, 발송 직전 재확인이 같은 판정을 쓰도록 한곳에 둔다.
+// 미리 만들어 두는 선톡(아침·안부)을 그날 무엇으로 보낼지 정한다. 새벽 정리의 문안 준비,
+// 반영 직전 확인, 발송 직전 재확인이 같은 판정을 쓰도록 한곳에 둔다.
 //
 //   어제 대화함 · 1일째  아침에 한 통
-//   2일째               아침은 거르고 점심에 한 통
+//   2일째               아침에 한 통. 점심 한 통이 더 나가는데 그건 아래 lunchDueToday가 정한다
 //   3~13일째            없음. 유저가 말해 둔 유저의 일정이 있는 날만 아침에 한 통
 //   14일째              저녁에 안부 선톡 한 통
 //   15일째부터          없음
 //
 // 14일째 한 통은 실제로 나갈 때까지 매일 다시 시도한다 — 그날 전송에 실패했다고 침묵으로
 // 넘어가면 관계를 닫는 마지막 한 통이 통째로 사라진다.
-export type PreparedSendKind = "morning" | "lunch" | "checkin" | "none";
+export type PreparedSendKind = "morning" | "checkin" | "none";
 
 export interface DailySendPlan {
   kind: PreparedSendKind;
@@ -128,13 +128,18 @@ export const dailySendPlan = (
           reason: `무응답 ${days}일이지만 오늘 상대 일정이 있어 아침에 한 통`,
         }
       : { ...base, kind: "none", reason: `무응답 ${days}일, 조용` };
-  if (days >= 2)
-    return {
-      ...base,
-      kind: "lunch",
-      reason: `무응답 ${days}일, 아침 대신 점심에 한 통`,
-    };
   return { ...base, kind: "morning", reason: "아침에 한 통" };
+};
+
+// 오늘 점심에도 한 통 보내는 날인가 — 무응답 이틀째. 아침 한 통은 예약 행으로 나가고 이 한
+// 통이 더 붙어, 그날 연락은 아침·점심 둘이다(이슈 #314).
+//
+// 이 통은 미리 만들어 두지 않고 팔로업 틱이 점심 창 안에서 그때의 각본을 보고 만든다. 새벽에
+// 써 두면 점심에 무엇을 하고 있는지 계획으로만 알고 쓰게 되고, 예약 행은 하루 한 통이라
+// 아침 문안과 자리를 다툰다.
+export const lunchDueToday = (chatId: string, characterId: number): boolean => {
+  const { tier, days } = silenceState(chatId, characterId);
+  return tier === "normal" && days >= 2;
 };
 
 // 발송에 실패한 선톡 문안을 다음 틱까지 들고 있는 자리.
@@ -153,7 +158,7 @@ export const dailySendPlan = (
 // 활동 블록까지 같아야 한다 — 다음 블록의 예고를 앞 블록 문안으로 보내면 엉뚱한 말이 나간다.
 // 다른 하나는 나이다. 만든 지 오래된 문안은 지금 상황을 더 이상 말하지 못하므로 버린다.
 
-export type HeldDraftKind = "goodnight" | "mend" | "catchup" | "away";
+export type HeldDraftKind = "goodnight" | "mend" | "catchup" | "lunch" | "away";
 
 export interface HeldDraft {
   kind: HeldDraftKind;

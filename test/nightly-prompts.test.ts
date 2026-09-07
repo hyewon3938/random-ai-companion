@@ -7,7 +7,6 @@ import {
   arcLinesOf,
   careSituation,
   diaryPrompt,
-  lunchSituation,
   morningSituation,
   quietDayPrompt,
   reconnectSituation,
@@ -116,15 +115,6 @@ test("morningSituation은 보내는 시점·이어갈 것·일정·어젯밤 잠
   assert.ok(!noSleep.includes("어젯밤"));
   assert.ok(noSleep.includes("- 어제에서 이어갈 것: (없음)"));
   assert.ok(noSleep.includes("- 상대의 다가오는 일정(들은 것): (없음)"));
-});
-
-test("lunchSituation은 이틀째 답이 없는 날의 점심 한 통이다", () => {
-  const p = lunchSituation(gathered(), []);
-  assert.ok(p.includes("[문안 준비 — 오늘 점심 무렵에 보낼 한 통]"));
-  assert.ok(p.includes("상대가 이틀째 답이 없다."));
-  assert.ok(p.includes("- 어제에서 이어갈 것: (없음)"));
-  assert.ok(p.includes("- 상대의 다가오는 일정(들은 것): 9/7 오전 발표"));
-  assert.ok(p.includes('{"send":true,"text":"..."}'));
 });
 
 test("careSituation과 reconnectSituation은 침묵 일수를 적는다", () => {

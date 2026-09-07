@@ -241,7 +241,7 @@ const TABLES: Record<string, string> = {
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id TEXT NOT NULL,
   character_id INTEGER,
-  kind TEXT NOT NULL CHECK (kind IN ('away','catchup','goodnight','mend')),
+  kind TEXT NOT NULL CHECK (kind IN ('away','catchup','goodnight','mend','lunch')),
   error TEXT NOT NULL,
   failed_at TEXT NOT NULL`,
 
@@ -946,7 +946,7 @@ const rebuildPendingReplies = (marker: string): void => {
 rebuildPendingReplies("return");
 rebuildPendingReplies("promise");
 
-// send_failures.kind에 값을 더한다('mend'). 위 이관과 같은 이유로 테이블을 다시
+// send_failures.kind에 값을 더한다. 늘어난 값마다 한 번씩 부른다. 위 이관과 같은 이유로 테이블을 다시
 // 만들고, 버전 번호 대신 CHECK 문구를 보고 판단한다. 이 표에는 인덱스가 없어 다시 만들 것도
 // 없다 — 실패 기록을 사람이 훑어보는 자리라 조회가 인덱스를 타지 않는다.
 const rebuildSendFailures = (marker: string): void => {
@@ -976,5 +976,6 @@ const rebuildSendFailures = (marker: string): void => {
   console.log(`[db] send_failures에 ${marker}를 더했다`);
 };
 rebuildSendFailures("mend");
+rebuildSendFailures("lunch");
 
 db.pragma("foreign_keys = ON");
