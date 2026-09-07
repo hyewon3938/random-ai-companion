@@ -7,6 +7,9 @@
 // 재시도를 다 쓰고 행을 닫을 때는 그 행이 지고 있던 답장 책임도 함께 놓는다
 // (releaseRecoveryMark). 그래야 복구 틱이 이어받아 그 시점의 대화로 답장을 새로 만든다.
 //
+// 약속 행(kind='promise')을 거두거나 포기할 때는 그 약속을 한 답장의 슬랙 스레드에 남긴다
+// (tracePromise, 이슈 #312) — 행의 meta에 실린 답장 호출 번호가 그 스레드를 가리킨다.
+//
 // 답장 불가 구간의 깨우기 표시도 같은 표를 쓴다 — 문안 없이 kind='wake' 행으로 구간 끝
 // 시각에 걸어 둔다. 유저가 말을 더 보내도 이 행은 살아남고(구간 끝 시각은 그대로다),
 // 지우는 것은 dropWakeRows다. 기다리는 동안 isWaiting이 참이라 선톡 틱이 물러난다.
@@ -33,7 +36,7 @@ import {
   type PendingReplyRow,
 } from "./db.js";
 import { saveTodayNote } from "./memory.js";
-import { traceReplyOutcome } from "./reply-trace.js";
+import { tracePromise, traceReplyOutcome } from "./reply-trace.js";
 import { getKstNow, kstDateString } from "./kst.js";
 
 // 대기 중인 답장.
@@ -186,6 +189,17 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
         markPendingReply(row.id, "failed", null, msg);
         if (row.kind !== "promise") releaseRecoveryMark(row);
         console.error(`[pending] ${label} 포기 #${row.id}: ${msg}`);
+        if (row.kind === "promise") {
+          const meta = parseWakeMeta(row);
+          tracePromise({
+            characterId: row.character_id,
+            rowId: row.id,
+            stage: "gave_up",
+            promise: meta.promise ?? "",
+            callId: meta.callId,
+            detail: msg,
+          });
+        }
         return;
       }
       console.warn(
@@ -319,7 +333,18 @@ export interface WakeMeta {
   blockEnd: string;
   /** kind='promise'일 때, 캐릭터가 답장에서 한 약속 한 문장. */
   promise?: string;
+  /** kind='promise'일 때, 그 약속을 한 답장의 호출 번호 — 트레이스가 그 스레드에 단다. */
+  callId?: number | null;
 }
+
+/** 약속 행의 meta를 읽는다. 깨져 있어도 약속 자체는 유효하므로 빈 값으로 돌려준다. */
+export const parseWakeMeta = (row: PendingReplyRow): Partial<WakeMeta> => {
+  try {
+    return JSON.parse(row.meta_json ?? "{}") as Partial<WakeMeta>;
+  } catch {
+    return {};
+  }
+};
 
 const WAKE_LABEL: Record<"wake" | "return" | "promise", string> = {
   wake: "깨우기",
@@ -401,13 +426,34 @@ export const dropPendingReplies = (
   return rows.length;
 };
 
-/** 걸어 둔 연락 약속을 거둔다 — 새 약속으로 갈아 끼우거나 몰아 답장이 그 자리를 덮을 때. */
-export const dropPromiseRows = (chatId: string): number => {
-  const rows = supersedePromiseRows(chatId);
+/**
+ * 걸어 둔 연락 약속을 거둔다 — 새 약속으로 갈아 끼우거나 몰아 답장이 그 자리를 덮을 때.
+ * detail은 트레이스에 적는 거둔 사유.
+ */
+export const dropPromiseRows = (
+  chatId: string,
+  detail = "새 약속으로 갈아 끼운다",
+  exceptRowId?: number,
+): number => {
+  const rows = supersedePromiseRows(chatId, exceptRowId);
   for (const r of rows) {
     const t = timers.get(r.id);
     if (t) clearTimeout(t);
     timers.delete(r.id);
+    let meta: Partial<WakeMeta> = {};
+    try {
+      meta = JSON.parse(r.meta_json ?? "{}") as Partial<WakeMeta>;
+    } catch {
+      /* 약속 문장 없이 적는다 */
+    }
+    tracePromise({
+      characterId: r.character_id,
+      rowId: r.id,
+      stage: "dropped",
+      promise: meta.promise ?? "",
+      callId: meta.callId,
+      detail,
+    });
   }
   return rows.length;
 };

@@ -7,7 +7,8 @@
 // 꼬리에 실어 답장과 선톡 문안 모두가 읽는다. 달래기 선톡(followup)은 이 값의 결과 원인을 본다.
 //
 // 상태는 자유 문장이고 원인은 둘(나 때문·상대의 다른 일), 결은 셋(좋음·보통·안 좋음)뿐이다.
-// 풀렸다는 표시는 따로 없다 — 상태가 바뀌면 새 값이 앞 값을 덮는다. 주제 고르기(tag-pick)와
+// 풀렸다는 표시는 따로 없다 — 상태가 바뀌면 새 값이 앞 값을 덮는다. 바뀐 턴에는 판정 직전의
+// 값(prev)도 돌려줘 슬랙 답장 게시가 이전 → 지금으로 적는다(이슈 #312). 주제 고르기(tag-pick)와
 // 나란히 돌려 답장이 늦어지지 않게 한다.
 
 import { chat, type CallMeta } from "./llm.js";
@@ -37,6 +38,8 @@ export interface UserStateVerdict {
   /** 호출이 비거나 형식이 깨져 판정을 못 받은 것 — 값을 그대로 둔다. */
   failed: boolean;
   callId: number | null;
+  /** changed일 때 판정 직전의 값(한 줄 이름표). 없던 상태에서 생겼으면 null. */
+  prev: string | null;
 }
 
 const SYSTEM = `너는 두 사람의 메시지 대화를 옆에서 읽는 관찰자다. 캐릭터가 아니라 제3자다.
@@ -154,7 +157,13 @@ export const parseUserStateVerdict = (
 const noChange = (
   failed: boolean,
   callId: number | null,
-): UserStateVerdict => ({ changed: false, state: null, failed, callId });
+): UserStateVerdict => ({
+  changed: false,
+  state: null,
+  failed,
+  callId,
+  prev: null,
+});
 
 /**
  * 상대의 지금 상태를 판정한다. 실패하면 값을 그대로 둔다 — 없던 상태를 만들지 않는 쪽이
@@ -196,7 +205,7 @@ export const judgeUserState = async (
         state: parsed.state,
         prev,
       });
-    return { ...parsed, failed: false, callId };
+    return { ...parsed, failed: false, callId, prev: parsed.changed ? prev : null };
   } catch (e) {
     console.warn("[user-state] 판정 호출 실패 — 값을 그대로 둔다:", e);
     return noChange(true, meta.callId ?? null);

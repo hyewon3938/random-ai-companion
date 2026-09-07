@@ -245,16 +245,27 @@ export const supersedeWakeRows = (chatId: string): SupersededRow[] => {
 
 // 걸어 둔 연락 약속을 거둔다 — 같은 대화에서 새 약속이 생겨 앞 약속을 갈아 끼울 때. 약속은
 // 한 대화에 하나만 걸린다(이슈 #308).
-export const supersedePromiseRows = (chatId: string): SupersededRow[] => {
+/** 거둔 약속 행 — 트레이스가 약속 문장과 그 답장 호출 번호를 meta에서 꺼내 쓴다. */
+export interface SupersededPromiseRow extends SupersededRow {
+  character_id: number;
+  meta_json: string | null;
+}
+
+export const supersedePromiseRows = (
+  chatId: string,
+  exceptId = 0,
+): SupersededPromiseRow[] => {
+  // exceptId는 지금 울리고 있는 약속 행 — 핸들러가 도는 동안은 아직 waiting이라, 그 행이
+  // 스스로 건 새 약속에 거둬지지 않게 뺀다.
   const rows = db
     .prepare(
-      `SELECT id, call_id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'promise'`,
+      `SELECT id, call_id, character_id, meta_json FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'promise' AND id != ?`,
     )
-    .all(chatId) as SupersededRow[];
+    .all(chatId, exceptId) as SupersededPromiseRow[];
   if (rows.length)
     db.prepare(
-      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind = 'promise'`,
-    ).run(chatId);
+      `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind = 'promise' AND id != ?`,
+    ).run(chatId, exceptId);
   return rows;
 };
 

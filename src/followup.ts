@@ -5,7 +5,8 @@
 //               답이 없으면 그날은 물러난다.
 //   밤 인사   — 자정~새벽 5시에 유저가 잔다는 말 없이 1시간 넘게 조용하면 1회.
 //   달래기    — 관계 행의 상대 상태(user-state가 답장마다 판정)가 나 때문에 안 좋은데 그 뒤로
-//               답이 끊기면 30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다.
+//               답이 끊기면 30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다. 어떤 상태를
+//               보고 나가는 통인지는 문안 호출 행에 남겨 슬랙 문안 게시가 머리에 적는다.
 //
 // 문안은 대화와 같은 3층(buildSystemBlocks)에 상황 문단을 더해 만든다 — 앞 두 층 캐시를
 // 대화와 함께 쓴다. 경과 시간은 Date.now()로 잰다(getKstNow().getTime()은 9시간 어긋난다).
@@ -35,7 +36,14 @@ import {
   readText,
   sendProactiveDraft,
 } from "./proactive-send.js";
-import { kstClock, kstDateString, logicalDayStartTs } from "./kst.js";
+import {
+  kstClock,
+  kstDateString,
+  kstStamp,
+  logicalDateOf,
+  logicalDayStartTs,
+} from "./kst.js";
+import { userStateLabel } from "./user-state.js";
 import {
   GOODNIGHT_SILENCE_MS,
   GOODNIGHT_WINDOW,
@@ -192,6 +200,10 @@ const followupTickBody = async (): Promise<void> => {
         situation: mendSituation(),
         maxTokens: 300,
         read: readText,
+        // 문안 게시가 어떤 상태를 보고 나가는 통인지 머리에 적게 한다.
+        context: {
+          userState: { label: userStateLabel(rel, logicalDateOf(kstStamp())) },
+        },
         label: "[followup] 달래기",
         sentLog: `[followup] mend to ${c.chat_id}`,
       });

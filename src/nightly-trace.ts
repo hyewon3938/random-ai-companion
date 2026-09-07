@@ -4,9 +4,11 @@
 // 둘 다 그 함수를 지나므로 한 곳이면 두 경로가 다 걸린다.
 //
 // 게시 기록은 반영 트랜잭션 바깥에서 남긴다 — 게시가 실패해도 새벽 정리는 되돌아가지 않는다.
-// 이전 값과 새 값을 나란히 보여주려고, 트랜잭션을 부르기 전에 출력이 쓸 키의 행을 미리 읽어 둔다.
+// 바뀐 값은 이전 값 전문과 새 값 전문을 나란히 두지 않고, 전문 하나 안에서 빠진 말을 `[-…-]`,
+// 더한 말을 `{+…+}`로 표시한다(trace/diff.ts, 이슈 #312). 그러려고 트랜잭션을 부르기 전에
+// 출력이 쓸 키의 행을 미리 읽어 둔다.
 //
-//   본문   — 반영 요약, 그날 오늘 메모, 각본과 달라진 하루, 관계 갱신(이전→새 값),
+//   본문   — 반영 요약, 그날 오늘 메모, 각본과 달라진 하루, 관계 갱신(바뀐 자리 표시),
 //            상대 프로필 갱신, 새 일정, 일정 시각 고침
 //   스레드 — 기억 신규·덮어쓰기, 일기 전문, 오늘 선톡 문안과 발송 창, 새벽 정리가 부른 호출 원문
 //
@@ -48,6 +50,7 @@ import {
   SPEECH_LEVEL_NAME,
   type MemoryOrigin,
 } from "./labels.js";
+import { wordDiff } from "./trace/diff.js";
 import { keyProblem } from "./memory.js";
 import { getKstNow } from "./kst.js";
 import type {
@@ -220,13 +223,7 @@ const relationshipBlocks = (
     const b = relValue(before, f);
     const a = relValue(after, f);
     if (b === a) continue;
-    out.push(
-      [
-        `*${name}*`,
-        `> 이전: ${esc(b || "(비어 있었음)")}`,
-        `> 새 값: ${esc(a || "(비움)")}`,
-      ].join("\n"),
-    );
+    out.push([`*${name}*`, `> ${esc(wordDiff(b, a))}`].join("\n"));
   }
   return out;
 };
@@ -246,13 +243,7 @@ const profileBlocks = (
     const b = before[f] ?? "";
     const a = after[f] ?? "";
     if (b === a) continue;
-    out.push(
-      [
-        `*${name}*`,
-        `> 이전: ${esc(b || "(모르던 값)")}`,
-        `> 새 값: ${esc(a || "(비움)")}`,
-      ].join("\n"),
-    );
+    out.push([`*${name}*`, `> ${esc(wordDiff(b, a))}`].join("\n"));
   }
   return out;
 };
@@ -383,10 +374,9 @@ const memoryChild = (
     } else {
       changed.push(
         [
-          `～ *${esc(memLabel(m))}*`,
           // 생성 행만 있던 키면 이번에 처음 대화 쪽 행이 생긴다 — 이전 값의 출처를 밝힌다.
-          `> 이전: ${esc(clip(prev.value, 400))}${prev.origin === "creation" ? " (생성 때 값)" : ""}`,
-          `> 새 값: ${esc(clip(m.value, 400))}`,
+          `～ *${esc(memLabel(m))}*${prev.origin === "creation" ? " (생성 때 값을 덮음)" : ""}`,
+          `> ${esc(wordDiff(clip(prev.value, 400), clip(m.value, 400)))}`,
           ...tail,
         ].join("\n"),
       );
@@ -430,8 +420,7 @@ const progressChild = (
     if (!before) return `:warning: [${p.id}] 반영 대상이 아니라 건너뜀`;
     return [
       `*${esc(before.label)}*${p.done ? " · 끝나서 사실로 옮김" : ""}`,
-      `이전: ${esc(before.value)}`,
-      `새 값: ${esc(p.value.trim())}`,
+      esc(wordDiff(before.value, p.value.trim())),
     ].join("\n");
   });
   recordTraceChunks(

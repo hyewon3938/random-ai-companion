@@ -271,12 +271,14 @@ export const composeReply = async (
   attach({
     stay: signals.stay,
     note: signals.note,
-    // 상대 상태 — 이번 판정이 바꿨는지와 지금 값. 판정 호출 번호는 트레이스가 답장 옆에 적는다.
+    // 상대 상태 — 이번 판정이 바꿨는지와 지금 값. 바뀌었으면 직전 값도 같이 남겨 슬랙이
+    // 이전 → 지금으로 적는다. 판정 호출 번호는 트레이스가 답장 옆에 적는다.
     userState: {
       changed: verdict.changed,
       failed: verdict.failed,
       callId: verdict.callId,
       label: rel ? userStateLabel(rel, logicalDateOf(kstStamp())) : null,
+      prev: verdict.prev,
     },
     bubbles: bubbles.length,
     // 말풍선 사이 간격은 발송할 때 글자 수에서 나온다(1초 안쪽 흔들림) — 길이를 남겨 둔다.

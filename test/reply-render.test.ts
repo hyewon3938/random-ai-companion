@@ -1,8 +1,9 @@
 // 답장 게시 문안 그리기(trace/reply-render.ts)가 호출 행과 판단 근거를 슬랙 문안으로 옮기는 자리를 검사한다 — 모델은 부르지 않는다.
 //
-// 텀 표시·도착 대기·붙잡기 판정 줄, 기다린 시간 표기, 하루 고정 두 덩이의 줄 단위 비교와
-// 바뀐 절 이름이 그대로 나오는지 본다. 답장 본문 한 장은 유저 말과 실패 표시가 자리에 붙는지만
-// 본다. DB는 임시 파일로 새로 만든다.
+// 텀 표시·도착 대기·붙잡기 판정 줄, 기다린 시간 표기, 하루 고정 두 덩이에서 바뀐 절 이름이
+// 그대로 나오는지 본다. 답장 본문 한 장은 유저 말·실패 표시·상대 상태·약속이 자리에 붙는지,
+// 선톡 문안 한 장은 지킨 약속과 상대 상태를 머리에 두는지 본다. 줄 단위 비교 자체는
+// trace-diff.test.ts가 본다. DB는 임시 파일로 새로 만든다.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync } from "node:fs";
@@ -25,9 +26,9 @@ const {
   changedSections,
   fmtWait,
   LAYER_NAME,
-  lineDiff,
   parseContext,
   parseHashes,
+  renderDraft,
   renderReply,
   timingLines,
 } = await import("../src/trace/reply-render.js");
@@ -194,14 +195,73 @@ test("답장 한 장은 유저 말과 호출 실패를 제자리에 붙인다", 
   assert.ok(text.includes("*오늘 메모* 추가 없음"));
 });
 
-test("줄 단위 비교는 바뀐 줄만 남기고 너무 길면 자른다", () => {
-  assert.equal(lineDiff("a\nb", "a\nb"), "(줄 단위로는 같다 — 공백만 바뀌었다)");
-  assert.equal(lineDiff("a\nb\nc", "a\nx\nc"), "- b\n+ x");
-  const before = ["1", "2", "3", "4"].join("\n");
-  const after = ["5", "6", "7", "8"].join("\n");
-  const cut = lineDiff(before, after, 2);
-  assert.equal(cut.split("\n").length, 3);
-  assert.match(cut, /… 6줄 더$/);
+test("상대 상태는 바뀐 턴에 이전 → 지금으로, 그대로면 지금 값만 적는다", () => {
+  const label = "연락한다던 말을 안 지켜 서운함 (13:50부터 · 나 때문 · 안 좋음)";
+  const first = renderReply(row(), {
+    userState: { changed: true, failed: false, callId: 9, label, prev: null },
+  });
+  assert.ok(first.includes(`*상대 상태* 바뀜 · 없음 → ${label}`));
+  const eased = "풀려서 평소대로 (14:10부터 · 나 때문 · 보통)";
+  const second = renderReply(row(), {
+    userState: { changed: true, failed: false, callId: 10, label: eased, prev: label },
+  });
+  assert.ok(second.includes(`*상대 상태* 바뀜 · ${label} → ${eased}`));
+  const same = renderReply(row(), {
+    userState: { changed: false, failed: false, callId: 11, label: eased, prev: null },
+  });
+  assert.ok(same.includes(`*상대 상태* 그대로 · ${eased}`));
+  const failed = renderReply(row(), {
+    userState: { changed: false, failed: true, callId: 12, label: null, prev: null },
+  });
+  assert.ok(failed.includes("*상대 상태* 판정 실패 · 없음"));
+});
+
+test("새 약속이 앞 약속을 거두면 그 건수를 약속 줄 끝에 적는다", () => {
+  const text = renderReply(row(), {
+    promise: {
+      text: "저녁 먹고 연락",
+      sendAt: "2026-09-07 20:00:10",
+      block: "19:00~20:00",
+      activity: "저녁",
+      replaced: 1,
+    },
+  });
+  assert.ok(
+    text.includes("*약속* 저녁 먹고 연락 → 2026-09-07 20:00:10 (저녁 끝) · 앞 약속 1건 거둠"),
+  );
+});
+
+test("선톡 문안은 지킨 약속과 상대 상태를 머리에 둔다", () => {
+  const out = putBlob(JSON.stringify({ send: true, text: "끝났다 이제 봤어" }));
+  const promiseDraft = renderDraft(
+    row({ purpose: "promise", output_hash: out }),
+    {
+      promised: { promise: "통화 끝나고 다시 연락", activity: "통화", blockStart: "13:00" },
+    },
+  );
+  const lines = promiseDraft.split("\n");
+  assert.equal(
+    lines[1],
+    "*지킨 약속* 통화 끝나고 다시 연락 — 13:00 통화 구간이 끝나 약속대로 연락하는 자리",
+  );
+  assert.equal(lines[2], "*보낼까* 보낸다");
+  const mendDraft = renderDraft(
+    row({ purpose: "mend", output_hash: out }),
+    {
+      userState: {
+        changed: false,
+        failed: false,
+        callId: null,
+        label: "연락한다던 말을 안 지켜 서운함 (13:50부터 · 나 때문 · 안 좋음)",
+      },
+    },
+  );
+  assert.equal(
+    mendDraft.split("\n")[1],
+    "*상대 상태* 연락한다던 말을 안 지켜 서운함 (13:50부터 · 나 때문 · 안 좋음)",
+  );
+  // 판단 근거가 없는 문안은 머리 다음 줄이 바로 본문이다
+  assert.equal(renderDraft(row({ purpose: "morning", output_hash: out })).split("\n")[1], "*보낼까* 보낸다");
 });
 
 test("바뀐 절은 대괄호 제목으로 세고 넷부터는 줄여 적는다", () => {

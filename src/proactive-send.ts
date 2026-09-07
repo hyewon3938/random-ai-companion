@@ -8,6 +8,8 @@
 //      응답을 문안으로 읽는다. read가 null을 주면 보내지 않는다(접은 사유는 read 안에서 남긴다).
 //   4. 모델을 기다리는 사이 마지막 메시지가 바뀌었으면 접는다 — 유저가 답했거나 다른 경로가
 //      뭔가 보낸 것이다.
+// 부른 쪽이 context를 주면 문안 호출 행에 판단 근거로 남겨 슬랙 문안 게시가 머리에 적는다
+// (달래기의 상대 상태, 이슈 #312).
 //   5. 보낸다. 한 통도 못 나갔으면 문안을 보관함에 넣어 다음 틱이 다시 보내게 한다.
 // 종류별로 다른 것(상황 문단·응답 모양·접을 때 남길 기록·로그 문구)만 spec으로 받는다.
 //
@@ -16,7 +18,8 @@
 
 import { chatJson, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
-import { lastMessage, recordSendFailure } from "./db.js";
+import { lastMessage, recordSendFailure, setCallContext } from "./db.js";
+import type { CallContext } from "./trace/reply-render.js";
 import {
   acquireProactive,
   releaseProactive,
@@ -53,6 +56,11 @@ export interface ProactiveDraftSpec<T> {
   sentLog: string;
   /** 문안을 만드는 사이 마지막 메시지가 바뀌어 접었을 때 남길 기록. */
   onMoved?: (meta: CallMeta) => void;
+  /**
+   * 문안 호출 행에 남길 판단 근거 — 왜 이 문안을 만들었는지(달래기라면 상대의 지금 상태).
+   * 게시가 문안 머리에 적는다(이슈 #312).
+   */
+  context?: Partial<CallContext>;
 }
 
 export type ProactiveDraftResult =
@@ -93,6 +101,7 @@ export const sendProactiveDraft = async <T>(
         config.model, // 실시간성이라 대화 모델(sonnet)
         meta,
       );
+      if (spec.context && meta.callId) setCallContext(meta.callId, spec.context);
       const text = spec.read(draft, meta);
       if (!text) return "skipped";
       outgoing = {

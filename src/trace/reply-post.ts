@@ -25,7 +25,6 @@ import {
   changedSections,
   changeLabel,
   LAYER_NAME,
-  lineDiff,
   parseContext,
   parseHashes,
   renderDraft,
@@ -35,6 +34,7 @@ import {
   type BlockHash,
   type CallRow,
 } from "./reply-render.js";
+import { lineDiff } from "./diff.js";
 
 // 한 틱에 준비하는 호출 수. 슬랙 발송은 게시함이 따로 조절하므로 여기서는 읽기 상한만 둔다.
 const BATCH = 20;
@@ -195,7 +195,7 @@ const postCall = (row: CallRow): void => {
       ? renderReply(row, ctx)
       : row.purpose === "hold"
         ? renderHold(row, ctx)
-        : renderDraft(row);
+        : renderDraft(row, ctx ?? undefined);
   const key = callKey(row.id);
   db.transaction(() => {
     recordTraceEvent({
