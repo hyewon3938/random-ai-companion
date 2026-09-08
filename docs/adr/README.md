@@ -20,3 +20,6 @@
 | [0012](0012-drop-secure-stance-show-caring.md) | 안정형 stance를 빼고 신경 쓰는 티를 공통 규칙으로 두기 | Accepted |
 | [0013](0013-code-areas.md) | 코드를 영역 7개로 나눠 표로 관리하기 | Accepted |
 | [0014](0014-user-state-line.md) | 상대의 지금 상태를 답장마다 판정해 관계 행에 한 줄로 갖기 | Accepted |
+| [0015](0015-relationship-stages-and-firsts.md) | 관계를 내부 단계 4개로 두고 유저에게 보이지 않게 올리기 | Accepted |
+| [0016](0016-affection-contact-grounded-in-intent.md) | 애정 연락의 근거를 관계 의도로 옮기고 근거 없는 연락 금지를 없애기 | Accepted |
+| [0017](0017-reaction-score-per-user.md) | 반응 점수를 유저 단위로 두고 프롬프트에 숫자를 넣지 않기 | Accepted |

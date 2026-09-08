@@ -255,3 +255,19 @@ trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다.
 - 파일을 폴더로 옮기지 않는다. 분해 작업으로 새 파일이 생길 때 나누는 파일의 이름으로 폴더를 만들고, 원본 파일은 앞문으로 남겨 임포터가 그대로 쓰게 한다. 예외는 `src/tools/archive/`로, 더 돌리지 않는 도구를 두는 자리다.
 - 손볼 자리는 착수할 때 이슈 번호를 달고 끝나면 여기서 지운다. 무엇을 왜 그렇게 했는지는 이슈와 PR 본문에 남긴다. 줄 번호는 적은 날짜 기준이라 착수할 때 다시 잰다.
 - 영역의 이름이나 경계를 바꾸는 판단은 ADR로 남긴다.
+
+## V3에서 바뀌는 것
+
+V3(관계를 쌓는 캐릭터, 이슈 #326)의 새 파일과 고치는 파일이 들어갈 영역이다. 설계 원본은 relationship.md이고 흐름은 modules.md 「V3에서 바뀌는 흐름」에 있다. 파일을 실제로 만들 때 위 영역 표에 넣고 `node scripts/gen-modules.mjs`를 돌리며, 다 옮기면 이 절을 지운다.
+
+| 영역 | 새 파일 | 고치는 파일 |
+| --- | --- | --- |
+| 1. 기반과 저장 | db/relationship.ts (표 4개와 컬럼 2개의 읽기와 쓰기, 단계 줄이기 거부) | db/connection.ts 스키마 9, labels.ts에 처음·수·결·결점·수 반응 코드, thresholds.ts에 자리 비움 하루 2 |
+| 2. 기억 | reaction-score.ts (표본 계산, 갱신, 추천 목록, 잘 통하는 수 목록) | |
+| 3. 캐릭터의 삶 | | character.ts 생성 V3(온보딩 8칸, 원하는 방식과 결점) |
+| 4. 대화 생성 | context/relationship.ts (단계 블록 고르기와 「지금 관계」 채우기), prompts/relationship.ts (공통 틀과 단계 블록 4개) | prompts/reply.ts 규칙층 문장, reply-signal.ts 항목 3개, user-state.ts 열림 4항목, proactive-policy.ts 근거 종류와 단계별 상한, context.ts 조립 순서 |
+| 5. 실행과 발송 | | followup.ts 의도 선톡과 틈새 한 줄, presence.ts 복귀 문안, bot.ts 온보딩 8칸 |
+| 6. 새벽 정리 | | nightly.ts 관계 수집과 저장, prompts/nightly.ts 관계 절, nightly-trace.ts 관계 절 게시, tools/nightly-read.ts와 tools/nightly-write.ts 입출력 |
+| 7. 관측과 운영 | tools/end-character.ts (캐릭터 종료), tools/relationship-view.ts (단계·처음·점수 확인) | trace.ts 게시 종류 4개, reply-trace.ts 관계 줄과 열림 줄 |
+
+db/relationship.ts는 저장 함수만 갖고 정책은 갖지 않는다. 단계를 줄이는 저장을 거부하는 검사는 origin=creation 행의 수정 거부와 같은 자리이므로 저장 함수 안에 둔다. 반응 점수의 계산은 2번 영역이 맡고, 6번의 새벽 정리가 그 함수를 불러 쓴다.

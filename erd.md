@@ -673,3 +673,105 @@ plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한�
 - **call_feedback.slack_ts** — 표시가 달린 글의 게시 기록(trace_events)을 시각으로 찾는다. 게시함은 30일이 지나면 행을 지우므로 가리키는 게시 기록이 없는 표시가 정상으로 남고, 어느 호출이었는지는 저장할 때 call_id에 옮겨 적어 둔다.
 
 messages와 send_failures의 character_id도 FK 없이 번호만 적는다. 두 컬럼 모두 비워둘 수 있는 자리라 FK를 걸지 않았고, 기록을 캐릭터별로 가려 볼 때만 쓴다.
+
+## V3에서 바뀌는 것
+
+V3(관계를 쌓는 캐릭터, 이슈 #326)가 더하는 저장 자리다. 뜻과 쓰임은 relationship.md 4~6절과 10절에 있다. 구현 1이 스키마 9로 표를 만들 때 이 절의 표를 관계도 1과 쓰는 곳 표, 값이 정해진 컬럼 절로 옮기고 이 절을 지운다.
+
+```mermaid
+erDiagram
+  characters ||--|| relationships : "stage_no · stage_since 추가"
+  characters ||--o{ firsts : "처음"
+  characters ||--o{ relationship_intents : "하루 1행"
+  characters ||--o{ relationship_signals : "턴마다 1행"
+  user_profile ||--o{ reaction_scores : "유저 단위"
+```
+
+### relationships에 더하는 컬럼
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| stage_no | INTEGER | O | 관계 단계 1~4. 기본값 1. 저장 함수가 줄이는 값을 거부한다 |
+| stage_since | TEXT | O | 지금 단계의 시작일. 옮기는 절차가 활성 캐릭터에는 생성일을 넣는다 |
+
+기존 `stage` 컬럼은 사이 서술 글이라 그대로 둔다.
+
+### firsts — 처음
+
+캐릭터가 이 관계에서 처음 한 일이다. 답장 경로가 답장 신호를 받아 미확정 행으로 넣고 새벽 정리가 어제 대화와 견줘 확정하거나 지운다.
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | O | PK |
+| character_id | INTEGER | O | FK characters |
+| chat_id | TEXT | O | |
+| kind | TEXT | O | 처음 코드 20개 중 하나 — `first_remember` … `first_future_talk` |
+| by | TEXT | O | 누가 먼저 했는가 — `character` · `user` |
+| happened_at | TEXT | O | 일어난 시각 |
+| message_id | INTEGER | | 그 답장이나 유저 메시지 행. FK 없이 번호만 |
+| call_id | INTEGER | | 표시한 호출 |
+| confirmed | INTEGER | O | 0 미확정 · 1 새벽 정리가 확정 |
+
+키·인덱스: PK `id`, UNIQUE `(character_id, kind)`
+
+### reaction_scores — 반응 점수
+
+캐릭터가 쓴 수에 유저가 어떻게 반응했는지의 점수다. 키가 대화방이라 캐릭터를 바꿔도 이어진다.
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| chat_id | TEXT | O | |
+| move | TEXT | O | 수 코드 12개 중 하나 — `remember` … `ask_help` |
+| score | REAL | O | −1에서 1 사이. 초기값 0 |
+| sample_count | INTEGER | O | 표본 수. 초기값 0 |
+| updated_at | TEXT | O | |
+
+키·인덱스: PK `(chat_id, move)`
+
+### relationship_intents — 오늘의 관계 의도
+
+새벽 정리가 하루 1행을 만든다. 오늘 메모와 달리 다음 새벽 정리가 지우지 않고 30일 뒤에 지운다.
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | O | PK |
+| character_id | INTEGER | O | FK characters |
+| date | TEXT | O | 새벽 정리 기준 날짜 |
+| dig | TEXT | | 파고들 것 |
+| share | TEXT | | 흘릴 내 얘기 |
+| move | TEXT | | 시도할 수. 수 코드 |
+| move_note | TEXT | | 언제 시도할지 한 문장 |
+| lead_tone | TEXT | | 앞세울 결. 결 코드 5개 중 하나 — `direct` · `leaky` · `tease_sincere` · `possessive` · `silent_care` |
+| thread | TEXT | | 이어갈 자리 |
+| basis_json | TEXT | | 줄마다 출처. 슬랙 게시와 확인 도구만 읽는다 |
+| created_at | TEXT | O | |
+
+키·인덱스: PK `id`, UNIQUE `(character_id, date)`
+
+### relationship_signals — 열림 신호
+
+상대 상태 판정 호출이 턴마다 표시하는 유저 쪽 열림 신호 4항목이다. 새벽 정리가 날짜별로 세어 문턱을 재고, 수 반응은 반응 점수의 표본이 된다.
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | O | PK |
+| character_id | INTEGER | O | FK characters |
+| chat_id | TEXT | O | |
+| at | TEXT | O | 판정 시각 |
+| message_id | INTEGER | | 턴의 마지막 유저 메시지 행. FK 없이 번호만 |
+| opened_self | INTEGER | O | 유저가 자기 얘기를 열었는가 — 0 · 1 |
+| asked_about_char | INTEGER | O | 캐릭터 근황을 먼저 물었는가 — 0 · 1 |
+| said_affection | INTEGER | O | 호감을 말로 했는가 — 0 · 1 |
+| prev_move | TEXT | | 직전 캐릭터 답장이 쓴 수 코드 |
+| move_reaction | TEXT | | 그 수를 어떻게 받았는가 — `accepted` · `ignored` · `rejected` · `none` |
+| call_id | INTEGER | | 판정 호출 |
+
+키·인덱스: PK `id`, 인덱스 `(character_id, at)`
+
+### 기존 컬럼에 더하는 값
+
+| 자리 | 더하는 값 |
+| --- | --- |
+| messages.meta_json | `move` 이번 답장이 쓴 수 코드, `first` 처음 코드, `told_plan` 오늘 자기 일정을 말했는지, `intent_line` 선톡이나 답장이 쓴 의도 줄 코드. kind에 `intent` 의도 선톡과 `glance` 틈새 한 줄 |
+| trace_events.kind | `character_start` · `character_end` · `stage_change` · `first_event` |
+| characters의 정체성 값 | 원하는 방식(주 결과 섞는 결의 조건)과 결점(`jealousy` · `lingering_hurt` · `clumsy`) |
