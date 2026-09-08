@@ -1,6 +1,7 @@
 // 각본 블록의 활동 성격 추론·자리 비움 판정·생성 결과 정규화(day-plan.ts)를 검사한다 — 모델은 부르지 않는다.
 //
-// blockCategory가 활동 이름에서 공적·사회·개인을 어떻게 가르는지, isAwayUnavail이 잠을 빼는지,
+// blockCategory가 활동 이름에서 공적·사회·개인을 어떻게 가르고 정해진 세 값 밖의 명시값을
+// 어떻게 걸러 내는지, isAwayUnavail이 잠을 빼는지,
 // normalizePlan이 자정을 넘긴 시각과 한글 답장 여건을 식별자로 되돌리는지를 손으로 만든 블록으로
 // 본다. 출처 두 칸의 정규화는 day-plan-ongoing.test.ts가 본다. ensureTodayPlan은 오늘 각본이
 // 이미 있어 모델을 부르지 않고 돌아오는 분기를 본다 — 모델 주소를 닫힌 로컬 포트로 돌려 두어,
@@ -149,6 +150,38 @@ test("명시한 활동 성격은 이름으로 추론한 것보다 앞선다", ()
   );
 });
 
+test("한글로 적었거나 앞뒤가 벌어진 활동 성격도 식별자로 되돌려 앞세운다", () => {
+  assert.equal(
+    blockCategory({ activity: "운동", category: "공적" }),
+    "official",
+  );
+  assert.equal(
+    blockCategory({ activity: "팀 회의", category: " 사회 " }),
+    "social",
+  );
+  assert.equal(
+    blockCategory({ activity: "팀 회의", category: " personal " }),
+    "personal",
+  );
+});
+
+test("정해진 세 값 밖의 활동 성격은 무시하고 이름으로 추론한다", () => {
+  for (const category of ["긴급", "work", "개인적", "", "미정"])
+    assert.equal(
+      blockCategory({ activity: "팀 회의", category }),
+      "official",
+      category,
+    );
+  assert.equal(
+    blockCategory({ activity: "운동", category: "중요" }),
+    "personal",
+  );
+  assert.equal(
+    blockCategory({ activity: "친구 약속", category: "unknown" }),
+    "social",
+  );
+});
+
 // ── isAwayUnavail ─────────────────────────────────────────────────────────
 
 test("불가 구간 중 실제로 자리를 비우는 일만 자리 비움이다", () => {
@@ -277,6 +310,21 @@ test("한글로 적은 활동 성격은 식별자로 되돌리고 이름 추론�
       raw("09:00", "10:00", "운동", "unavailable", "공적"),
       raw("10:00", "11:00", "팀 회의", "unavailable", "사회"),
       raw("11:00", "12:00", "친구 약속", "intermittent", "개인"),
+    ],
+  });
+  assert.deepEqual(
+    plan.blocks.map((b) => b.category),
+    ["official", "social", "personal"],
+  );
+});
+
+test("정해진 세 값 밖의 활동 성격은 저장하지 않고 이름으로 다시 추론한다", () => {
+  const plan = normalizePlan({
+    date: "2026-09-07",
+    blocks: [
+      raw("09:00", "10:00", "팀 회의", "unavailable", "긴급"),
+      raw("19:00", "21:00", "친구 약속", "intermittent", "work"),
+      raw("21:00", "22:00", "운동", "unavailable", ""),
     ],
   });
   assert.deepEqual(
