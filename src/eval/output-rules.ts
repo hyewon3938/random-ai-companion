@@ -139,6 +139,18 @@ export const mixedLaughBubble = (bubbles: string[]): string | null =>
   bubbles.find((b) => new Set(marksIn(b).flatMap((m) => [...m])).size > 1) ??
   null;
 
+/**
+ * 개수가 모자란 웃음 표기 덩이. ㅋ는 셋 이상, ㅎ는 둘 이상만 쓰기로 해서(이슈 #324) ㅋ·ㅋㅋ와
+ * ㅎ 하나가 걸린다. ㅋㅋㅋ와 ㅎㅎ는 통과하고, 한 덩이에 ㅋ와 ㅎ가 섞인 것은 섞어 쓴 쪽 규칙이 잡는다.
+ */
+export const shortLaughMarks = (bubbles: string[]): string[] =>
+  laughMarks(bubbles).filter((m) => {
+    const k = (m.match(/ㅋ/g) ?? []).length;
+    const h = (m.match(/ㅎ/g) ?? []).length;
+    if (k > 0 && h > 0) return false;
+    return (k > 0 && k < 3) || h === 1;
+  });
+
 /** 확실한 의문 종결어미인데 물음표로 끝나지 않은 줄. 점수에 넣는 위반이다. */
 export const askWithoutMark = (bubbles: string[]): string[] =>
   toLines(bubbles).filter((l) => !l.endsWith("?") && ASK_ENDING.test(l));
@@ -178,7 +190,7 @@ export const sameEndings = (bubbles: string[]): string[] | null => {
 
 /**
  * 말풍선을 규칙에 대본다. 케이스를 가리지 않는 규칙(이모지·큰따옴표·리스트·웃음 표기 일관성·
- * 의문 종결어미의 물음표·말풍선 끝 어미 반복·추측형 말끝 겹침·하루 은유)과, 케이스가 켤 때만
+ * 웃음 표기 개수·의문 종결어미의 물음표·말풍선 끝 어미 반복·추측형 말끝 겹침·하루 은유)과, 케이스가 켤 때만
  * 보는 웃음 금지 자리·질문의 말 되풀이다. 빈 배열이면 통과.
  */
 export const checkOutputRules = (
@@ -221,13 +233,18 @@ export const checkOutputRules = (
 
   const laughs = laughMarks(bubbles);
   const mixed = mixedLaughBubble(bubbles);
+  const short = shortLaughMarks(bubbles);
   if (kase.noLaugh && laughs.length)
     out.push({ rule: "웃음 금지 자리", found: laughs.join(" ") });
-  else if (mixed)
-    out.push({
-      rule: "한 말풍선에 웃음 표기 섞어 씀",
-      found: marksIn(mixed).join(" "),
-    });
+  else {
+    if (mixed)
+      out.push({
+        rule: "한 말풍선에 웃음 표기 섞어 씀",
+        found: marksIn(mixed).join(" "),
+      });
+    if (short.length)
+      out.push({ rule: "웃음 표기 개수 모자람", found: short.join(" ") });
+  }
 
   return out;
 };
@@ -428,7 +445,7 @@ export const CASES: EvalCase[] = [
       heard("요리하는 사람들 나오는 거"),
       said("그거 보면 배고파질 것 같은데"),
       heard("진짜 그래서 야식 먹었잖아"),
-      said("ㅋㅋ 그럴 줄 알았어"),
+      said("ㅋㅋㅋ 그럴 줄 알았어"),
       heard("오늘 집 정리 좀 했어"),
       said("오 대청소했네", "뭐 특별한 일 있어?"),
       heard("내일 친구가 집에 놀러 와서 자고 가기로 했거든"),

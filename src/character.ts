@@ -82,7 +82,7 @@ ${seedNote || "(없음 — 전부 자유롭게)"}
   "identity": { "name": "자연스러운 한국 이름", "age_band": "예: 30대 초반", "job": "구체적 직업", "living": "사는 모양 한 줄" },
   "backstory": { "family": "한 줄", "wound": "깊은 서사 1개 (관계 중반 이후에만 공개될 것)", "story_seeds": ["진행 중인 근황 2개"] },
   "tastes": ["취향 3개"],
-  "voice": { "laugh": "ㅋㅋ|ㅎㅎ|하하 중 1", "tic": "입버릇 맞장구 1개", "ending": "종결어미 습관 한 줄" },
+  "voice": { "laugh": "ㅋㅋㅋ|ㅎㅎ|하하 중 1", "tic": "입버릇 맞장구 1개", "ending": "종결어미 습관 한 줄" },
   "chemistry": (위 케미 축 그대로),
   "life": { "weekly": [{ "day": "요일", "activity": "고정 활동" }, ...2~3개], "current_arc": "요즘의 진행형 사건 한 줄" },
   "first_greeting": "이 인물이 낯선 상대에게 처음 보내는 메신저 인사 1~2문장. 존댓말. 자기 정보는 이름 정도만."
@@ -212,7 +212,7 @@ export const IDENTITY_KEYS: readonly {
   { area: "주거", subject: "지역", guide: "사는 동네" },
   { area: "주거", subject: "형태", guide: "혼자인지 누구와인지, 집의 모양" },
   { area: "주거", subject: "통근", guide: "출퇴근 방식과 걸리는 시간" },
-  { area: "말투", subject: "웃음", guide: "웃음 표기 습관(ㅋㅋ·ㅎㅎ·하하 중)" },
+  { area: "말투", subject: "웃음", guide: "웃음 표기 습관(ㅋㅋㅋ·ㅎㅎ·하하 중 어느 쪽을 주로 쓰는지. ㅋ 한두 개와 ㅎ 하나는 공통 규칙으로 안 쓰니 값에 넣지 않는다)" },
   { area: "말투", subject: "입버릇", guide: "자주 쓰는 맞장구·말버릇" },
   { area: "말투", subject: "종결어미", guide: "말끝의 습관" },
   {

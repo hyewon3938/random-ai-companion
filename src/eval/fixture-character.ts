@@ -77,7 +77,7 @@ export const EVAL_GENESIS: GenesisOutput = {
       subject: "통근",
       value: "지하철로 마흔 분쯤. 아침에는 앉아서 간다",
     },
-    { area: "말투", subject: "웃음", value: "ㅎㅎ, 편해지면 ㅋㅋ도 쓴다" },
+    { area: "말투", subject: "웃음", value: "ㅎㅎ, 편해지면 ㅋㅋㅋ도 쓴다" },
     { area: "말투", subject: "입버릇", value: "아 진짜요, 그쵸 정도로 받는다" },
     {
       area: "말투",
