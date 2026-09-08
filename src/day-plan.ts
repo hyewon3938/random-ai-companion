@@ -6,8 +6,8 @@
 //
 // 블록마다 답장 여건(instant·intermittent·unavailable)과 활동 성격(personal·social·official)이
 // 붙는다. 두 축은 직교한다. 저장은 영어 식별자로 하고 한국어 이름은 labels.ts가 붙인다.
-// 성격이 비어 있으면 blockCategory가 활동 이름으로 추론한다 — 회의·시험·발표·업무는 공적,
-// 친구·가족·병원·학원·회식은 사회, 나머지 혼자 하는 일은 개인.
+// 성격이 비어 있거나 정해진 세 값 밖이면 blockCategory가 활동 이름으로 추론한다 — 회의·시험·
+// 발표·업무는 공적, 친구·가족·병원·학원·회식은 사회, 나머지 혼자 하는 일은 개인.
 //
 // 그날 컨디션은 월 리듬에 미리 정해 둔 시드를 읽어 기상 시각과 활동으로 잇는다.
 // 어제 일기에 남은 실제 여파가 시드보다 우선한다.
@@ -76,7 +76,7 @@ export interface PlanBlock {
   //   개인 = 혼자 자의로 하는 일(운동·집 여가·영화·장보기·혼밥). 쉽게 접거나 미룬다.
   //   사회 = 남이 엮인 사적 일(친구 약속·가족·병원·학원·친목 회식). 즉시는 아니어도 양해 구해 조정 가능.
   //   공적 = 미룰 수 없는 공적 의무(업무·회의·시험·발표·공적 회식). 접을 수 없다.
-  // 옵셔널 — 없으면 activity로 추론(blockCategory). 구 각본·외부 생성분과 호환.
+  // 옵셔널 — 없거나 모르는 값이면 activity로 추론(blockCategory). 구 각본·외부 생성분과 호환.
   category?: ActivityCategory;
   // 출처: 이 블록이 어느 원본을 그날치로 펼친 것인가.
   //   schedule = 예정된 일 한 건(source_id가 그 행 번호) / routine = 매주 루틴(되짚을 행이 없어 번호 없음)
@@ -99,11 +99,16 @@ const SOCIAL_HINT =
 
 // 이 블록의 활동 성격. 명시값 우선, 없으면 activity로 추론. 공적 > 사회 > 개인 순으로 본다.
 // 잠·기상·준비 등 혼자 하는 일은 개인.
+// 명시값도 정해진 세 값일 때만 앞선다 — 각본은 모델이 만들고 plan_json은 DB가 검사하지 않아
+// 저장된 블록에도 세 값 밖의 글자가 들어 있을 수 있다. 그대로 돌려주면 답장 텀 표와 이름표가
+// 모르는 값을 받는다(이슈 #319). 그래서 여기서도 toActivityCategory로 거르고, 못 알아보면
+// 활동 이름 추론으로 내려간다. 받는 타입을 string으로 열어 둔 것도 같은 이유다.
 export const blockCategory = (b: {
   activity: string;
-  category?: ActivityCategory;
+  category?: string;
 }): ActivityCategory => {
-  if (b.category) return b.category;
+  const named = toActivityCategory(b.category);
+  if (named) return named;
   const a = b.activity;
   if (OFFICIAL_HINT.test(a)) return "official";
   if (SOCIAL_HINT.test(a)) return "social";
@@ -322,7 +327,7 @@ export const normalizePlan = (plan: DayPlan): DayPlan => ({
     return {
       ...rest,
       responsiveness: toResponsiveness(b.responsiveness) ?? "intermittent",
-      category: toActivityCategory(b.category) ?? blockCategory(b),
+      category: blockCategory(b),
       ...normalizeSource(b),
     };
   }),
