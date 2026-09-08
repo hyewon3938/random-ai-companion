@@ -52,8 +52,8 @@ test("침묵 팔로업은 0~4시와 8~23시에 15분마다 돈다", () => {
   assert.equal(exprOf("runFollowupTick()"), "*/15 0-4,8-23 * * *");
 });
 
-test("자리 비움 예고는 7시부터 23시까지 10분마다 돈다", () => {
-  assert.equal(exprOf("runPresenceTick()"), "*/10 7-23 * * *");
+test("자리 비움 예고는 하루 종일 10분마다 돈다", () => {
+  assert.equal(exprOf("runPresenceTick()"), "*/10 * * * *");
 });
 
 test("놓친 답장 복구는 2분마다 돈다", () => {
