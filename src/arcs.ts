@@ -7,6 +7,9 @@
 //
 // 새벽 정리가 모은 값을 통째로 받지 않고 인물 재료와 지금까지의 흐름을 문자열로 받는다.
 // 캐릭터의 삶(3번 영역)이 새벽 정리(6번)의 타입에 기대지 않게 두는 자리다.
+//
+// 유저와는 메시지로만 이어진 사이라 유저와 만날 계획을 세우거나 재는 문장은 흐름에 넣지 않는다.
+// 둘 사이는 대화의 결과 마음의 거리로만 적는다(이슈 #322).
 
 import { config } from "./config.js";
 import { getArcs, getRecentDiaries, saveArc } from "./db.js";
@@ -20,6 +23,9 @@ type ArcOutput = Record<ArcHorizon, string>;
 
 const ARC_SYSTEM = `너는 한 인물의 삶의 큰 흐름을 짜는 작가다. 과장 없이, 실제 그 사람의 한 해에 있을 법한 결로.`;
 
+const ARC_USER_RULE = `[상대와의 사이]
+상대(유저)와는 메시지로만 이어진 사이라 실제로 만날 수 없다. 상대와 만나는 계획을 세우거나 만날지 재는 문장(데이트를 꺼내 볼지, 주말에 같이 갈지)은 흐름에 넣지 않는다. 둘 사이는 대화의 결과 마음의 거리로만 적는다.`;
+
 const ARC_JSON_SHAPE = `{"year":"올해의 큰 진행 사건 1~2문장","season":"이 계절의 결 1~2문장","month":"이번 달의 상황 1~2문장","week":"이번 주의 특이사항 1문장 (없으면 '평범한 주')"}`;
 
 const arcPrompt = (
@@ -29,6 +35,8 @@ const arcPrompt = (
 
 [인물]
 ${personBlock}
+
+${ARC_USER_RULE}
 
 ${ARC_JSON_SHAPE}`;
 
@@ -95,6 +103,8 @@ ${input.arcLines || "(없음)"}
 
 [최근 일기 — 실제로 산 나날]
 ${diaries || "(없음)"}
+
+${ARC_USER_RULE}
 
 ${ARC_JSON_SHAPE}`;
 
