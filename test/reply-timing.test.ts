@@ -3,7 +3,7 @@
 // 각본이 없을 때, 자는 시간에 온 첫 연락과 그 뒤 연락, 이미 붙잡혀 접힌 블록, 즉답·틈틈이의
 // 세 칸, 공적 불가 구간까지 표의 길마다 어느 경로로 나오고 텀이 어느 범위에 드는지 본다.
 // 개인·사회 불가 구간은 붙잡기 판정 모델을 부르는 자리라, 정해 둔 답을 돌려주는 판정 함수를
-// 넘겨 판정에 무엇이 들어가고 답마다 어느 길로 나오는지 본다 — 붙잡음이면 개인은 취소·사회는
+// 넘겨 판정에 무엇이 들어가고 답마다 어느 길로 나오는지 본다 — 요청이면 개인은 취소·사회는
 // 미룸 행이 남고, 아님은 구간 끝이며, 빈 답과 호출 실패는 아님과 갈라 표시된다(이슈 #336).
 // 판정에 주는 글(buildHoldPrompt)이 이어 보낸 통 수와 기다린 시간을 어떻게 적는지도 본다. 붙잡힘
 // 표시를 읽고 적는 isHeldNow·recordHold와 유저 이어 보내기 텀을 기록에서 읽는 recentUserGaps도 본다.
@@ -328,12 +328,12 @@ test("기다린 시간은 1분이 안 되면 한 번에 보낸 것으로, 한 �
   assert.equal(line(""), "상대가 방금 보낸 말: 있어?");
 });
 
-test("개인 불가 블록에서 붙잡음이 나오면 취소 행을 적고 틈틈이·개인 칸으로 바로 답한다", async () => {
+test("개인 불가 블록에서 요청이 나오면 취소 행을 적고 틈틈이·개인 칸으로 바로 답한다", async () => {
   const { characterId } = roomWith([
     block("13:00", "14:00", "헬스장 운동", "unavailable", "personal"),
   ]);
   setClock("13:20");
-  const { judge, seen } = judgeWith("붙잡음");
+  const { judge, seen } = judgeWith("요청");
   const d = await decideReplyTiming(characterId, "자?\n있어?", {
     burst: { n: 2, firstAt: "2026-09-07 13:17:00" },
     judge,
@@ -358,20 +358,23 @@ test("개인 불가 블록에서 붙잡음이 나오면 취소 행을 적고 틈
   assert.equal(rows[0]?.outcome, HOLD_OUTCOME.cancelled);
   assert.equal(rows[0]?.block_start, "13:00");
 
-  // 판정은 한 번만 물었고, 문안에 두 답과 붙잡음으로 볼 신호·경계 예시가 있으며, 글에는
+  // 판정은 한 번만 물었고, 문안에 두 답과 요청으로 볼 신호·경계 예시가 있으며, 글에는
   // 지금 하는 일과 이어 보낸 통 수·기다린 시간이 들어간다
   assert.equal(seen.length, 1);
   const call = seen[0];
   assert.equal(call?.purpose, "hold");
   for (const s of [
-    '"붙잡음"',
+    '"요청"',
     '"아님"',
-    "지금 있는지, 자는지, 바쁜지를 묻는 말",
-    "답이 와야 다음 말이 이어지는 물음",
+    "계속 연락해 달라는 말",
+    "곁에 있어 달라는 뜻이 담긴 말",
+    "재촉하는 말",
     "짧은 말을 이어 보내는 것",
-    "자? → 붙잡음",
-    "오늘 발표 잘 끝났어 → 아님",
-    "이어 보낸 말 2통: 뭐해 / 자나 보네 → 붙잡음",
+    "가벼운 질문은 나중에 답해도 된다",
+    "안 가면 안 돼? → 요청",
+    "이어 보낸 말 3통: 자? / 뭐해 / 자나 보네 → 요청",
+    "지금 뭐해? → 아님",
+    "나 이거 살까 저거 살까? → 아님",
   ])
     assert.ok(call?.system.includes(s), s);
   assert.equal(
@@ -380,13 +383,13 @@ test("개인 불가 블록에서 붙잡음이 나오면 취소 행을 적고 틈
   );
 });
 
-test("사회 불가 블록에서 붙잡음이 나오면 미룸 행을 적는다", async () => {
+test("사회 불가 블록에서 요청이 나오면 미룸 행을 적는다", async () => {
   const { characterId } = roomWith([
     block("19:00", "21:00", "친구와 저녁", "unavailable", "social"),
   ]);
   setClock("19:30");
   const d = await decideReplyTiming(characterId, "지금 통화 돼?", {
-    judge: judgeWith("붙잡음").judge,
+    judge: judgeWith("요청").judge,
   });
   assert.equal(d.trace.path, "held");
   assert.deepEqual(d.held, {
@@ -394,6 +397,28 @@ test("사회 불가 블록에서 붙잡음이 나오면 미룸 행을 적는다"
     activity: "친구와 저녁",
   });
   assert.equal(actualsOf(characterId)[0]?.outcome, HOLD_OUTCOME.deferred);
+});
+
+test("판정 답은 요청이라는 낱말로 읽되 아님이 같이 오면 요청으로 세지 않는다", async () => {
+  const cases: [string, boolean][] = [
+    ['"요청"', true],
+    ["요청.", true],
+    ["요청 아님", false],
+    ["아님", false],
+  ];
+  for (const [answer, held] of cases) {
+    const { characterId } = roomWith([
+      block("13:00", "14:00", "헬스장 운동", "unavailable", "personal"),
+    ]);
+    setClock("13:20");
+    const d = await decideReplyTiming(characterId, "안 가면 안 돼?", {
+      judge: judgeWith(answer).judge,
+    });
+    assert.equal(d.trace.path, held ? "held" : "until_end", answer);
+    assert.equal(d.trace.heldJudged, held, answer);
+    assert.ok(!d.trace.holdFailed, answer);
+    assert.equal(actualsOf(characterId).length, held ? 1 : 0, answer);
+  }
 });
 
 test("아님이 나오면 일정을 그대로 두고 구간 끝까지 미루며 몰아 답장 정보를 넘긴다", async () => {
