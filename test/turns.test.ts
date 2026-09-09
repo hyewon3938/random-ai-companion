@@ -3,6 +3,9 @@
 // 이슈 #190(캐릭터 발화를 답장과 같은 객체로 적기)과 #238(자리를 비운 구간에 시간 표시
 // 붙이기)이 둘 다 이 변환에서 났다. 규약이 조용히 풀리면 모델은 평문으로 답하고 신호가
 // 통째로 사라지는데, 답장 자체는 나가서 실패로도 안 잡힌다.
+//
+// 메모 칸도 같은 자리에 있다(이슈 #346). 그 턴에 적은 메모가 칸에 안 실리면 기록이 다시
+// 전부 null이 되고, 모델은 남길 것이 뚜렷한 자리에서도 메모를 안 낸다.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -94,6 +97,46 @@ test("오늘이 언제냐에 따라 어제로 적는다", () => {
     todayLogical: TODAY,
   });
   assert.equal(got[0]?.content, "[어제 22:00] 잘 자");
+});
+
+const withNotes = (rows: MessageRow[], notes: Map<number, string>) =>
+  toTurns(rows, { todayLogical: TODAY, notes });
+
+test("그 턴에 적은 메모는 답장 객체의 메모 칸에 그대로 들어간다", () => {
+  const asked = row("user", "나 내일 이사해", at("09:00:00"));
+  const said = row("assistant", "몇 시에 시작해?", at("09:01:00"));
+  const got = withNotes(
+    [asked, said],
+    new Map([[said.id, "상대가 내일 이사한다고 했다"]]),
+  );
+  assert.equal(
+    got[1]?.content,
+    '{"reply":["몇 시에 시작해?"],"note":"상대가 내일 이사한다고 했다"}',
+  );
+});
+
+// 메모는 답장 하나에 하나라, 둘을 한 객체에 담으면 답장으로 올 수 없는 모양이 기록에 생긴다.
+test("메모가 둘이면 한 객체에 담지 않고 나눈다", () => {
+  const first = row("assistant", "그렇구나", at("09:00:00"));
+  const second = row("assistant", "그날 저녁은 비워둘게", at("09:00:30"));
+  const got = withNotes(
+    [first, second],
+    new Map([
+      [first.id, "상대가 내일 이사한다고 했다"],
+      [second.id, "내일 저녁에 시간을 비워두기로 했다"],
+    ]),
+  );
+  assert.equal(
+    got[1]?.content,
+    '[09:00] {"reply":["그렇구나"],"note":"상대가 내일 이사한다고 했다"}\n' +
+      '{"reply":["그날 저녁은 비워둘게"],"note":"내일 저녁에 시간을 비워두기로 했다"}',
+  );
+});
+
+test("유저 발화는 번호가 같아도 메모를 가져오지 않는다", () => {
+  const asked = row("user", "나 내일 이사해", at("09:00:00"));
+  const got = withNotes([asked], new Map([[asked.id, "메모"]]));
+  assert.equal(got[0]?.content, "[09:00] 나 내일 이사해");
 });
 
 test("자를 때는 통 수가 아니라 턴 수로 센다", () => {

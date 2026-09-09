@@ -316,6 +316,25 @@ export const addTodayNote = (
   ).run(characterId, createdAt, note, messageId ?? null);
 };
 
+// 메모를 그 메모가 딸린 캐릭터 발화 번호로 찾는 표. 대화 기록을 모델에 넘길 때 그 턴에
+// 실제로 적은 메모를 함께 적는 데 쓴다(이슈 #346). 번호가 없는 행은 빠진다 — 이 컬럼을
+// 채우기 전에 쌓인 메모와, 답장 밖에서 적은 메모가 그렇다.
+export const getNotesByMessage = (
+  characterId: number,
+  since: string,
+): Map<number, string> =>
+  new Map(
+    (
+      db
+        .prepare(
+          `SELECT message_id, note FROM today_notes
+            WHERE character_id = ? AND created_at >= ? AND message_id IS NOT NULL
+            ORDER BY id`,
+        )
+        .all(characterId, since) as { message_id: number; note: string }[]
+    ).map((r) => [r.message_id, r.note]),
+  );
+
 export const getTodayNotes = (
   characterId: number,
   since: string,

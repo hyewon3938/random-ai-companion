@@ -1,6 +1,8 @@
 // 대화 기록 표의 저장·조회 함수와 답장 복구 표시.
 //
-// 메시지 행을 넣고 최근 것을 꺼내는 자리다. 캐릭터 말의 meta_json을 패턴으로 세는 함수는
+// 메시지 행을 넣고 최근 것을 꺼내는 자리다. 넣을 때 그 행의 번호를 돌려주는 이유는 오늘
+// 메모다 — 메모는 답장 하나에 딸리므로, 어느 답장에 적은 메모인지를 그 번호로 잇는다
+// (이슈 #346). 캐릭터 말의 meta_json을 패턴으로 세는 함수는
 // 패턴을 인자로 받기만 한다 — 무엇을 선톡으로 치는지는 proactive-policy.ts가 정한다.
 //
 // 읽는 함수는 전부 대화방과 캐릭터를 함께 받는다. 같은 대화방에서 캐릭터를 바꾸면 행은
@@ -23,17 +25,20 @@ export const logMessage = (
   text: string,
   sentAt: string,
   meta?: Record<string, unknown>,
-): void => {
-  db.prepare(
-    `INSERT INTO messages (chat_id, character_id, sent_at, role, text, meta_json) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(
-    chatId,
-    characterId,
-    sentAt,
-    role,
-    text,
-    meta ? JSON.stringify(meta) : null,
-  );
+): number => {
+  const { lastInsertRowid } = db
+    .prepare(
+      `INSERT INTO messages (chat_id, character_id, sent_at, role, text, meta_json) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      chatId,
+      characterId,
+      sentAt,
+      role,
+      text,
+      meta ? JSON.stringify(meta) : null,
+    );
+  return Number(lastInsertRowid);
 };
 
 export const getRecentMessages = (

@@ -18,7 +18,10 @@
 //
 // 선톡 틱과는 acquireProactive로 chat 단위 상호 배제를 건다(대기 중인 답장이 있으면
 // 선톡을 접는다). 발송·깨우기·약속 함수는 setPendingSender·setWakeHandler·setPromiseHandler로
-// pending.ts에 넘겨 준다 — 순환 참조를 피하려고 주입한다.
+// pending.ts에 넘겨 준다 — 순환 참조를 피하려고 주입한다. 발송기가 돌려주는 값은 그 답장을
+// 적은 대화 기록 행의 번호다. 오늘 메모를 그 번호로 이어 두면 다음 답장 프롬프트의 기록에서
+// 그 턴의 메모 칸이 실제 값으로 채워진다(이슈 #346) — 몰아 답장과 약속 답장은 여기서 직접
+// 기록을 적으므로 그 자리에서 번호를 받아 넘긴다.
 
 import { Bot, InlineKeyboard, type ApiClientOptions } from "grammy";
 import { Agent } from "node:https";
@@ -1104,7 +1107,7 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
     console.warn(
       `[send] 부분 발송 kind=${kind} ${sent.length}/${bubbles.length}`,
     );
-  logMessage(
+  return logMessage(
     row.chat_id,
     row.character_id,
     "assistant",
@@ -1176,7 +1179,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
     reply.attach({ sent: `${sent.length}/${bubbles.length}` });
     if (error)
       console.warn(`[wake] 부분 발송 ${sent.length}/${bubbles.length}`);
-    logMessage(
+    const messageId = logMessage(
       chatId,
       row.character_id,
       "assistant",
@@ -1190,7 +1193,8 @@ setWakeHandler(async (row: PendingReplyRow) => {
           : {}),
       },
     );
-    if (signals.note) saveTodayNote(row.character_id, signals.note);
+    if (signals.note)
+      saveTodayNote(row.character_id, signals.note, messageId);
     setRecoveryMark(chatId, turn.at);
     if (signals.promise) {
       const kept = keepPromise(
@@ -1402,7 +1406,7 @@ setPromiseHandler(async (row: PendingReplyRow) => {
     reply.attach({ sent: `${sent.length}/${bubbles.length}` });
     if (error)
       console.warn(`[promise] 부분 발송 ${sent.length}/${bubbles.length}`);
-    logMessage(
+    const messageId = logMessage(
       chatId,
       row.character_id,
       "assistant",
@@ -1416,7 +1420,8 @@ setPromiseHandler(async (row: PendingReplyRow) => {
           : {}),
       },
     );
-    if (signals.note) saveTodayNote(row.character_id, signals.note);
+    if (signals.note)
+      saveTodayNote(row.character_id, signals.note, messageId);
     setRecoveryMark(chatId, turn.at);
     trace("replied", reply.callId ? `답장 #${reply.callId}` : undefined);
     if (signals.promise) {

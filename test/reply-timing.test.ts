@@ -552,7 +552,7 @@ test("답장의 stay 신호는 개인은 취소, 사회는 미룸으로 적고 �
 
 test("유저가 이어 보낸 텀을 기록에서 읽는다 — 답장이 끼거나 2분을 넘으면 뺀다", () => {
   const { chatId, characterId } = roomWith(null);
-  const say = (role: "user" | "assistant", at: string): void =>
+  const say = (role: "user" | "assistant", at: string): number =>
     logMessage(chatId, characterId, role, "말", at);
   say("user", "2026-09-07 10:00:00");
   say("user", "2026-09-07 10:00:20");
@@ -566,7 +566,7 @@ test("유저가 이어 보낸 텀을 기록에서 읽는다 — 답장이 끼거
 
 test("읽는 행 수를 줄이면 그 안의 이어 보내기만 센다", () => {
   const { chatId, characterId } = roomWith(null);
-  const say = (at: string): void =>
+  const say = (at: string): number =>
     logMessage(chatId, characterId, "user", "말", at);
   say("2026-09-07 10:00:00");
   say("2026-09-07 10:00:20");

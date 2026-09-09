@@ -76,7 +76,11 @@ const planWith = (chatId: string, away: PlanBlock): number => {
   return characterId;
 };
 
-const noticeSent = (chatId: string, characterId: number, start: string): void =>
+const noticeSent = (
+  chatId: string,
+  characterId: number,
+  start: string,
+): number =>
   logMessage(
     chatId,
     characterId,

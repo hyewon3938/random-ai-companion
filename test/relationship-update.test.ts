@@ -32,7 +32,7 @@ const reply = (
   characterId: number,
   text: string,
   at: string,
-): void =>
+): number =>
   logMessage(chatId, characterId, "assistant", text, at, { kind: "reply" });
 
 const rel = (characterId: number) => {

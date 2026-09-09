@@ -32,7 +32,7 @@ let characterId = 0;
 
 before(() => {
   characterId = createFixtureCharacter(CHAT);
-  const say = (at: string, meta?: Record<string, unknown>): void =>
+  const say = (at: string, meta?: Record<string, unknown>): number =>
     logMessage(CHAT, characterId, "assistant", "말", at, meta);
   // 어제 것은 오늘 집계에 들어가지 않는다
   say("2026-09-05 22:00:00", { kind: "checkin", proactive: true });

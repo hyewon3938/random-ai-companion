@@ -13,6 +13,7 @@
 // 평가만 옛 문안을 재고 통과한다. 대신 DB는 평가 전용 파일을 쓴다(DB_PATH=./data/eval.db).
 // 대화 기록·일기·관계가 매일 달라지는 운영 DB로 재면 프롬프트를 안 고친 날에도 숫자가 움직여서,
 // 무엇이 바꾼 것인지 가릴 수 없다.
+// 그 파일에 캐릭터가 없거나 정체성이 비어 있으면 고정 픽스처를 깔고 시작한다.
 import "./guard-db.js"; // db.js보다 먼저 — 운영 DB로 도는 것을 막는다
 import { db, type CharacterRow } from "../db.js";
 import { createFixtureCharacter } from "./fixture-character.js";
@@ -73,14 +74,30 @@ if (!cases.length) {
   process.exit(1);
 }
 
+// 캐릭터 행이 있어도 정체성 행이 없으면 픽스처를 다시 깐다. 행만 남고 기억이 비면 이름도
+// 직업도 가족도 없는 프롬프트로 평가가 도는데 화면에는 표시가 없어서, 통과율이 조용히 다른
+// 것을 재게 된다 — 캐릭터가 자기 이야기를 하는 케이스는 그 자리에서 없는 사실을 지어내야
+// 통과한다. 9/9에 그 상태를 발견해서 여기서 막는다(이슈 #346).
 const activeCharacter = (): { id: number; chatId: string } => {
   const row = db
     .prepare(
       `SELECT * FROM characters WHERE status = 'active' ORDER BY id DESC LIMIT 1`,
     )
     .get() as CharacterRow | undefined;
-  if (row) return { id: row.id, chatId: row.chat_id };
-  return { id: createFixtureCharacter(EVAL_CHAT_ID), chatId: EVAL_CHAT_ID };
+  if (row) {
+    const { n } = db
+      .prepare(
+        `SELECT count(*) AS n FROM memory_items WHERE character_id = ? AND origin = 'creation'`,
+      )
+      .get(row.id) as { n: number };
+    if (n) return { id: row.id, chatId: row.chat_id };
+    db.prepare(`UPDATE characters SET status = 'ended' WHERE id = ?`).run(
+      row.id,
+    );
+    console.log(`정체성이 빈 캐릭터 #${row.id}를 접고 픽스처를 다시 깐다.`);
+  }
+  const chatId = row?.chat_id ?? EVAL_CHAT_ID;
+  return { id: createFixtureCharacter(chatId), chatId };
 };
 
 interface Result {

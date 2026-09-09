@@ -2,8 +2,9 @@
 //
 // meta는 깨져 있어도 예외 없이 빈 값으로 읽히는지, dropWakeRows가 wake·return만 거두고 promise와
 // reply는 남기는지, schedulePendingReply가 적은 행이 입력과 같은지, resumePendingReplies가 남은
-// 행을 다시 걸어 시각이 지난 행은 바로 울리고 먼 행은 기다리는지, armReturnRow가 지금 블록 끝에
-// return 행을 걸고 울릴 행이나 약속 행이 있거나 구간이 끝났으면 걸지 않는지 본다. 울리는 쪽은
+// 행을 다시 걸어 시각이 지난 행은 바로 울리고 먼 행은 기다리는지, 보낸 답장의 메모가 그 답장을
+// 적은 기록 행 번호와 함께 남는지, armReturnRow가 지금 블록 끝에 return 행을 걸고 울릴 행이나
+// 약속 행이 있거나 구간이 끝났으면 걸지 않는지 본다. 울리는 쪽은
 // setPendingSender로 가짜 발송기를 넣어 받는다 — bot.ts를 읽으면 그쪽 발송기가 등록되므로 여기서는
 // 읽지 않는다.
 //
@@ -198,6 +199,7 @@ test("이어받기는 시각이 지난 행을 바로 울리고 먼 행은 그대
   const fired: Array<{ id: number; bubbles: string[] }> = [];
   setPendingSender(async (row, bubbles) => {
     fired.push({ id: row.id, bubbles });
+    return null;
   });
   const due = insert("chat-resume-due", "reply", "2026-01-01 09:00:00");
   const later = insert("chat-resume-later", "reply", stampAfter(6 * 3600_000));
@@ -210,6 +212,33 @@ test("이어받기는 시각이 지난 행을 바로 울리고 먼 행은 그대
 
   assert.equal(dropPendingReplies("chat-resume-later"), 1);
   assert.equal(statusOf(later), "superseded");
+});
+
+// 메모는 답장 하나에 딸린다 — 발송기가 돌려준 기록 행 번호를 그대로 적어야 대화 기록의
+// 그 턴에 이 메모를 다시 실을 수 있다(이슈 #346).
+test("보낸 답장의 메모는 그 답장을 적은 기록 행 번호와 함께 남는다", async () => {
+  const chat = "chat-note-id";
+  setPendingSender(async () => 777);
+  const { id } = schedulePendingReply({
+    chatId: chat,
+    characterId,
+    userMsgAt: AT,
+    bubbles: ["다녀왔어요"],
+    noteToSave: "상대가 내일 이사한다고 했다",
+    waitMs: 50,
+    kind: "reply",
+  });
+  await waitUntil(() => statusOf(id) === "sent");
+
+  const note = db
+    .prepare(
+      `SELECT note, message_id FROM today_notes WHERE character_id = ? ORDER BY id DESC LIMIT 1`,
+    )
+    .get(characterId) as { note: string; message_id: number | null };
+  assert.deepEqual(note, {
+    note: "상대가 내일 이사한다고 했다",
+    message_id: 777,
+  });
 });
 
 test("구간 끝 표시는 지금 블록이 끝나는 시각에 return 행으로 걸린다", () => {
