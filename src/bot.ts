@@ -26,10 +26,23 @@ import { config } from "./config.js";
 import {
   CHARACTER_AGE_BANDS,
   CHARACTER_GENDERS,
+  FLAWS,
   FREE_TEXT_MAX,
+  LEAD_TONES,
+  MIX_TONE_MAX,
+  SPEECH_LEVELS,
+  START_SETTING,
   createUserCharacter,
   type CharacterGender,
 } from "./character.js";
+import {
+  FLAW_NAME,
+  LEAD_TONE_NAME,
+  SPEECH_LEVEL_NAME,
+  type Flaw,
+  type LeadTone,
+  type SpeechLevel,
+} from "./labels.js";
 import {
   ensureTodayPlan,
   isAwayUnavail,
@@ -314,29 +327,69 @@ export const sendProactive = async (
   return { delivered: sent.length, total };
 };
 
-// ── /start 온보딩 — 유저 입력 다섯으로 캐릭터를 만든다 ──────────────────────
-// 선택지 둘(성별·나이대)은 인라인 버튼, 서술형 셋(성격·관계·바라는 모습)은 메시지로 받는다.
-// 서술형은 비워도 된다 — 빈 항목은 생성이 앞뒤 맞게 채운다(character.ts).
+// ── /start 온보딩 — 유저 입력 여덟으로 캐릭터를 만든다 ──────────────────────
+// 선택지 다섯(성별·나이대·말투·원하는 방식·결점)은 인라인 버튼, 서술형 셋(성격·출발 설정에
+// 덧붙일 것·바라는 모습)은 메시지로 받는다. 순서와 물음은 relationship.md §12 「온보딩 문안」.
+// 서술형은 비워도 된다 — 빈 항목은 생성이 앞뒤 맞게 채운다(character.ts). 출발 설정(소개로
+// 만나 몇 번 본 사이)은 고정이라 문안을 보여 주고 덧붙일 것만 받는다. 섞는 결은 버튼을
+// 눌러 켜고 끄는 다중 선택이고 두 개까지다.
 // 진행 상태는 메모리에만 둔다: 아직 캐릭터가 없어 잃을 것이 없고, 온보딩 중 재시작되면
 // /start부터 다시 하면 된다.
 type FreeStep = "personality" | "relationship" | "wish";
+type PickStep = "gender" | "age" | "speech" | "lead" | "mix" | "flaw";
+type OnboardingStep = PickStep | FreeStep | "creating";
 interface Onboarding {
-  step: "gender" | "age" | FreeStep | "creating";
+  step: OnboardingStep;
   gender?: CharacterGender;
   ageBand?: string;
   personality?: string;
   relationship?: string;
+  speechLevel?: SpeechLevel;
+  leadTone?: LeadTone;
+  mixTones: LeadTone[];
+  flaw?: Flaw;
   wish?: string;
 }
 const onboarding = new Map<string, Onboarding>();
 
-const FREE_QUESTIONS: readonly { step: FreeStep; ask: string }[] = [
-  { step: "personality", ask: "성격이나 분위기는 어떤 사람이면 좋겠어?" },
-  { step: "relationship", ask: "너랑 어떤 사이로 시작하면 좋겠어?" },
-  { step: "wish", ask: "그 밖에 바라는 모습이 있으면 적어줘." },
+const STEP_ORDER: readonly OnboardingStep[] = [
+  "gender",
+  "age",
+  "personality",
+  "relationship",
+  "speech",
+  "lead",
+  "mix",
+  "flaw",
+  "wish",
+  "creating",
 ];
+const nextStep = (step: OnboardingStep): OnboardingStep =>
+  STEP_ORDER[STEP_ORDER.indexOf(step) + 1] ?? "creating";
+const isFreeStep = (step: OnboardingStep): step is FreeStep =>
+  step === "personality" || step === "relationship" || step === "wish";
+const isPickStep = (step: OnboardingStep): step is PickStep =>
+  !isFreeStep(step) && step !== "creating";
 
-const skipKeyboard = new InlineKeyboard().text("비워두고 넘어가기", "ob:s");
+const FREE_QUESTIONS: Record<FreeStep, { ask: string; skip: string }> = {
+  personality: {
+    ask: "성격이나 분위기는 어떤 사람이면 좋겠어?",
+    skip: "비워두고 넘어가기",
+  },
+  relationship: {
+    ask: `어떤 사이로 시작할지는 정해져 있어.\n\n${START_SETTING}\n\n여기에 덧붙이고 싶은 게 있으면 적어줘. 누가 소개했는지, 몇 번 봤는지, 뭘 같이 했는지 같은 거.`,
+    skip: "덧붙일 것 없이 넘어가기",
+  },
+  wish: {
+    ask: "그 밖에 바라는 모습이 있으면 적어줘.",
+    skip: "비워두고 넘어가기",
+  },
+};
+
+const genderKeyboard = (): InlineKeyboard =>
+  new InlineKeyboard()
+    .text(CHARACTER_GENDERS[0], "ob:g:0")
+    .text(CHARACTER_GENDERS[1], "ob:g:1");
 
 const ageKeyboard = (): InlineKeyboard => {
   const kb = new InlineKeyboard();
@@ -347,41 +400,100 @@ const ageKeyboard = (): InlineKeyboard => {
   return kb;
 };
 
-const askFreeStep = async (
-  chatId: string,
-  ob: Onboarding,
-  step: FreeStep,
-): Promise<void> => {
-  const q = FREE_QUESTIONS.find((f) => f.step === step);
-  if (!q) return;
-  ob.step = step;
-  await bot.api.sendMessage(chatId, q.ask, { reply_markup: skipKeyboard });
+const speechKeyboard = (): InlineKeyboard =>
+  new InlineKeyboard()
+    .text(SPEECH_LEVEL_NAME.casual, "ob:sp:casual")
+    .text(SPEECH_LEVEL_NAME.polite, "ob:sp:polite");
+
+const leadKeyboard = (): InlineKeyboard => {
+  const kb = new InlineKeyboard();
+  for (const tone of LEAD_TONES) kb.text(LEAD_TONE_NAME[tone], `ob:l:${tone}`).row();
+  return kb;
 };
 
-// 서술형 답(또는 비우기)을 받아 다음 질문으로. 마지막 답이면 생성으로 넘어간다.
+// 섞는 결 — 주 결을 뺀 나머지를 한 줄에 하나씩, 고른 것에는 표시를 붙인다.
+const mixKeyboard = (ob: Onboarding): InlineKeyboard => {
+  const kb = new InlineKeyboard();
+  for (const tone of LEAD_TONES) {
+    if (tone === ob.leadTone) continue;
+    const on = ob.mixTones.includes(tone);
+    kb.text(`${on ? "✓ " : ""}${LEAD_TONE_NAME[tone]}`, `ob:m:${tone}`).row();
+  }
+  kb.text(ob.mixTones.length ? "이대로 넘어가기" : "섞지 않고 넘어가기", "ob:m:done");
+  return kb;
+};
+
+const flawKeyboard = (): InlineKeyboard => {
+  const kb = new InlineKeyboard();
+  for (const flaw of FLAWS) kb.text(FLAW_NAME[flaw], `ob:f:${flaw}`).row();
+  return kb;
+};
+
+// 단계의 물음을 보낸다. creating이면 물음 대신 생성으로 넘어간다.
+const askStep = async (
+  chatId: string,
+  ob: Onboarding,
+  step: OnboardingStep,
+): Promise<void> => {
+  ob.step = step;
+  const send = (text: string, reply_markup: InlineKeyboard): Promise<unknown> =>
+    bot.api.sendMessage(chatId, text, { reply_markup });
+  if (isFreeStep(step)) {
+    const q = FREE_QUESTIONS[step];
+    await send(q.ask, new InlineKeyboard().text(q.skip, "ob:s"));
+    return;
+  }
+  switch (step) {
+    case "gender":
+      await send(
+        "어떤 사람을 만나고 싶은지 여덟 가지만 물어볼게. 먼저, 성별은?",
+        genderKeyboard(),
+      );
+      return;
+    case "age":
+      await send("나이대는?", ageKeyboard());
+      return;
+    case "speech":
+      await send("처음엔 어떤 말투로 얘기할까?", speechKeyboard());
+      return;
+    case "lead":
+      await send(
+        "그 사람이 너를 원하는 방식은? 제일 가까운 걸 하나 골라줘.",
+        leadKeyboard(),
+      );
+      return;
+    case "mix":
+      await send(
+        `거기에 섞고 싶은 결이 있으면 ${MIX_TONE_MAX}개까지 골라줘. 없으면 그냥 넘어가도 돼.`,
+        mixKeyboard(ob),
+      );
+      return;
+    case "flaw":
+      await send("약한 구석은? 하나 골라줘.", flawKeyboard());
+      return;
+    case "creating":
+      await finishOnboarding(chatId, ob);
+  }
+};
+
+// 서술형 답(또는 비우기)을 받아 다음 물음으로.
 const advanceOnboarding = async (
   chatId: string,
   ob: Onboarding,
   answer: string | null,
 ): Promise<void> => {
-  if (ob.step === "gender" || ob.step === "age" || ob.step === "creating")
-    return;
+  if (!isFreeStep(ob.step)) return;
   if (answer) ob[ob.step] = answer;
-  const i = FREE_QUESTIONS.findIndex((f) => f.step === ob.step);
-  const next = FREE_QUESTIONS[i + 1]?.step;
-  if (next) {
-    await askFreeStep(chatId, ob, next);
-    return;
-  }
-  await finishOnboarding(chatId, ob);
+  await askStep(chatId, ob, nextStep(ob.step));
 };
 
-// 다섯 입력이 모이면 생성 두 콜(사람 전부 → 삶의 흐름)을 돌리고 첫 인사를 보낸다.
+// 여덟 입력이 모이면 생성 두 콜(사람 전부 → 삶의 흐름)을 돌리고 첫 인사를 보낸다.
 const finishOnboarding = async (
   chatId: string,
   ob: Onboarding,
 ): Promise<void> => {
-  if (!ob.gender || !ob.ageBand) return;
+  if (!ob.gender || !ob.ageBand || !ob.speechLevel || !ob.leadTone || !ob.flaw)
+    return;
   ob.step = "creating";
   await bot.api.sendMessage(
     chatId,
@@ -396,6 +508,10 @@ const finishOnboarding = async (
       ageBand: ob.ageBand,
       personality: ob.personality,
       relationship: ob.relationship,
+      speechLevel: ob.speechLevel,
+      leadTone: ob.leadTone,
+      mixTones: ob.mixTones,
+      flaw: ob.flaw,
       wish: ob.wish,
     });
     onboarding.delete(chatId);
@@ -423,6 +539,7 @@ const finishOnboarding = async (
   }
 };
 
+// 활성 캐릭터가 있으면 새로 만들지 않는다. 종료된 캐릭터만 있는 대화방은 처음부터 다시 만든다.
 bot.command("start", async (ctx) => {
   const chatId = String(ctx.chat.id);
   if (getActiveCharacter(chatId)) {
@@ -434,26 +551,18 @@ bot.command("start", async (ctx) => {
     return;
   }
   // 온보딩 중 /start 재실행은 처음부터 다시 — 아직 아무것도 저장되지 않았다.
-  onboarding.set(chatId, { step: "gender" });
-  await ctx.reply(
-    "어떤 사람을 만나고 싶은지 다섯 가지만 물어볼게. 먼저, 성별은?",
-    {
-      reply_markup: new InlineKeyboard()
-        .text(CHARACTER_GENDERS[0], "ob:g:0")
-        .text(CHARACTER_GENDERS[1], "ob:g:1"),
-    },
-  );
+  const ob: Onboarding = { step: "gender", mixTones: [] };
+  onboarding.set(chatId, ob);
+  await askStep(chatId, ob, "gender");
 });
 
-// 온보딩 인라인 버튼 처리. 지나간 단계의 버튼을 늦게 눌러도 상태가 어긋나지 않게
-// 현재 단계와 맞는 입력만 받는다(안 맞으면 스피너만 멈추고 무시).
-bot.on("callback_query:data", async (ctx) => {
-  const chatId = String(ctx.chat?.id ?? ctx.callbackQuery.from.id);
-  const data = ctx.callbackQuery.data;
-  await ctx.answerCallbackQuery().catch(() => {
-    /* 응답 실패는 무시 — 오래된 콜백은 텔레그램이 거부한다 */
-  });
-  if (!data.startsWith("ob:")) return;
+// 온보딩 버튼 하나를 처리한다. 지나간 단계의 버튼을 늦게 눌러도 상태가 어긋나지 않게
+// 현재 단계와 맞는 입력만 받는다(안 맞으면 무시). 돌려주는 글은 버튼 위에 잠깐 뜨는 안내다.
+const handleOnboardingButton = async (
+  chatId: string,
+  data: string,
+  messageId: number | undefined,
+): Promise<string | undefined> => {
   if (getActiveCharacter(chatId)) return; // 생성이 끝난 뒤 남은 버튼
   const ob = onboarding.get(chatId);
   if (!ob) {
@@ -464,24 +573,91 @@ bot.on("callback_query:data", async (ctx) => {
       });
     return;
   }
-  if (ob.step === "gender" && data.startsWith("ob:g:")) {
-    const gender = CHARACTER_GENDERS[Number(data.slice(5))];
+  const [, kind, arg = ""] = data.split(":");
+  if (kind === "s") {
+    if (isFreeStep(ob.step)) await advanceOnboarding(chatId, ob, null);
+    return;
+  }
+  if (ob.step === "gender" && kind === "g") {
+    const gender = CHARACTER_GENDERS[Number(arg)];
     if (!gender) return;
     ob.gender = gender;
-    ob.step = "age";
-    await bot.api.sendMessage(chatId, "나이대는?", {
-      reply_markup: ageKeyboard(),
-    });
+    await askStep(chatId, ob, nextStep(ob.step));
     return;
   }
-  if (ob.step === "age" && data.startsWith("ob:a:")) {
-    const band = CHARACTER_AGE_BANDS[Number(data.slice(5))];
+  if (ob.step === "age" && kind === "a") {
+    const band = CHARACTER_AGE_BANDS[Number(arg)];
     if (!band) return;
     ob.ageBand = band;
-    await askFreeStep(chatId, ob, "personality");
+    await askStep(chatId, ob, nextStep(ob.step));
     return;
   }
-  if (data === "ob:s") await advanceOnboarding(chatId, ob, null);
+  if (ob.step === "speech" && kind === "sp") {
+    if (!SPEECH_LEVELS.includes(arg as SpeechLevel)) return;
+    ob.speechLevel = arg as SpeechLevel;
+    await askStep(chatId, ob, nextStep(ob.step));
+    return;
+  }
+  if (ob.step === "lead" && kind === "l") {
+    if (!LEAD_TONES.includes(arg as LeadTone)) return;
+    ob.leadTone = arg as LeadTone;
+    ob.mixTones = [];
+    await askStep(chatId, ob, nextStep(ob.step));
+    return;
+  }
+  if (ob.step === "mix" && kind === "m") {
+    if (arg === "done") {
+      await askStep(chatId, ob, nextStep(ob.step));
+      return;
+    }
+    const tone = arg as LeadTone;
+    if (!LEAD_TONES.includes(tone) || tone === ob.leadTone) return;
+    if (ob.mixTones.includes(tone))
+      ob.mixTones = ob.mixTones.filter((t) => t !== tone);
+    else if (ob.mixTones.length >= MIX_TONE_MAX)
+      return `${MIX_TONE_MAX}개까지만 고를 수 있어. 하나를 빼고 골라줘.`;
+    else ob.mixTones.push(tone);
+    if (messageId !== undefined)
+      await bot.api
+        .editMessageReplyMarkup(chatId, messageId, {
+          reply_markup: mixKeyboard(ob),
+        })
+        .catch(() => {
+          /* 같은 표시로 고치면 텔레그램이 거부한다 — 무시 */
+        });
+    return;
+  }
+  if (ob.step === "flaw" && kind === "f") {
+    if (!FLAWS.includes(arg as Flaw)) return;
+    ob.flaw = arg as Flaw;
+    await askStep(chatId, ob, nextStep(ob.step));
+  }
+  return;
+};
+
+// 섞는 결 버튼만 처리 결과를 안내로 돌려주고, 나머지는 먼저 응답하고 처리한다 — 마지막 버튼은
+// 생성 두 콜을 기다리게 되어, 처리 뒤에 응답하면 텔레그램이 늦었다고 거부하고 스피너가 남는다.
+bot.on("callback_query:data", async (ctx) => {
+  const chatId = String(ctx.chat?.id ?? ctx.callbackQuery.from.id);
+  const data = ctx.callbackQuery.data;
+  const answer = (toast?: string): Promise<void> =>
+    ctx
+      .answerCallbackQuery(toast ? { text: toast } : undefined)
+      .then(() => undefined)
+      .catch(() => {
+        /* 응답 실패는 무시 — 오래된 콜백은 텔레그램이 거부한다 */
+      });
+  if (!data.startsWith("ob:m:")) {
+    await answer();
+    if (data.startsWith("ob:")) await handleOnboardingButton(chatId, data, undefined);
+    return;
+  }
+  const toast = await handleOnboardingButton(
+    chatId,
+    data,
+    ctx.callbackQuery.message?.message_id,
+  );
+  await answer(toast);
 });
 
 // TODO(D1 전): /새로만나기 — 비가역 확인 → 아카이브 → "어떤 점이 아쉬웠어?" → 새 캐릭터 생성
@@ -1205,7 +1381,7 @@ bot.on("message:text", async (ctx) => {
       await ctx.reply("아직 연결된 상대가 없어. /start 로 시작해줘.");
       return;
     }
-    if (ob.step === "gender" || ob.step === "age") {
+    if (isPickStep(ob.step)) {
       await ctx.reply("위 버튼에서 골라줘.");
       return;
     }

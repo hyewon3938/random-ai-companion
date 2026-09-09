@@ -44,7 +44,7 @@ test("캐릭터 행과 기억이 저장된다", () => {
     )
     .all(id) as { t: string; n: number }[];
   const byType = new Map(counts.map((r) => [r.t, r.n]));
-  assert.equal(byType.get("fact"), EVAL_GENESIS.identity.length);
+  assert.equal(byType.get("fact"), EVAL_GENESIS.identity.length + 2);
   assert.equal(byType.get("person"), EVAL_GENESIS.cast.length);
   assert.equal(byType.get("ongoing"), EVAL_GENESIS.ongoing.length);
 

@@ -52,7 +52,7 @@
 - `src/tag-pick.ts` — 이번 발화로 무엇을 검색할지 주제 태그를 고르는 자리.
 - `src/user-profile.ts` — 유저 프로필을 프롬프트 한 덩이로 만드는 자리.
 
-### 3. 캐릭터의 삶 · 1,391줄
+### 3. 캐릭터의 삶 · 1,597줄
 
 - `src/character.ts` — 캐릭터를 만드는 자리.
 - `src/arcs.ts` — 아크 — 캐릭터 삶의 큰 흐름(올해·계절·이달·이번 주)을 만들고 달력 경계에서 이어 쓴다.
@@ -78,7 +78,7 @@
 - `src/context/day-progress.ts` — 각본 위의 지금 — 지금 시각이 각본의 어느 블록인지, 지나온 블록, 빈자리를 메우는 잠.
 - `src/context/input.ts` — 프롬프트 재료 읽기 — 조립에 필요한 것을 DB와 시계에서 한 번에 읽어 값 묶음으로 만든다.
 
-### 5. 실행과 발송 · 2,861줄
+### 5. 실행과 발송 · 3,037줄
 
 - `src/index.ts` — 봇 프로세스의 시작점.
 - `src/bot.ts` — 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
@@ -97,7 +97,7 @@
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
-### 7. 관측과 운영 · 7,035줄
+### 7. 관측과 운영 · 7,080줄
 
 - `src/trace.ts` — 슬랙 트레이스 게시함 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
 - `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고, 연락 약속의 단계를 게시함에 쌓는다.
@@ -115,7 +115,7 @@
 - `src/tools/backfill-attitude.ts` — 태도 두 칸(상대를 대하는 방식·애착 성향)을 이미 만들어 둔 캐릭터에 채운다.
 - `src/tools/backup-db.ts` — 운영 DB의 일관 스냅샷을 파일 하나로 뜬다.
 - `src/tools/check-writes.ts` — 쓰기 전환 관찰 도구: 새 저장 구조에 무엇이 쌓였는지 한 번에 본다.
-- `src/tools/create-character.ts` — 유저 입력 캐릭터 생성 도구 — 봇 연결 전까지 생성 두 콜을 돌려 보는 자리.
+- `src/tools/create-character.ts` — 유저 입력 캐릭터 생성 도구 — 생성 두 콜을 파일 입력으로 돌려 보는 자리.
 - `src/tools/db-tag-search.ts` — 관리 대시보드의 태그 검색 — 답장을 만들 때 도는 검색을 그대로 한 번 돌려 결과를 보여준다.
 - `src/tools/db-view.ts` — 관리 대시보드 화면을 만드는 곳 — DB에 저장된 데이터를 표 단위로 보는 화면.
 - `src/tools/dedupe-schedules.ts` — 정리 도구: 같은 일정이 여러 줄로 쌓인 것을 한 줄로 줄인다 (이슈 #267).
@@ -266,9 +266,9 @@ V3(관계를 쌓는 캐릭터, 이슈 #326)의 새 파일과 고치는 파일이
 | --- | --- | --- |
 | 1. 기반과 저장 | | thresholds.ts에 자리 비움 하루 2 |
 | 2. 기억 | reaction-score.ts (표본 계산, 갱신, 추천 목록, 잘 통하는 수 목록) | |
-| 3. 캐릭터의 삶 | | character.ts 생성 V3(온보딩 8칸, 원하는 방식과 결점) |
+| 3. 캐릭터의 삶 | | |
 | 4. 대화 생성 | context/relationship.ts (단계 블록 고르기와 「지금 관계」 채우기), prompts/relationship.ts (공통 틀과 단계 블록 4개) | prompts/reply.ts 규칙층 문장, reply-signal.ts 항목 3개, user-state.ts 열림 4항목, proactive-policy.ts 근거 종류와 단계별 상한, context.ts 조립 순서 |
-| 5. 실행과 발송 | | followup.ts 의도 선톡과 틈새 한 줄, presence.ts 복귀 문안, bot.ts 온보딩 8칸 |
+| 5. 실행과 발송 | | followup.ts 의도 선톡과 틈새 한 줄, presence.ts 복귀 문안 |
 | 6. 새벽 정리 | | nightly.ts 관계 수집과 저장, prompts/nightly.ts 관계 절, nightly-trace.ts 관계 절 게시, tools/nightly-read.ts와 tools/nightly-write.ts 입출력 |
 | 7. 관측과 운영 | tools/relationship-view.ts (단계·처음·점수 확인) | reply-trace.ts 관계 줄과 열림 줄 |
 
