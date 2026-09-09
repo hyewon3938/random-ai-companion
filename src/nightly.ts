@@ -346,15 +346,21 @@ export const planBrief = (raw: string | undefined): string => {
   }
 };
 
-// 캐릭터 쪽 줄에만 붙는 '상대가 아는가'의 지금 값. 추출이 이 값을 못 보던 동안 모델은
+// 줄 끝에 붙이는 '상대가 아는가'의 지금 값. waiting은 아직 말하지 않고 꺼낼 자리를 기다리는
+// 것이라 모름 쪽으로 적는다(reply-timing.ts와 같은 기준). 추출이 이 값을 못 보던 동안 모델은
 // 매번 처음부터 다시 판단했고, 다시 안 적어 낸 행은 앞 값을 그대로 이어받아 캐릭터를 만들 때
 // 정해진 unknown에서 한 번도 움직이지 않았다(이슈 #345).
+const knowsMarkOf = (v: UserKnows): string =>
+  v === "known" ? " [상대가 앎]" : " [상대는 모름]";
+
+// 표시는 '나'(char) 쪽 줄에만 붙는다 — 상대가 제 일을 아는지는 물을 것이 없다.
 const knowsMark = (r: MemoryRow): string =>
-  r.owner === "char"
-    ? r.user_knows === "known"
-      ? " [상대가 앎]"
-      : " [상대는 모름]"
-    : "";
+  r.owner === "char" ? knowsMarkOf(r.user_knows) : "";
+
+// 아크 재료에서는 이 표시를 뗀다. 아크 프롬프트에는 표시를 설명하는 자리가 없고, 캐릭터를
+// 만들 때 character.ts가 만드는 같은 모양에도 없어서, 두면 아크 문장에 그대로 섞인다.
+const withoutKnowsMark = (s: string): string =>
+  s.replaceAll(" [상대가 앎]", "").replaceAll(" [상대는 모름]", "");
 
 const personLine = (r: MemoryRow): string => {
   const meta = [r.area, r.relation, r.owner === "user" ? "상대 쪽 사람" : null]
@@ -477,10 +483,10 @@ const arcMaterialOf = (g: NightlyGathered): string =>
     g.identity || "(없음)",
     "",
     "[주변 인물]",
-    g.people || "(없음)",
+    withoutKnowsMark(g.people) || "(없음)",
     "",
     "[진행 중인 일]",
-    g.ongoing || "(없음)",
+    withoutKnowsMark(g.ongoing) || "(없음)",
     "",
     "[유저와의 관계]",
     g.relationship || "(이제 막 시작한 사이)",
@@ -574,13 +580,7 @@ export const gatherNightlyInput = (
           s.owner === "user" ? "상대" : "나"
         }: ${s.content}${
           s.status === "active" ? "" : ` (${SCHEDULE_STATUS_NAME[s.status]})`
-        }${
-          s.owner === "char"
-            ? s.user_knows === "known"
-              ? " [상대가 앎]"
-              : " [상대는 모름]"
-            : ""
-        }`,
+        }${s.owner === "char" ? knowsMarkOf(s.user_knows) : ""}`,
     ),
     arcs: getArcs(character.id),
     todaySeed: getDaySeed(character.id, today) ?? null,
