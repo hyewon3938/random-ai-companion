@@ -443,7 +443,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -922,12 +922,35 @@ const migrateToV9 = (): void => {
   console.log(`[db] 스키마를 v9로 옮겼다`);
 };
 
+// v10: 수 코드에 '어떤 사람인지 말해 주기'(notice)를 더한다(#353).
+//
+// 수 코드는 reaction_scores·relationship_intents·relationship_signals 세 표의 CHECK 목록에
+// 박혀 있어서 표를 다시 만들어야 한다. 세 표는 v9 배포 뒤 아직 어느 코드도 쓰지 않아 비어
+// 있으므로 옮길 행 없이 지우고 다시 만든다. firsts는 처음 코드만 있어 손대지 않는다.
+const migrateToV10 = (): void => {
+  db.transaction(() => {
+    for (const name of [
+      "reaction_scores",
+      "relationship_intents",
+      "relationship_signals",
+    ] as const) {
+      db.exec(`DROP TABLE IF EXISTS ${name}`);
+      db.exec(`CREATE TABLE ${name} (${TABLES[name]}\n)`);
+    }
+    for (const sql of INDEXES) if (sql.includes("relationship_signals")) db.exec(sql);
+    db.pragma(`user_version = 10`);
+  })();
+
+  console.log(`[db] 스키마를 v10으로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < 5) migrateToV5();
 if (schemaVersion() < 6) migrateToV6();
 if (schemaVersion() < 7) migrateToV7();
 if (schemaVersion() < 8) migrateToV8();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV9();
+if (schemaVersion() < 9) migrateToV9();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV10();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를
