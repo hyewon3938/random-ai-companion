@@ -30,6 +30,7 @@ import {
   CASES,
   checkOutputRules,
   hasQuestion,
+  hasThought,
   laughMarks,
   suspectQuestions,
   type Violation,
@@ -141,6 +142,8 @@ for (const kase of cases) {
       missing.push("질문 없음");
     if (kase.wantsLaugh && !laughMarks(out.bubbles).length)
       missing.push("웃음 없음");
+    if (kase.wantsThought && !hasThought(out.bubbles))
+      missing.push("생각났다는 말 없음");
     results.push({
       caseId: kase.id,
       parse: PARSE_NAME[out.parse],
@@ -175,7 +178,9 @@ for (const r of results) {
       noteMark +
       r.missed,
   );
-  if (!ok) console.log(`      ${r.bubbles.join(" / ")}`);
+  // 못 잰 줄과 메모가 안 온 줄도 답을 보여준다 — 노린 말이 왜 안 나왔는지는 답을 봐야 안다.
+  if (!ok || r.missed || (r.gotNote !== undefined && !r.gotNote))
+    console.log(`      ${r.bubbles.join(" / ")}`);
   if (r.gotNote) console.log(`      메모: ${r.gotNote}`);
   for (const line of r.suspects)
     console.log(`      물음표 확인(점수 밖) ${line}`);
