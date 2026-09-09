@@ -4,6 +4,9 @@
 // 거두는 함수가 그 캐릭터의 대기 행만 집고 같은 대화방의 다른 캐릭터나 이미 끝난 행을
 // 건드리지 않는지, 세는 함수가 거둘 것과 같은 수를 먼저 보여주는지를 본다.
 //
+// 도구는 봇과 다른 프로세스에서 도므로 봇이 걸어 둔 타이머를 지우지 못한다. 거둔 행이
+// 그 타이머로 나가지 않는지도 여기서 본다.
+//
 // DB는 임시 파일로 새로 만들고 캐릭터는 평가용 고정 캐릭터로 세운다.
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -36,6 +39,9 @@ const {
 } = await import("../src/db.js");
 const { createFixtureCharacter } =
   await import("../src/eval/fixture-character.js");
+const { schedulePendingReply, setPendingSender } = await import(
+  "../src/pending.js"
+);
 
 const CHAT = "chat-end";
 const KEEP = "chat-keep";
@@ -134,4 +140,36 @@ test("끝낸 대화방에 새 캐릭터를 만들면 그쪽이 활성이 된다"
   assert.equal(getActiveCharacter(CHAT)?.id, nextId);
   assert.equal(waitingPendingReplyCount(nextId), 0);
   assert.equal(pendingScheduledSendCount(nextId), 0);
+});
+
+test("거둔 행은 걸어 둔 타이머가 울려도 나가지 않는다", async () => {
+  const chatId = "chat-timer";
+  const characterId = createFixtureCharacter(chatId);
+  let sentCount = 0;
+  setPendingSender(async () => {
+    sentCount += 1;
+  });
+  const { id } = schedulePendingReply({
+    chatId,
+    characterId,
+    userMsgAt: "2026-09-11 19:58:00",
+    bubbles: ["나가면 안 되는 말"],
+    noteToSave: null,
+    waitMs: 200,
+    kind: "reply",
+  });
+
+  // 도구는 다른 프로세스라 이 프로세스의 타이머까지는 못 지운다 — DB만 바꾼 상황을 만든다
+  assert.equal(supersedeCharacterPendingReplies(characterId), 1);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+
+  assert.equal(sentCount, 0);
+  assert.equal(
+    (
+      db.prepare(`SELECT status FROM pending_replies WHERE id = ?`).get(id) as {
+        status: string;
+      }
+    ).status,
+    "superseded",
+  );
 });

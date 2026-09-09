@@ -28,7 +28,8 @@ export const getActiveCharacters = (): CharacterRow[] =>
 
 export const getCharacterById = (id: number): CharacterRow | undefined =>
   db.prepare(`SELECT * FROM characters WHERE id = ?`).get(id) as
-    CharacterRow | undefined;
+    | CharacterRow
+    | undefined;
 
 // 캐릭터 번호만 아는 자리(각본 생성)에서 대화방을 찾는다.
 export const getCharacterChatId = (characterId: number): string | null =>
@@ -272,7 +273,9 @@ export interface StoredUserProfile {
 
 export const getUserProfile = (chatId: string): StoredUserProfile => {
   const row = db
-    .prepare(`SELECT gender, job, region FROM user_profile WHERE chat_id = ?`)
+    .prepare(
+      `SELECT gender, job, region FROM user_profile WHERE chat_id = ?`,
+    )
     .get(chatId) as
     | {
         gender: string | null;

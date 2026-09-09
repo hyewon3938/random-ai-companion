@@ -795,9 +795,9 @@ const migrateToV5 = (): void => {
 // 쓰는 자리도 없어진 채 남아 있었다.
 const migrateToV6 = (): void => {
   const hasColumn = (table: string, column: string): boolean =>
-    (
-      db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
-    ).some((c) => c.name === column);
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(
+      (c) => c.name === column,
+    );
 
   db.pragma("foreign_keys = OFF");
 

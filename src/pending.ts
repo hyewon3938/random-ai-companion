@@ -4,6 +4,9 @@
 // 간격으로 다시 보내 20분 가까이 버틴다(RETRY_MS). 부팅하면 resumePendingReplies가
 // 이어받고, 유저가 말을 더 보내면 dropPendingReplies로 버린 뒤 텀부터 다시 계산한다.
 //
+// 울릴지 말지는 그 시각의 행 상태가 정한다 — 걸어 둔 타이머가 아니라 표를 다시 읽는다.
+// 캐릭터를 끝내는 도구는 다른 프로세스에서 행을 거두므로 이 프로세스의 타이머가 남는다.
+//
 // 재시도를 다 쓰고 행을 닫을 때는 그 행이 지고 있던 답장 책임도 함께 놓는다
 // (releaseRecoveryMark). 그래야 복구 틱이 이어받아 그 시점의 대화로 답장을 새로 만든다.
 //
@@ -163,18 +166,19 @@ export const retryDelayMs = (row: PendingReplyRow): number | null => {
   return row.attempts < table.length ? table[row.attempts] : null;
 };
 
-const fire = async (fired: PendingReplyRow): Promise<void> => {
-  timers.delete(fired.id);
-  // 걸어 둔 뒤에 종류가 바뀌었을 수 있다 — 구간에 들어갈 때 건 'return' 행은 그 사이 유저가
-  // 말을 걸면 'wake'가 된다. 타이머는 걸 때의 값을 들고 있으므로 여기서 지금 값을 다시 읽는다.
-  const row = isHandlerKind(fired.kind)
-    ? (getPendingReply(fired.id) ?? fired)
-    : fired;
+const fire = async (id: number): Promise<void> => {
+  timers.delete(id);
+  // 울리기 직전에 행을 다시 읽는다. 두 가지가 걸어 둔 뒤에 바뀌어 있을 수 있다.
+  //
+  // 하나는 종류다 — 구간에 들어갈 때 건 'return' 행은 그 사이 유저가 말을 걸면 'wake'가 된다.
+  // 다른 하나는 상태다 — getPendingReply는 waiting 행만 주므로, 거둔 행은 여기서 값이 없어
+  // 울리지 않는다. 같은 프로세스에서 거두는 길(dropPendingReplies 셋)은 타이머까지 지우지만
+  // 캐릭터를 끝내는 도구는 다른 프로세스라 이 프로세스의 타이머가 그대로 남는다. 상태를 다시
+  // 읽어야 끝난 캐릭터의 답장이 나가지 않는다.
+  const row = getPendingReply(id);
+  if (!row) return;
   // 깨우기 표시·약속 연락 — 보낼 말풍선이 없고, 등록된 핸들러가 그 자리에서 할 일을 정한다.
-  // 그 사이 다른 길이 행을 거뒀으면(superseded) 지금 값을 못 읽어 걸 때의 값이 돌아오는데,
-  // 그 행은 getPendingReply가 waiting만 주므로 여기서 다시 확인해 울리지 않는다.
   if (isHandlerKind(row.kind)) {
-    if (row.kind === "promise" && !getPendingReply(row.id)) return;
     const handler = row.kind === "promise" ? promiseHandler : wakeHandler;
     const label = row.kind === "promise" ? "약속 연락" : "깨우기";
     if (!handler) return;
@@ -208,7 +212,7 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
       timers.set(
         row.id,
         setTimeout(() => {
-          void fire({ ...row, attempts: row.attempts + 1 });
+          void fire(row.id);
         }, delay),
       );
     }
@@ -258,7 +262,7 @@ const fire = async (fired: PendingReplyRow): Promise<void> => {
     timers.set(
       row.id,
       setTimeout(() => {
-        void fire({ ...row, attempts: row.attempts + 1 });
+        void fire(row.id);
       }, delay),
     );
   }
@@ -273,7 +277,7 @@ const arm = (row: PendingReplyRow): void => {
   timers.set(
     row.id,
     setTimeout(() => {
-      void fire(row);
+      void fire(row.id);
     }, delay),
   );
 };
