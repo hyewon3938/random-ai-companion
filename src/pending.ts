@@ -102,11 +102,16 @@ export const releaseRecoveryMark = (row: PendingReplyRow): void => {
   );
 };
 
-/** 발송은 bot.ts가 한다 — 여기서 부르면 순환 참조가 되므로 등록받아 쓴다. */
+/**
+ * 발송은 bot.ts가 한다 — 여기서 부르면 순환 참조가 되므로 등록받아 쓴다.
+ *
+ * 돌려주는 값은 발송을 적은 대화 기록 행의 번호다. 오늘 메모를 그 답장에 붙이는 데 쓴다
+ * (이슈 #346). 기록을 안 적었으면 null.
+ */
 export type PendingSender = (
   row: PendingReplyRow,
   bubbles: string[],
-) => Promise<void>;
+) => Promise<number | null>;
 
 let sender: PendingSender | null = null;
 export const setPendingSender = (fn: PendingSender): void => {
@@ -240,7 +245,7 @@ const fire = async (id: number): Promise<void> => {
     return;
   }
   try {
-    await sender(row, bubbles);
+    const messageId = await sender(row, bubbles);
     markPendingReply(row.id, "sent", stamp());
     traceReplyOutcome({
       callId: row.call_id,
@@ -248,8 +253,10 @@ const fire = async (id: number): Promise<void> => {
       detail: `말풍선 ${bubbles.length}개`,
     });
     // 남길 내용은 답장을 만들 때 같이 나온다. 보낸 뒤에 오늘 메모로 옮긴다 —
-    // 못 보낸 답장의 내용이 오늘 있었던 일로 남지 않게.
-    if (row.note_to_save) saveTodayNote(row.character_id, row.note_to_save);
+    // 못 보낸 답장의 내용이 오늘 있었던 일로 남지 않게. 어느 답장에 적은 메모인지도 함께
+    // 남긴다: 대화 기록을 모델에 넘길 때 그 턴의 메모 칸을 이 번호로 찾는다(이슈 #346).
+    if (row.note_to_save)
+      saveTodayNote(row.character_id, row.note_to_save, messageId);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     bumpPendingAttempt(row.id, msg);

@@ -54,7 +54,7 @@ const say = (
   text: string,
   at: string,
   meta?: Record<string, unknown>,
-): void => logMessage(CHAT, characterId, role, text, at, meta);
+): number => logMessage(CHAT, characterId, role, text, at, meta);
 
 // 앞 캐릭터와 9/9까지 나눈 대화
 say(oldId, "user", "안녕하세요", "2026-09-09 10:00:00");

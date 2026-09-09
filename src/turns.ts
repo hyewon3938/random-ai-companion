@@ -21,8 +21,11 @@
 // 55회 중 1회에서 7~9회로 늘었다 — 운영 기록은 늘 길고 형식이 깨지면 한 번 더 부르지만
 // (이슈 #241), 갓 시작한 대화는 기록이 짧으니 그 자리를 배포 뒤에 본다.
 //
-// null은 '이 턴에서는 남길 것이 없었다'가 아니라 칸의 모양이다. 실제로 적힌 메모는 일간층의
-// 오늘 메모 목록으로 따로 들어간다. 메모가 쌓이기 시작하면 여기에 실제 메모를 적을지 다시 본다.
+// 그 턴에 실제로 적은 메모는 칸에 그대로 적는다(이슈 #346). 위 두 문단이 잰 것은 빈 칸을
+// 심었을 때의 값이라 메모를 남긴 턴까지 null이었고, 그 모양이 스무 턴 이어지면 모델이 남길
+// 것이 뚜렷한 자리에서도 메모를 안 냈다 — 9/9은 답장 21번에 메모 2건이다. 여기서 null로
+// 남는 턴은 둘이다: 남길 것이 없었던 턴과, 새벽 정리가 하루치 메모를 기억으로 옮기며 지운
+// 뒤의 어제 턴.
 //
 // 봇 모듈에서 떼어 둔 이유는 하나다. bot.ts는 불러오는 것만으로 봇을 만들어서 이 변환만
 // 따로 돌려 볼 수 없다.
@@ -36,6 +39,8 @@ type Role = "user" | "assistant";
 interface Chunk {
   marker: string | null;
   lines: string[];
+  /** 이 덩이의 답장에서 적은 오늘 메모. 없으면 null이다. */
+  note: string | null;
 }
 
 export interface TurnOptions {
@@ -55,6 +60,13 @@ export interface TurnOptions {
    * 기록이 늘 같은 결과를 낸다.
    */
   todayLogical?: string;
+  /**
+   * 캐릭터 발화 번호로 찾는 오늘 메모(memory.ts의 todayNotesByMessage).
+   *
+   * 넘기지 않으면 메모 칸이 전부 null이 된다. 검사에서는 넘기지 않는 쪽이 기본이라 모양만
+   * 재고, 운영 답장 경로(reply-compose.ts의 replyHistory)에서만 실제 값을 넘긴다.
+   */
+  notes?: Map<number, string>;
 }
 
 const bubblesOf = (lines: string[]): string[] =>
@@ -70,8 +82,10 @@ const bubblesOf = (lines: string[]): string[] =>
  * 때 평가만 옛 모양을 재고 통과한다 — 평가가 규칙층을 베끼지 않고 buildSystemBlocks를 쓰는
  * 것과 같은 이유다.
  */
-export const assistantTurnText = (bubbles: string[]): string =>
-  JSON.stringify({ reply: bubbles, note: null });
+export const assistantTurnText = (
+  bubbles: string[],
+  note: string | null = null,
+): string => JSON.stringify({ reply: bubbles, note });
 
 // 마커는 객체 밖 앞자리에 둔다. 안에 넣으면 모델이 그 칸을 흉내 내 말풍선에 시각을 찍고,
 // 그 말은 그대로 상대에게 간다(reply-signal.ts의 stripLeadTag가 뒤늦게 지우는 자국이 이것이다).
@@ -82,7 +96,7 @@ const chunkText = (role: Role, c: Chunk): string => {
     return body ? head + body : "";
   }
   const bubbles = bubblesOf(c.lines);
-  return bubbles.length ? head + assistantTurnText(bubbles) : "";
+  return bubbles.length ? head + assistantTurnText(bubbles, c.note) : "";
 };
 
 /**
@@ -121,6 +135,9 @@ export const toTurns = (
   let markFrom = opts.markFrom ?? null;
   for (const row of rows) {
     const role: Role = row.role === "user" ? "user" : "assistant";
+    // 메모는 캐릭터 발화에만 딸린다 — 유저 발화는 번호가 같은 자리에 있어도 찾지 않는다.
+    const note =
+      role === "assistant" ? (opts.notes?.get(row.id) ?? null) : null;
     let marker = timeMarkerFor(row.sent_at, prevTs, opts.todayLogical);
     // 기준 시각을 넘어선 첫 메시지는 간격이 모자라도 마커를 받는다. 앞이 없는 것처럼 불러
     // 오늘·어제 표기를 같은 함수에서 그대로 가져온다. 한 번 준 뒤 기준을 내리는 이유는
@@ -137,8 +154,14 @@ export const toTurns = (
     }
     const last = group.chunks[group.chunks.length - 1];
     // 마커가 붙는 자리마다 객체를 나눈다 — 캐릭터가 몇 시간 뒤에 먼저 말을 건 자리가 여기다.
-    if (!last || marker) group.chunks.push({ marker, lines: [row.text] });
-    else last.lines.push(row.text);
+    // 메모가 이미 있는 덩이에 메모를 또 만나도 나눈다. 메모는 답장 하나에 하나라, 둘을 한
+    // 객체에 담으면 답장으로 올 수 없는 모양이 기록에 생긴다.
+    if (!last || marker || (note && last.note))
+      group.chunks.push({ marker, lines: [row.text], note });
+    else {
+      last.lines.push(row.text);
+      last.note ??= note;
+    }
   }
 
   const turns: ChatTurn[] = [];

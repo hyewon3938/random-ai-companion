@@ -148,6 +148,7 @@ test("거둔 행은 걸어 둔 타이머가 울려도 나가지 않는다", asyn
   let sentCount = 0;
   setPendingSender(async () => {
     sentCount += 1;
+    return null;
   });
   const { id } = schedulePendingReply({
     chatId,

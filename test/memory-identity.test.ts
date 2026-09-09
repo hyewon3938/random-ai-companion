@@ -2,7 +2,8 @@
 //
 // keyProblem이 키를 거르는 경계와 orderedIdentity·identityValue가 생성 행과 대화 행을 읽는
 // 순서는 손으로 만든 행으로 본다. 저장 쪽은 임시 DB에 실제로 넣어 본다 — 캐릭터 쪽 사실만 늘
-// 들어가는지, 영역의 기본 갈래를 두 번 깔아도 늘지 않는지, 오늘 메모의 공백 정리, 진행 중인 일을
+// 들어가는지, 영역의 기본 갈래를 두 번 깔아도 늘지 않는지, 오늘 메모의 공백 정리와 어느
+// 답장에 적은 메모인지를 번호로 찾는 표, 진행 중인 일을
 // 사실로 옮길 때의 반환값, 그리고 생성 때 정한 행(origin=creation)은 대화가 고치지 못한다는
 // 규약까지. 텔레그램도 부르지 않는다.
 import assert from "node:assert/strict";
@@ -36,6 +37,7 @@ const {
   saveMemory,
   saveTodayNote,
   todayNotes,
+  todayNotesByMessage,
 } = await import("../src/memory.js");
 
 after(() => {
@@ -309,6 +311,18 @@ test("메모 두 건은 적은 순서대로 나온다", () => {
     "점심에 김밥을 먹었다고 했다",
     "저녁에 달리기를 간다고 했다",
   ]);
+});
+
+// 대화 기록의 답장 객체에 그 턴의 메모를 다시 실으려면 어느 답장에 적은 메모인지가 있어야
+// 한다(이슈 #346). 번호 없이 적은 메모는 이을 자리가 없으므로 이 표에서 빠진다.
+test("발화 번호와 함께 적은 메모만 번호로 찾는 표에 들어간다", () => {
+  const id = makeCharacter("chat-note-by-message");
+  saveTodayNote(id, "상대가 내일 이사한다고 했다", 11);
+  saveTodayNote(id, "어느 답장인지 모르는 메모");
+  assert.deepEqual(
+    todayNotesByMessage(id),
+    new Map([[11, "상대가 내일 이사한다고 했다"]]),
+  );
 });
 
 // ── moveMemory (DB) ───────────────────────────────────────────────────────

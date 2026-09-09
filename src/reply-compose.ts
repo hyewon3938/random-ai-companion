@@ -34,6 +34,7 @@ import {
   speechRatchet,
   type RelChange,
 } from "./relationship-update.js";
+import { todayNotesByMessage } from "./memory.js";
 import { pickTags } from "./tag-pick.js";
 import { judgeUserState, userStateLabel, type UserStateVerdict } from "./user-state.js";
 import { getRelationship } from "./db.js";
@@ -78,6 +79,7 @@ export const pendingUserTurn = (
 
 // 연달아 보낸 말은 몇 통이든 한 턴이라, 유저가 끊어 보내도 남는 대화 길이가 같다.
 // markFrom을 주면 그 시각 이후 첫 메시지에 시간 표시를 강제한다(몰아 답장 자리, 이슈 #238).
+// 오늘 적은 메모를 함께 넘겨 기록 속 답장 객체의 메모 칸을 실제 값으로 채운다(이슈 #346).
 export const replyHistory = (
   chatId: string,
   characterId: number,
@@ -88,7 +90,10 @@ export const replyHistory = (
       getRecentMessages(chatId, characterId, RECENT_MESSAGE_FETCH_MAX),
       RECENT_TURN_COUNT,
     ),
-    markFrom ? { markFrom } : {},
+    {
+      notes: todayNotesByMessage(characterId),
+      ...(markFrom ? { markFrom } : {}),
+    },
   );
 
 /** 모델을 불러 답장 한 통을 받아 오는 자리. 검사에서 정해 둔 답을 돌려주는 함수로 바꿔 끼운다. */

@@ -25,6 +25,7 @@ import {
   upsertArea,
   addTodayNote,
   getTodayNotes,
+  getNotesByMessage,
   type MemoryRow,
   type TagKind,
 } from "./db.js";
@@ -308,3 +309,13 @@ export const saveTodayNote = (
 /** 오늘(새벽 5시 경계) 적어 둔 메모. */
 export const todayNotes = (characterId: number): string[] =>
   getTodayNotes(characterId, logicalDayStartTs()).map((n) => n.note);
+
+/**
+ * 오늘 적어 둔 메모를 그 메모가 딸린 캐릭터 발화 번호로 찾는 표. 대화 기록의 답장 객체에
+ * 그 턴에 실제로 적은 메모를 적는 데 쓴다(turns.ts).
+ *
+ * 오늘 것만 나오는 이유는 새벽 정리가 하루치를 기억으로 옮긴 뒤 지우기 때문이다. 대화 기록이
+ * 어제까지 걸치면 어제 턴은 메모를 적었더라도 빈 칸으로 보인다.
+ */
+export const todayNotesByMessage = (characterId: number): Map<number, string> =>
+  getNotesByMessage(characterId, logicalDayStartTs());
