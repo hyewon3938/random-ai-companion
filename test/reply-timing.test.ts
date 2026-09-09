@@ -345,8 +345,8 @@ test("유저가 이어 보낸 텀을 기록에서 읽는다 — 답장이 끼거
   say("user", "2026-09-07 10:02:00");
   say("user", "2026-09-07 10:05:00");
   say("user", "2026-09-07 10:05:05");
-  assert.deepEqual(recentUserGaps(chatId), [20_000, 5_000]);
-  assert.deepEqual(recentUserGaps("chat-timing-empty"), []);
+  assert.deepEqual(recentUserGaps(chatId, characterId), [20_000, 5_000]);
+  assert.deepEqual(recentUserGaps("chat-timing-empty", characterId), []);
 });
 
 test("읽는 행 수를 줄이면 그 안의 이어 보내기만 센다", () => {
@@ -357,6 +357,6 @@ test("읽는 행 수를 줄이면 그 안의 이어 보내기만 센다", () => 
   say("2026-09-07 10:00:20");
   say("2026-09-07 10:05:00");
   say("2026-09-07 10:05:05");
-  assert.deepEqual(recentUserGaps(chatId, 2), [5_000]);
-  assert.deepEqual(recentUserGaps(chatId), [20_000, 5_000]);
+  assert.deepEqual(recentUserGaps(chatId, characterId, 2), [5_000]);
+  assert.deepEqual(recentUserGaps(chatId, characterId), [20_000, 5_000]);
 });

@@ -60,7 +60,8 @@ export const silenceState = (
   characterId: number,
 ): SilenceState => {
   // 유저 메시지가 아직 없으면 관계 시작 시점을 기준으로 센다(첫 인사 후 무응답도 백오프 대상)
-  const anchor = lastUserTs(chatId) ?? getCharacterById(characterId)?.created_at;
+  const anchor =
+    lastUserTs(chatId, characterId) ?? getCharacterById(characterId)?.created_at;
   if (!anchor) return { tier: "normal", days: 0 };
 
   const days = Math.max(
@@ -71,7 +72,7 @@ export const silenceState = (
   if (days < QUIET_AFTER_DAYS) return { tier: "normal", days };
   if (days < RECONNECT_AT_DAYS) return { tier: "quiet", days };
   // 안부 선톡이 실제로 나갔는가 — 마지막 유저 메시지 이후 kind=checkin 발화가 있으면 dormant
-  const sent = hasAssistantMeta(chatId, anchor, {
+  const sent = hasAssistantMeta(chatId, characterId, anchor, {
     after: true,
     like: [kindPattern("checkin")],
   });
@@ -223,8 +224,12 @@ export const takeHeldDraft = (
 // 자리비움 선톡은 여기서 뺀다 — 캐릭터가 나갔다 오는 일정 수만큼 나가는 말이라 성격이
 // 다르고, 그쪽은 AWAY_DAILY_MAX가 따로 막는다. 약속 연락도 뺀다 — 답장에서 한 약속을
 // 지키는 말이라 상한에 막히면 약속을 어기는 쪽이 된다(이슈 #308).
-export const proactiveCountToday = (chatId: string, since: string): number =>
-  countAssistantMeta(chatId, since, {
+export const proactiveCountToday = (
+  chatId: string,
+  characterId: number,
+  since: string,
+): number =>
+  countAssistantMeta(chatId, characterId, since, {
     like: [PROACTIVE],
     notLike: [AWAY, kindPattern("promise")],
   });
@@ -232,34 +237,47 @@ export const proactiveCountToday = (chatId: string, since: string): number =>
 // 오늘 보낸 선톡을 종류별로 센다.
 export const proactiveKindCountToday = (
   chatId: string,
+  characterId: number,
   since: string,
   kind: string,
-): number => countAssistantMeta(chatId, since, { like: [kindPattern(kind)] });
+): number =>
+  countAssistantMeta(chatId, characterId, since, { like: [kindPattern(kind)] });
 
 /** 그 블록의 자리 비움 예고가 오늘 이미 나갔는가.
  *  두 자리가 같은 질의를 쓴다 — 예고를 두 번 보내지 않게 막는 presence, 예고한 일정으로
  *  곧 들어가는지 보는 bot의 배웅 답 판단. */
 export const awayNoticeSent = (
   chatId: string,
+  characterId: number,
   since: string,
   blockStart: string,
 ): boolean =>
-  hasAssistantMeta(chatId, since, {
+  hasAssistantMeta(chatId, characterId, since, {
     like: [AWAY, `%"block":"${blockStart}"%`],
   });
 
 // 오늘 알리고 나간 자리비움 선톡 수. 돌아와서 하는 인사는 이미 알린 구간을 마무리하는
 // 말이라 빼고 센다.
-export const awayNoticeCountToday = (chatId: string, since: string): number =>
-  countAssistantMeta(chatId, since, { like: [AWAY], notLike: ['%"return"%'] });
+export const awayNoticeCountToday = (
+  chatId: string,
+  characterId: number,
+  since: string,
+): number =>
+  countAssistantMeta(chatId, characterId, since, {
+    like: [AWAY],
+    notLike: ['%"return"%'],
+  });
 
 // 마지막 유저 발화 이후 구간의 시작. 유저가 한 번도 말한 적이 없으면 대화 전체를 본다.
-const sinceLastUser = (chatId: string): string =>
-  lastUserTs(chatId) ?? "0000-00-00 00:00:00";
+const sinceLastUser = (chatId: string, characterId: number): string =>
+  lastUserTs(chatId, characterId) ?? "0000-00-00 00:00:00";
 
 // 마지막 유저 메시지 이후 캐릭터가 먼저 보낸(proactive) 수 — '연속 무응답'을 세어 매달림을 막는다.
-export const proactiveSinceLastUser = (chatId: string): number =>
-  countAssistantMeta(chatId, sinceLastUser(chatId), {
+export const proactiveSinceLastUser = (
+  chatId: string,
+  characterId: number,
+): number =>
+  countAssistantMeta(chatId, characterId, sinceLastUser(chatId, characterId), {
     after: true,
     like: [PROACTIVE],
   });
@@ -267,8 +285,12 @@ export const proactiveSinceLastUser = (chatId: string): number =>
 /** 그 시각 이후 달래기 선톡이 이미 나갔는가 — 상대 상태 한 발현에 한 통이다. 기준 시각은
  * 관계 행의 상태 시작 시각(user_state_since)이고, 그 상태가 이어지는 동안 자리 비움 예고가
  * 끼어도 구간을 통째로 보므로 가려지지 않는다. */
-export const mendSentSince = (chatId: string, since: string): boolean =>
-  hasAssistantMeta(chatId, since, {
+export const mendSentSince = (
+  chatId: string,
+  characterId: number,
+  since: string,
+): boolean =>
+  hasAssistantMeta(chatId, characterId, since, {
     after: true,
     like: [kindPattern("mend")],
   });

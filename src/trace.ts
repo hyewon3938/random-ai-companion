@@ -27,6 +27,17 @@ import { chunked } from "./trace/format.js";
 export const traceEnabled = (): boolean =>
   Boolean(config.slackBotToken && config.slackTraceChannel);
 
+// 관계를 쌓으면서 올리는 게시 종류 넷. 여기에는 이름만 두고 게시 본문은 쌓는 자리가 만든다 —
+// 캐릭터를 시작하고 끝내는 도구가 앞의 둘을, 새벽 정리가 단계 변화와 처음을 쌓는다. 넷 다 그때
+// 한 번 쌓고 마는 기록이라 호출 기록에서 다시 만들 수 없어, 되돌리기 도구(tools/retrace.ts)가
+// 다시 보낼 것을 고를 때 이 목록을 읽는다.
+export const RELATIONSHIP_TRACE_KINDS = [
+  "character_start",
+  "character_end",
+  "stage_change",
+  "first_event",
+] as const;
+
 // ── 게시함에 쌓기 ───────────────────────────────────────────────────────
 
 export interface TraceEventInput {

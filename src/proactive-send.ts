@@ -113,7 +113,7 @@ export const sendProactiveDraft = async <T>(
     }
     // 발송 직전 재확인 — 모델을 기다리는 사이 유저가 답했거나 다른 경로가 뭔가 보냈으면
     // (마지막 메시지가 바뀜) 접는다.
-    if (lastMessage(chatId)?.sent_at !== spec.lastSentAt) {
+    if (lastMessage(chatId, characterId)?.sent_at !== spec.lastSentAt) {
       spec.onMoved?.(meta);
       return "moved";
     }

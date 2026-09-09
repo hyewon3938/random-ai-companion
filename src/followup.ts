@@ -153,14 +153,14 @@ const followupTickBody = async (): Promise<void> => {
     const active = getActiveCharacter(c.chat_id);
     if (!active) continue;
 
-    const last = lastMessage(c.chat_id);
+    const last = lastMessage(c.chat_id, c.id);
     // 조건: 대화가 있었고 + 마지막이 '캐릭터' 차례(유저가 답 안 한 상태)
     if (!last || last.role !== "assistant") continue;
 
     // 침묵 백오프(관제탑): 무응답이 길어진 유저에겐 팔로업도 접는다
     if (!proactiveAllowed(c.chat_id, c.id)) continue;
 
-    const lu = lastUserTs(c.chat_id);
+    const lu = lastUserTs(c.chat_id, c.id);
     if (!lu) continue;
 
     // 밤 인사 선톡: 자정을 넘겨 대화하다 유저가 '잔다'는 말 없이 한 시간 답이 없으면, 잠든 것으로
@@ -179,7 +179,7 @@ const followupTickBody = async (): Promise<void> => {
       afterMidnight &&
       !alreadyGoodnight &&
       minutesSince(lu) >= GOODNIGHT_SILENCE_MS / 60_000 &&
-      proactiveSinceLastUser(c.chat_id) < 1
+      proactiveSinceLastUser(c.chat_id, c.id) < 1
     ) {
       await sendProactiveDraft({
         characterId: c.id,
@@ -208,8 +208,8 @@ const followupTickBody = async (): Promise<void> => {
       minutesSince(lu) >= MEND_SILENCE_MS / 60_000 &&
       rel?.user_state_tone === "bad" &&
       rel.user_state_cause === "char" &&
-      !mendSentSince(c.chat_id, rel.user_state_since ?? lu) &&
-      proactiveCountToday(c.chat_id, dayStart()) < PROACTIVE_DAILY_MAX
+      !mendSentSince(c.chat_id, c.id, rel.user_state_since ?? lu) &&
+      proactiveCountToday(c.chat_id, c.id, dayStart()) < PROACTIVE_DAILY_MAX
     ) {
       await sendProactiveDraft({
         characterId: c.id,
@@ -239,8 +239,8 @@ const followupTickBody = async (): Promise<void> => {
       lunchDueToday(c.chat_id, c.id) &&
       now >= LUNCH_WINDOW.start &&
       now < LUNCH_WINDOW.end &&
-      proactiveKindCountToday(c.chat_id, dayStart(), "lunch") < 1 &&
-      proactiveCountToday(c.chat_id, dayStart()) < PROACTIVE_DAILY_MAX
+      proactiveKindCountToday(c.chat_id, c.id, dayStart(), "lunch") < 1 &&
+      proactiveCountToday(c.chat_id, c.id, dayStart()) < PROACTIVE_DAILY_MAX
     ) {
       const lunchBlock = currentBlock(c.id);
       if (lunchBlock && lunchBlock.responsiveness !== "unavailable") {
@@ -270,11 +270,11 @@ const followupTickBody = async (): Promise<void> => {
     // 앞질러 나간다(이슈 #314).
     if (hasPendingSendOn(c.id, kstLogicalDate())) continue;
     // 점심 선톡이 나간 날은 그 통이 그날 낮의 한 통이다. 겹쳐 보내지 않는다.
-    if (proactiveKindCountToday(c.chat_id, dayStart(), "lunch") >= 1) continue;
+    if (proactiveKindCountToday(c.chat_id, c.id, dayStart(), "lunch") >= 1) continue;
     // 근황은 하루 한 통. 보낸 뒤에도 답이 없으면 그날은 더 보내지 않고 다음 날 아침으로 넘긴다.
-    if (proactiveKindCountToday(c.chat_id, dayStart(), "catchup") >= 1) continue;
+    if (proactiveKindCountToday(c.chat_id, c.id, dayStart(), "catchup") >= 1) continue;
     // 하루 절대 상한(안전장치, 자리비움을 뺀 선톡 합산)
-    if (proactiveCountToday(c.chat_id, dayStart()) >= PROACTIVE_DAILY_MAX)
+    if (proactiveCountToday(c.chat_id, c.id, dayStart()) >= PROACTIVE_DAILY_MAX)
       continue;
 
     const block = currentBlock(c.id);

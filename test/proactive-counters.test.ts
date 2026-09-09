@@ -49,29 +49,29 @@ after(() => {
 });
 
 test("오늘 선톡 수는 자리 비움을 빼고 센다", () => {
-  assert.equal(proactiveCountToday(CHAT, SINCE), 3);
-  assert.equal(proactiveKindCountToday(CHAT, SINCE, "checkin"), 1);
-  assert.equal(proactiveKindCountToday(CHAT, SINCE, "morning"), 1);
+  assert.equal(proactiveCountToday(CHAT, characterId, SINCE), 3);
+  assert.equal(proactiveKindCountToday(CHAT, characterId, SINCE, "checkin"), 1);
+  assert.equal(proactiveKindCountToday(CHAT, characterId, SINCE, "morning"), 1);
 });
 
 test("자리 비움 예고는 블록별로 찾고 복귀 인사는 빼고 센다", () => {
-  assert.equal(awayNoticeSent(CHAT, SINCE, "09:30"), true);
-  assert.equal(awayNoticeSent(CHAT, SINCE, "18:00"), false);
-  assert.equal(awayNoticeCountToday(CHAT, SINCE), 1);
+  assert.equal(awayNoticeSent(CHAT, characterId, SINCE, "09:30"), true);
+  assert.equal(awayNoticeSent(CHAT, characterId, SINCE, "18:00"), false);
+  assert.equal(awayNoticeCountToday(CHAT, characterId, SINCE), 1);
 });
 
 test("마지막 유저 말 이후 구간만 본다", () => {
-  assert.equal(proactiveSinceLastUser(CHAT), 2);
+  assert.equal(proactiveSinceLastUser(CHAT, characterId), 2);
   // 달래기는 상대 상태가 시작된 시각 뒤로만 찾는다
-  assert.equal(mendSentSince(CHAT, "2026-09-06 12:30:00"), true);
-  assert.equal(mendSentSince(CHAT, "2026-09-06 15:30:00"), false);
+  assert.equal(mendSentSince(CHAT, characterId, "2026-09-06 12:30:00"), true);
+  assert.equal(mendSentSince(CHAT, characterId, "2026-09-06 15:30:00"), false);
   // 유저가 한 번도 말하지 않은 방은 대화 전체를 본다
   logMessage("chat-quiet", characterId, "assistant", "말", "2026-09-06 09:00:00", {
     kind: "checkin",
     proactive: true,
   });
-  assert.equal(proactiveSinceLastUser("chat-quiet"), 1);
-  assert.equal(mendSentSince("chat-quiet", "2026-09-06 00:00:00"), false);
+  assert.equal(proactiveSinceLastUser("chat-quiet", characterId), 1);
+  assert.equal(mendSentSince("chat-quiet", characterId, "2026-09-06 00:00:00"), false);
 });
 
 test("유저가 이어 보낸 텀만 세고 답장이 끼거나 2분을 넘으면 뺀다", () => {

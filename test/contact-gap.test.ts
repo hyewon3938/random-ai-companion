@@ -27,20 +27,20 @@ const CHAR = 1;
 const SINCE_18 = "2026-09-05 18:00:00";
 
 test("캐릭터 말이 아직 없으면 잴 것이 없다", () => {
-  assert.equal(reopenedGap(CHAT, SINCE_18), undefined);
+  assert.equal(reopenedGap(CHAT, CHAR, SINCE_18), undefined);
   logMessage(CHAT, CHAR, "user", "안녕", "2026-09-05 13:58:00");
-  assert.equal(reopenedGap(CHAT, SINCE_18), undefined);
+  assert.equal(reopenedGap(CHAT, CHAR, SINCE_18), undefined);
 });
 
 test("창 안에 유저 말이 없으면 값이 없다", () => {
   logMessage(CHAT, CHAR, "assistant", "응 안녕", "2026-09-05 14:06:00");
-  assert.equal(reopenedGap(CHAT, SINCE_18), undefined);
+  assert.equal(reopenedGap(CHAT, CHAR, SINCE_18), undefined);
 });
 
 test("유저가 연달아 보낸 말은 첫 통이 기준이다", () => {
   logMessage(CHAT, CHAR, "user", "나 왔어", "2026-09-05 18:30:00");
   logMessage(CHAT, CHAR, "user", "뭐 해", "2026-09-05 18:31:00");
-  assert.deepEqual(reopenedGap(CHAT, SINCE_18), {
+  assert.deepEqual(reopenedGap(CHAT, CHAR, SINCE_18), {
     lastChar: "2026-09-05 14:06:00",
     firstUser: "2026-09-05 18:30:00",
   });
@@ -49,14 +49,14 @@ test("유저가 연달아 보낸 말은 첫 통이 기준이다", () => {
 test("캐릭터가 답한 뒤에도 재개 지점은 창 안에 있는 동안 남는다", () => {
   logMessage(CHAT, CHAR, "assistant", "왔어?", "2026-09-05 18:33:00");
   logMessage(CHAT, CHAR, "user", "응", "2026-09-05 18:35:00");
-  assert.deepEqual(reopenedGap(CHAT, SINCE_18), {
+  assert.deepEqual(reopenedGap(CHAT, CHAR, SINCE_18), {
     lastChar: "2026-09-05 14:06:00",
     firstUser: "2026-09-05 18:30:00",
   });
 });
 
 test("재개 지점이 창 밖으로 밀려나면 그 뒤 대화가 기준이 된다", () => {
-  assert.deepEqual(reopenedGap(CHAT, "2026-09-05 18:34:00"), {
+  assert.deepEqual(reopenedGap(CHAT, CHAR, "2026-09-05 18:34:00"), {
     lastChar: "2026-09-05 18:33:00",
     firstUser: "2026-09-05 18:35:00",
   });

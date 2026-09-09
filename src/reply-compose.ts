@@ -52,8 +52,11 @@ export interface UserTurn {
 }
 
 // 나눠 보낸 여러 줄이 한 덩어리로 붙잡기 판정에 들어간다.
-export const pendingUserTurn = (chatId: string): UserTurn | null => {
-  const rows = getRecentMessages(chatId, 12);
+export const pendingUserTurn = (
+  chatId: string,
+  characterId: number,
+): UserTurn | null => {
+  const rows = getRecentMessages(chatId, characterId, 12);
   const mine: MessageRow[] = [];
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i];
@@ -73,11 +76,12 @@ export const pendingUserTurn = (chatId: string): UserTurn | null => {
 // markFrom을 주면 그 시각 이후 첫 메시지에 시간 표시를 강제한다(몰아 답장 자리, 이슈 #238).
 export const replyHistory = (
   chatId: string,
+  characterId: number,
   markFrom?: string,
 ): ChatTurn[] =>
   toTurns(
     lastTurns(
-      getRecentMessages(chatId, RECENT_MESSAGE_FETCH_MAX),
+      getRecentMessages(chatId, characterId, RECENT_MESSAGE_FETCH_MAX),
       RECENT_TURN_COUNT,
     ),
     markFrom ? { markFrom } : {},
@@ -206,7 +210,7 @@ export const composeReply = async (
     signals: true,
     ...(situation ? { situation } : {}),
   });
-  const turns = replyHistory(chatId, input.markFrom);
+  const turns = replyHistory(chatId, characterId, input.markFrom);
   const meta: CallMeta = { purpose: "reply", characterId, chatId };
   // 빈 답장은 reply-ask.ts가 한 번 다시 부른다. 그래도 비면 아래에서 버린다 — 빈 텍스트를
   // 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.
@@ -261,7 +265,7 @@ export const composeReply = async (
     return null;
   }
   // 만드는 동안 유저가 말을 더 보냈으면 이 답장은 버린다 — 디바운스 타이머가 합쳐서 다시 만든다.
-  const now = pendingUserTurn(chatId);
+  const now = pendingUserTurn(chatId, characterId);
   if (now && now.at !== turn.at) {
     attach({ dropped: "생성 중 새 메시지 도착" });
     console.log(`${logTag} 생성 중 새 메시지 도착 — 폐기 (chat=${chatId})`);

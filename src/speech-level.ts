@@ -36,5 +36,8 @@ export const speechLevelOf = (texts: readonly string[]): SpeechLevelGuess => {
   return ban > jon ? "반말" : "존댓말";
 };
 
-export const currentSpeechLevel = (chatId: string): SpeechLevelGuess =>
-  speechLevelOf(recentReplyTexts(chatId, SAMPLE));
+export const currentSpeechLevel = (
+  chatId: string,
+  characterId: number,
+): SpeechLevelGuess =>
+  speechLevelOf(recentReplyTexts(chatId, characterId, SAMPLE));

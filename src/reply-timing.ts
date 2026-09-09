@@ -420,5 +420,8 @@ export const userBurstGaps = (
   return gaps;
 };
 
-export const recentUserGaps = (chatId: string, limit = 80): number[] =>
-  userBurstGaps(recentMessageTimes(chatId, limit));
+export const recentUserGaps = (
+  chatId: string,
+  characterId: number,
+  limit = 80,
+): number[] => userBurstGaps(recentMessageTimes(chatId, characterId, limit));

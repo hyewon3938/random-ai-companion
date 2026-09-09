@@ -93,7 +93,11 @@ export const runDispatchTick = noOverlap(async () => {
       continue;
     }
 
-    if (hasUserMessageSince(r.chat_id, kstStampBefore(RECENT_USER_MS))) {
+    if (hasUserMessageSince(
+        r.chat_id,
+        r.character_id,
+        kstStampBefore(RECENT_USER_MS),
+      )) {
       markScheduledSend(r.id, "skipped", "유저가 먼저 연락함", null);
       continue;
     }

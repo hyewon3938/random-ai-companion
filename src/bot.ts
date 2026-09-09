@@ -520,8 +520,8 @@ export const releaseProactive = (chatId: string): void => {
 };
 
 // 대기 시간 = 20초 바닥에서 위로만. 이어 보내기 텀이 길면(길게 치는 사람) 그 상위값(p80)에 맞춰 늘린다.
-const computeWait = (chatId: string): number => {
-  const gaps = recentUserGaps(chatId);
+const computeWait = (chatId: string, characterId: number): number => {
+  const gaps = recentUserGaps(chatId, characterId);
   let base = ARRIVAL_WAIT_MIN_MS;
   if (gaps.length >= 3) {
     const sorted = [...gaps].sort((a, b) => a - b);
@@ -561,7 +561,7 @@ export const upcomingAnnouncedAway = (
     if (!isAwayUnavail(b)) continue;
     const rel = toMinOfDay(b.start) - nowMin;
     if (rel <= 0 || rel > 15) continue;
-    if (awayNoticeSent(chatId, logicalDayStartTs(), b.start)) return b;
+    if (awayNoticeSent(chatId, characterId, logicalDayStartTs(), b.start)) return b;
   }
   return null;
 };
@@ -717,7 +717,7 @@ const respond = async (
         }
       : null;
     // 지금 답장하는 유저 메시지. 생성이 끝났을 때 이보다 새 메시지가 와 있으면 이 답장은 버린다.
-    const turn = pendingUserTurn(chatId);
+    const turn = pendingUserTurn(chatId, character.id);
     if (!turn) {
       console.warn(`[bot] 답장할 유저 메시지가 없다 — skip (chat=${chatId})`);
       return;
@@ -891,11 +891,11 @@ setWakeHandler(async (row: PendingReplyRow) => {
   const waitedMs = Number.isFinite(firstAt)
     ? Math.max(0, Date.now() - firstAt)
     : null;
-  const last = lastMessage(chatId);
+  const last = lastMessage(chatId, row.character_id);
 
   // ① 몰아 답장 — 마지막 말이 유저 차례로 남아 있으면 그 사이 온 메시지가 있다는 뜻.
   if (last?.role === "user") {
-    const turn = pendingUserTurn(chatId);
+    const turn = pendingUserTurn(chatId, row.character_id);
     if (!turn) return;
     // 순서는 답장과 같다(reply-compose.ts). 다른 것은 셋 — 방금 돌아왔다는 상황 문단, 구간에
     // 처음 온 메시지에 강제하는 시간 표시(자리를 비운 사이가 한 시간이 안 되면 마커가 안 붙어
@@ -988,7 +988,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
     if (
       draft.send &&
       draft.text &&
-      lastMessage(chatId)?.sent_at === last.sent_at
+      lastMessage(chatId, row.character_id)?.sent_at === last.sent_at
     ) {
       await sendProactive(chatId, row.character_id, draft.text, "away", {
         return: meta.blockStart ?? true,
@@ -1059,7 +1059,7 @@ setPromiseHandler(async (row: PendingReplyRow) => {
     else trace("no_slot", `${cur.activity} 중`);
     return;
   }
-  const last = lastMessage(chatId);
+  const last = lastMessage(chatId, row.character_id);
 
   // ③ 그 사이 온 말이 있다 — 약속을 지키는 답장.
   if (last?.role === "user") {
@@ -1067,7 +1067,7 @@ setPromiseHandler(async (row: PendingReplyRow) => {
     const droppedReply = dropPendingReplies(chatId, "약속 시각이 되어 다시 만든다");
     if (droppedReply)
       console.log(`[promise] 만들어 둔 답장 ${droppedReply}건 거둠 (chat=${chatId})`);
-    const turn = pendingUserTurn(chatId);
+    const turn = pendingUserTurn(chatId, row.character_id);
     if (!turn) return;
     const reply = await composeReply({
       characterId: row.character_id,
@@ -1157,7 +1157,7 @@ setPromiseHandler(async (row: PendingReplyRow) => {
         `모델이 보내지 않기로 했다${draftLabel ? ` (${draftLabel})` : ""}`,
         draftMeta.callId,
       );
-    } else if (lastMessage(chatId)?.sent_at !== last.sent_at) {
+    } else if (lastMessage(chatId, row.character_id)?.sent_at !== last.sent_at) {
       console.log(
         `[promise] 약속 연락 접음 — 문안을 만드는 사이 마지막 메시지가 바뀌었다 (chat=${chatId})`,
       );
@@ -1232,7 +1232,7 @@ bot.on("message:text", async (ctx) => {
     );
   // 여기서 기다리는 건 유저 말이 다 도착할 때까지의 시간뿐이다(20~40초).
   // 각본상 자리를 비운 만큼의 텀은 답장을 만든 뒤 pending_replies가 맡는다.
-  const waitMs = computeWait(chatId);
+  const waitMs = computeWait(chatId, character.id);
   const prevArrival = arrivals.get(chatId);
   arrivals.set(chatId, {
     waitMs,
@@ -1249,7 +1249,7 @@ bot.on("message:text", async (ctx) => {
 // (답장을 보냈지만 로그 전에 죽어 마지막 메시지가 여전히 유저로 보이는 배포 연쇄 상황 방지)
 export const recoverMissedReplies = async (): Promise<void> => {
   for (const c of getActiveCharacters()) {
-    const last = lastMessage(c.chat_id);
+    const last = lastMessage(c.chat_id, c.id);
     if (!last || last.role !== "user") continue;
     // 최근(3시간 내) 놓친 것만 복구한다 — 그보다 오래된 건 아침 안부·팔로업이 담당.
     // (예전엔 "오늘 새벽 5시 이후"로 걸렀는데, 자정~새벽 대화가 통째로 걸러지는 버그가 있었다.)

@@ -173,7 +173,7 @@ export const judgeUserState = async (
   characterId: number,
   chatId: string,
 ): Promise<UserStateVerdict> => {
-  const rows = getRecentMessages(chatId, USER_STATE_TURNS);
+  const rows = getRecentMessages(chatId, characterId, USER_STATE_TURNS);
   if (!rows.some((r) => r.role === "user")) return noChange(false, null);
   const rel = getRelationship(characterId);
   const last = rows[rows.length - 1]!;

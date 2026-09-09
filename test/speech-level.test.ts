@@ -56,6 +56,6 @@ test("최근 답장에서 선톡을 빼고 판정한다", () => {
       kind: "checkin",
       proactive: true,
     });
-  assert.equal(currentSpeechLevel(CHAT), "반말");
-  assert.equal(currentSpeechLevel("chat-none"), null);
+  assert.equal(currentSpeechLevel(CHAT, characterId), "반말");
+  assert.equal(currentSpeechLevel("chat-none", characterId), null);
 });

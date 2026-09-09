@@ -253,11 +253,15 @@ export const readContextInput = (
   }
 
   // 직전에 대화한 날 — 오늘 기록만 보면 모델이 공백 자체를 인지하지 못한다.
-  const prev = lastMessageBefore(chatId, logicalDayStartTs());
+  const prev = lastMessageBefore(chatId, characterId, logicalDayStartTs());
   // 몇 시간 만에 온 연락인지 — 기록의 시간 표시만으로는 모델이 그 텀을 화제로 삼지 않는다.
   // 텀이 기준에 못 미치면 null이다(이슈 #284). 재개 지점을 30분 동안 붙들어 두므로, 유저가
   // 다시 말을 건 뒤 몇 마디가 오가는 동안에도 절이 남는다(이슈 #316).
-  const gap = reopenedGap(chatId, kstStampBefore(CONTACT_GAP_HOLD_MS));
+  const gap = reopenedGap(
+    chatId,
+    characterId,
+    kstStampBefore(CONTACT_GAP_HOLD_MS),
+  );
 
   return {
     identity,
@@ -277,7 +281,7 @@ export const readContextInput = (
     judgedSpeech:
       rel?.speech_level === "casual" || rel?.speech_level === "polite"
         ? null
-        : currentSpeechLevel(chatId),
+        : currentSpeechLevel(chatId, characterId),
     upcoming,
     diaries,
     coldStart,
@@ -285,6 +289,6 @@ export const readContextInput = (
     notes: todayNotes(characterId),
     lastTalk: prev ? lastTalkedLabel(prev.sent_at) : null,
     contactGap: gap ? contactGapOf(gap.lastChar, gap.firstUser) : null,
-    recent: opts.recent ? getRecentMessages(chatId, opts.recent) : [],
+    recent: opts.recent ? getRecentMessages(chatId, characterId, opts.recent) : [],
   };
 };
