@@ -1,7 +1,8 @@
 // 아크·월 리듬·일정·하루 각본·일기 표의 저장 함수.
 //
 // 캐릭터의 삶을 이루는 표들이다. 아크와 월 리듬은 미리 만들어 두고, 일정은 대화와 새벽
-// 정리가 넣고 시각을 고치며, 각본은 하루에 하나, 일기는 새벽 정리가 하루에 하나 쓴다.
+// 정리가 넣고 시각과 상대가 아는지를 고치며, 각본은 하루에 하나, 일기는 새벽 정리가
+// 하루에 하나 쓴다.
 
 import { db } from "./connection.js";
 import type { UserKnows, ScheduleOrigin, ScheduleStatus } from "../labels.js";
@@ -103,6 +104,12 @@ export interface ScheduleStateRow extends ScheduleRow {
   status: ScheduleStatus;
 }
 
+// 상태와 '상대가 아는가'를 함께 읽는 줄. 새벽 정리가 이미 저장된 일정을 모델에게 보여줄 때
+// 쓴다 — 지금 값을 안 보여주면 이번에 말한 일정만 골라 known으로 고칠 수가 없다(이슈 #345).
+export interface ScheduleKnowsRow extends ScheduleStateRow {
+  user_knows: UserKnows;
+}
+
 export const getScheduleById = (
   characterId: number,
   id: number,
@@ -132,6 +139,10 @@ export const hasUserScheduleOn = (characterId: number, date: string): boolean =>
 //
 // origin은 이 행을 만든 경로다. 기본값에 기대지 말고 부르는 쪽이 넣는다 — 안 넣으면 전부
 // conversation으로 들어가 나중에 중복이 생겼을 때 어느 경로가 넣었는지 가릴 수 없다.
+//
+// userKnows도 부르는 쪽이 넣는다. 넣지 않던 동안 모든 행이 기본값 unknown으로 들어가서,
+// 답장 텀 판정의 '상대가 안다' 갈래에 닿는 일정이 하나도 없었다(이슈 #345). 상대 쪽 일정은
+// 상대가 제 일정을 모를 리 없으니 기억 표와 같게 known으로 고정한다.
 export const addSchedule = (
   characterId: number,
   owner: "char" | "user",
@@ -140,6 +151,7 @@ export const addSchedule = (
   content: string,
   now: string,
   origin: ScheduleOrigin,
+  userKnows: UserKnows = "unknown",
 ): number => {
   const dup = db
     .prepare(
@@ -151,9 +163,18 @@ export const addSchedule = (
   return Number(
     db
       .prepare(
-        `INSERT INTO schedules (character_id, owner, date, time_hint, content, origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO schedules (character_id, owner, date, time_hint, content, origin, user_knows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(characterId, owner, date, timeHint, content, origin, now)
+      .run(
+        characterId,
+        owner,
+        date,
+        timeHint,
+        content,
+        origin,
+        owner === "user" ? "known" : userKnows,
+        now,
+      )
       .lastInsertRowid,
   );
 };
@@ -177,6 +198,18 @@ export const setScheduleTimeHint = (
        WHERE character_id = ? AND id = ? AND status = 'active'`,
     )
     .run(timeHint, characterId, id).changes > 0;
+
+// 캐릭터가 상대에게 말한 일정에 그 사실을 적는다. 시각 고치기와 달리 status를 걸지 않는다 —
+// 취소·미룸으로 접힌 일정이라도 이미 말한 것은 말한 것이라, 답장 텀 판정은 그대로 읽는다.
+// 받는 값을 known 하나로 좁혀 둔 것은 되돌리는 쓰기를 막으려는 것이다: 한 번 말한 일을
+// 다음 새벽에 모델이 빠뜨렸다고 해서 모르는 일로 돌아가면 같은 이야기를 처음처럼 다시 꺼낸다.
+export const markScheduleKnown = (characterId: number, id: number): boolean =>
+  db
+    .prepare(
+      `UPDATE schedules SET user_knows = 'known'
+       WHERE character_id = ? AND id = ? AND user_knows <> 'known'`,
+    )
+    .run(characterId, id).changes > 0;
 
 // 같은 주인·날짜에 지금 살아 있는 일정들. 새벽 정리가 대화에서 뽑은 일정을 넣기 전에
 // 이 목록과 견줘 같은 일이면 넣지 않는다(nightly.ts). status를 active로 거르는 것은
@@ -203,14 +236,14 @@ export const getSchedulesFrom = (
   characterId: number,
   fromDate: string,
   limit: number,
-): ScheduleStateRow[] =>
+): ScheduleKnowsRow[] =>
   db
     .prepare(
-      `SELECT id, owner, date, time_hint, content, status FROM schedules
+      `SELECT id, owner, date, time_hint, content, status, user_knows FROM schedules
        WHERE character_id = ? AND date >= ?
        ORDER BY date, id LIMIT ?`,
     )
-    .all(characterId, fromDate, limit) as ScheduleStateRow[];
+    .all(characterId, fromDate, limit) as ScheduleKnowsRow[];
 
 // 태그로 찾은 일정 여러 건. 날짜 조건을 걸지 않는다 — 이 경로가 꺼내는 것은 주로 지난 일정이고,
 // 가까운 앞일은 이미 [다가오는 일정]이 싣는다(겹치는 행은 읽는 쪽이 뺀다).

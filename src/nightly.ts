@@ -40,6 +40,7 @@ import {
   updateRelationshipNotes,
   addSchedule,
   setScheduleTimeHint,
+  markScheduleKnown,
   getActiveSchedulesOn,
   getArcs,
   saveArc,
@@ -208,11 +209,16 @@ export interface ExtractOutput {
     // 이 일정을 나중에 주제로 다시 꺼낼 태그. 기억과 같은 어휘를 써야 함께 찾아진다.
     // 옵셔널인 이유는 이미 저장된 일정과 아직 이 항목을 안 만드는 생성 경로가 있어서다.
     tags?: string[];
+    // 캐릭터 쪽 일정을 상대에게 말했는가. 안 넣는 생성 경로가 있어 옵셔널이고, 없으면
+    // 모르는 것으로 둔다 — 말한 일을 안 말한 것으로 두는 쪽이 되돌리기 쉽다(이슈 #345).
+    user_knows?: UserKnows;
   }[];
   // 이미 저장된 일정 줄의 시각을 이번 대화에서 정해진 값으로 고친다. 새 줄을 만드는 자리가
   // 아니라 있는 줄을 고치는 자리라, id는 프롬프트의 [이미 저장된 일정]에 보여 준 번호다.
   // 옵셔널인 이유는 이 항목을 아직 안 만드는 생성 경로가 있어서다(이슈 #278).
-  schedule_updates?: { id: number; time_hint: string }[];
+  // user_knows는 그날 대화에서 상대에게 말한 일정에만 known으로 온다 — 시각과 달리 되돌리는
+  // 값은 받지 않아서, 이 자리에 known 말고 다른 값이 와도 반영하지 않는다(이슈 #345).
+  schedule_updates?: { id: number; time_hint?: string; user_knows?: UserKnows }[];
 }
 
 export interface SendDraft {
@@ -340,15 +346,31 @@ export const planBrief = (raw: string | undefined): string => {
   }
 };
 
+// 줄 끝에 붙이는 '상대가 아는가'의 지금 값. waiting은 아직 말하지 않고 꺼낼 자리를 기다리는
+// 것이라 모름 쪽으로 적는다(reply-timing.ts와 같은 기준). 추출이 이 값을 못 보던 동안 모델은
+// 매번 처음부터 다시 판단했고, 다시 안 적어 낸 행은 앞 값을 그대로 이어받아 캐릭터를 만들 때
+// 정해진 unknown에서 한 번도 움직이지 않았다(이슈 #345).
+const knowsMarkOf = (v: UserKnows): string =>
+  v === "known" ? " [상대가 앎]" : " [상대는 모름]";
+
+// 표시는 '나'(char) 쪽 줄에만 붙는다 — 상대가 제 일을 아는지는 물을 것이 없다.
+const knowsMark = (r: MemoryRow): string =>
+  r.owner === "char" ? knowsMarkOf(r.user_knows) : "";
+
+// 아크 재료에서는 이 표시를 뗀다. 아크 프롬프트에는 표시를 설명하는 자리가 없고, 캐릭터를
+// 만들 때 character.ts가 만드는 같은 모양에도 없어서, 두면 아크 문장에 그대로 섞인다.
+const withoutKnowsMark = (s: string): string =>
+  s.replaceAll(" [상대가 앎]", "").replaceAll(" [상대는 모름]", "");
+
 const personLine = (r: MemoryRow): string => {
   const meta = [r.area, r.relation, r.owner === "user" ? "상대 쪽 사람" : null]
     .filter(Boolean)
     .join(", ");
-  return `- ${r.subject} (${meta}): ${r.value}`;
+  return `- ${r.subject} (${meta}): ${r.value}${knowsMark(r)}`;
 };
 
 const ongoingLine = (r: MemoryRow): string =>
-  `- ${r.owner === "user" ? "(상대) " : ""}${r.area}/${r.subject}: ${r.value}${r.end_condition ? ` (끝나는 조건: ${r.end_condition})` : ""}`;
+  `- ${r.owner === "user" ? "(상대) " : ""}${r.area}/${r.subject}: ${r.value}${r.end_condition ? ` (끝나는 조건: ${r.end_condition})` : ""}${knowsMark(r)}`;
 
 // 갱신 날짜를 함께 적는다 — 앞 값이 언제 것인지 알아야 한 번 있었던 일과 이어지는 상태를 가른다.
 const userFactLine = (r: MemoryRow): string =>
@@ -461,10 +483,10 @@ const arcMaterialOf = (g: NightlyGathered): string =>
     g.identity || "(없음)",
     "",
     "[주변 인물]",
-    g.people || "(없음)",
+    withoutKnowsMark(g.people) || "(없음)",
     "",
     "[진행 중인 일]",
-    g.ongoing || "(없음)",
+    withoutKnowsMark(g.ongoing) || "(없음)",
     "",
     "[유저와의 관계]",
     g.relationship || "(이제 막 시작한 사이)",
@@ -558,7 +580,7 @@ export const gatherNightlyInput = (
           s.owner === "user" ? "상대" : "나"
         }: ${s.content}${
           s.status === "active" ? "" : ` (${SCHEDULE_STATUS_NAME[s.status]})`
-        }`,
+        }${s.owner === "char" ? knowsMarkOf(s.user_knows) : ""}`,
     ),
     arcs: getArcs(character.id),
     todaySeed: getDaySeed(character.id, today) ?? null,
@@ -607,6 +629,7 @@ const applyNightlyTxn = db.transaction(
     let schedTagCount = 0;
     let schedSkipped = 0;
     let schedTimeFixed = 0;
+    let schedKnownFixed = 0;
     let profileFilled: string[] = [];
     const skippedKeys: string[] = [];
     if (ex) {
@@ -720,6 +743,7 @@ const applyNightlyTxn = db.transaction(
             s.content,
             ts,
             "conversation",
+            s.user_knows === "known" ? "known" : "unknown",
           );
           const schedTagList = cleanTags(s.tags);
           if (schedTagList.length)
@@ -731,18 +755,28 @@ const applyNightlyTxn = db.transaction(
           `[nightly] 이미 있는 일정 ${schedSkipped}건은 다시 넣지 않음 (캐릭터 ${g.characterId}, ${g.diaryDate})`,
         );
 
-      // 이미 있는 줄의 시각 고치기. 위 넣기와 달리 값을 덮어쓰는 자리라 성한 것만 넘긴다 —
-      // 번호가 아니거나 시각이 빈 줄은 여기서 버리고, 남의 캐릭터·접힌 일정인지는 db가 건다.
+      // 이미 있는 줄의 시각과 '상대가 아는가' 고치기. 위 넣기와 달리 값을 덮어쓰는 자리라
+      // 성한 것만 넘긴다 — 번호가 아닌 줄은 여기서 버리고, 남의 캐릭터·접힌 일정인지는 db가
+      // 건다. 두 값은 따로 온다: 시각만 정해진 회차도, 말했다는 사실만 생긴 회차도 있다.
       for (const u of ex.schedule_updates ?? []) {
         const schedId = Number(u?.id);
+        if (!Number.isInteger(schedId) || schedId <= 0) continue;
         const hint = typeof u?.time_hint === "string" ? u.time_hint.trim() : "";
-        if (!Number.isInteger(schedId) || schedId <= 0 || !hint) continue;
-        if (setScheduleTimeHint(g.characterId, schedId, hint))
+        if (hint && setScheduleTimeHint(g.characterId, schedId, hint))
           schedTimeFixed += 1;
+        if (
+          u?.user_knows === "known" &&
+          markScheduleKnown(g.characterId, schedId)
+        )
+          schedKnownFixed += 1;
       }
       if (schedTimeFixed)
         console.log(
           `[nightly] 일정 시각 ${schedTimeFixed}건 고침 (캐릭터 ${g.characterId}, ${g.diaryDate})`,
+        );
+      if (schedKnownFixed)
+        console.log(
+          `[nightly] 상대에게 말한 일정 ${schedKnownFixed}건 표시 (캐릭터 ${g.characterId}, ${g.diaryDate})`,
         );
     }
 
@@ -854,7 +888,7 @@ const applyNightlyTxn = db.transaction(
       (relNow.user_state_since ?? "") < `${nextDate(g.diaryDate)} 05:00:00`;
     if (stateCleared) setUserState(g.characterId, null);
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 

@@ -31,6 +31,7 @@ const {
   getRelationship,
   insertDiary,
   insertScheduledSend,
+  markScheduleKnown,
   recordLlmCall,
   saveUserProfile,
   setScheduleTimeHint,
@@ -441,6 +442,61 @@ test("새 일정과 일정 시각 고침이 본문에 적힌다", () => {
     ),
   );
   assert.equal(childrenOf("2026-09-05").length, 0);
+});
+
+test("상대에게 말한 일정이 이전 값과 함께 본문에 적힌다", () => {
+  const showId = addSchedule(
+    characterId,
+    "char",
+    "2026-09-18",
+    "저녁",
+    "공연",
+    NOW,
+    "conversation",
+  );
+  const knownId = addSchedule(
+    characterId,
+    "char",
+    "2026-09-19",
+    null,
+    "본가",
+    NOW,
+    "conversation",
+    "known",
+  );
+  const g = gathered({ diaryDate: "2026-09-14", today: "2026-09-15" });
+  const out: NightlyOutput = {
+    entry: entry("발표 이야기를 한 하루"),
+    extract: {
+      memories: [],
+      schedules: [],
+      schedule_updates: [
+        { id: showId, user_knows: "known" },
+        { id: knownId, user_knows: "known" },
+        { id: 999999, user_knows: "known" },
+      ],
+    },
+  };
+  const snap = beforeNightlyTrace(g, out);
+  assert.ok(snap);
+
+  // 반영 트랜잭션 몫 — 이미 아는 줄은 바뀔 것이 없어 건너뛴다.
+  assert.equal(markScheduleKnown(characterId, showId), true);
+  assert.equal(markScheduleKnown(characterId, knownId), false);
+  afterNightlyTrace(g, out, snap, "ok: 일정 1건");
+
+  const head = parentOf("2026-09-14");
+  assert.ok(head);
+  assert.ok(
+    head.text.includes(
+      [
+        "*상대에게 말한 일정* 3건",
+        "> 2026-09-18 공연 · 상대는 모름 → 상대가 앎",
+        "> 2026-09-19 본가 · 이미 상대가 아는 일정",
+        "> [999999] 반영 대상이 아니라 건너뜀",
+      ].join("\n"),
+    ),
+  );
 });
 
 test("진행 중인 일의 한 걸음이 바뀐 자리 표시로 붙고 끝난 것은 사실로 옮겼다고 적는다", () => {

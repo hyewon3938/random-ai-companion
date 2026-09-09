@@ -111,10 +111,10 @@ export const extractPrompt = (g: NightlyGathered): string => {
 [나의 정체성 — 이미 아는 것]
 ${g.identity || "(없음)"}
 
-[이미 아는 주변 인물]
+[이미 아는 주변 인물 — 줄 끝의 [상대가 앎]·[상대는 모름]은 '나'(char) 쪽 사실을 상대가 아는지의 지금 값]
 ${g.people || "(없음)"}
 
-[진행 중인 일]
+[진행 중인 일 — 줄 끝 표시는 위와 같다]
 ${g.ongoing || "(없음)"}
 
 [상대에 대해 이미 아는 것 — 오늘 대화와 겹치는 키의 지금 값]
@@ -138,7 +138,7 @@ ${g.areas.join(", ") || "(없음)"}
 [이미 쓰는 태그]
 ${g.tagNames.join(", ") || "(없음)"}
 
-[이미 저장된 일정 — 같은 일이면 다시 적지 않는다]
+[이미 저장된 일정 — 같은 일이면 다시 적지 않는다. 줄 끝 표시는 내 일정을 상대가 아는지의 지금 값]
 ${g.existingSchedules.join("\n") || "(없음)"}
 
 [오늘의 대화]
@@ -151,7 +151,7 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"]}],"schedule_updates":[{"id":0,"time_hint":"14:30"}]}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"],"user_knows":"known|unknown — 내(char) 일정만"}],"schedule_updates":[{"id":0,"time_hint":"14:30","user_knows":"known"}]}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.
@@ -164,7 +164,7 @@ memories 규칙:
 - person: 영역=갈래(가족·직장·친구 등), 무엇=이름(모르면 호칭 그대로). 상대가 흘리듯 언급한 상대 쪽 사람도 빠뜨리지 않는다. 이미 아는 인물은 내용이 달라졌을 때만 같은 키로 다시 쓴다.
 - "~라고 불러줘" 같은 지시·부탁은 사실 문장으로 바꿔 저장한다 (예: 상대는 OO라고 불리는 걸 좋아한다).
 - tags: ${TAG_RULE}
-- user_knows: '나'(char) 쪽 기억에만 — 이 사실을 상대가 아는가.
+- user_knows: '나'(char) 쪽 기억에만 — 이 사실을 상대가 아는가. 위 재료 줄 끝의 표시가 지금 값이고, 오늘 대화에서 내가 상대에게 말한 것만 known으로 바꾼다. 상대가 이미 알던 것은 그 줄의 지금 값을 그대로 다시 적는다. 한 번 known이 된 것은 다시 unknown으로 되돌리지 않는다 — 이미 말한 일을 다음에 처음 꺼내는 것처럼 말하게 된다. 오늘 말하지 않은 일을 짐작으로 known으로 바꾸지 않는다.
 
 relationship 규칙: 이 하루로 실제 달라진 항목만 넣는다 (넣은 항목만 갱신되고, 나머지는 그대로 남는다). 각 항목은 짧은 서술로. 지금 어떤 사이인지·서로 부르는 말·존댓말과 반말은 대화하는 자리에서 이미 갱신되니 여기서 건드리지 않는다. [상대의 오늘 상태]는 이 정리가 끝나면 비워지니, 내일도 알고 있어야 할 것이면 feelings나 cautions에 녹여 적는다 — 나 때문에 안 좋았던 상태는 무엇 때문이었는지가 남게. 달라진 게 없으면 relationship은 null.
 user_profile 규칙:
@@ -179,11 +179,14 @@ schedules 규칙:
   해서 새로 적지 않는다. 그 줄은 이미 있는 것으로 두고 넘어간다. 시각이 이번에 정해진
   것이면 아래 schedule_updates로 그 줄을 고친다.
 - 새 일정으로 넣는 것은 [이미 저장된 일정]에 없는 일만이다.
+- user_knows: 내(char) 일정에만. 오늘 대화에서 내가 상대에게 말한 일정이면 "known", 아니면 "unknown". 상대 쪽 일정에는 넣지 않는다.
 - tags: ${TAG_RULE}
 schedule_updates 규칙:
 - [이미 저장된 일정]에 있는 줄의 시각이 이번 대화에서 정해졌으면 그 줄 앞 [번호]와 정해진 시각을 넣는다. 오후라고만 적혀 있던 줄에 두 시 반이라는 말이 오간 자리가 이 경우다.
-- 고치는 것은 시각뿐이다. 날짜·내용·주인이 달라졌으면 여기 넣지 않는다.
-- 이미 적힌 시각과 같거나 대화에서 시각이 안 나온 줄은 넣지 않는다. 고칠 줄이 없으면 빈 배열.
+- [상대는 모름]으로 적힌 내 일정을 오늘 대화에서 상대에게 말했으면 그 줄 앞 [번호]와 "user_knows":"known"을 넣는다. 다음 주에 발표가 있다고 내가 알린 자리가 이 경우다. 상대가 물어서 답한 것도 말한 것이다.
+- 고치는 것은 이 둘뿐이다. 날짜·내용·주인이 달라졌으면 여기 넣지 않는다.
+- 두 값은 따로 온다. 시각만 정해졌으면 time_hint만, 말하기만 했으면 user_knows만 넣고, 둘 다면 한 줄에 함께 넣는다.
+- 이미 적힌 시각과 같거나 대화에서 시각이 안 나온 줄에는 time_hint를 넣지 않는다. 이미 [상대가 앎]인 줄에는 user_knows를 넣지 않는다. 고칠 줄이 없으면 빈 배열.
 - time_hint는 14:30처럼 시각으로 적을 수 있으면 시각으로, 아니면 대화에 나온 말 그대로 적는다.`;
 };
 

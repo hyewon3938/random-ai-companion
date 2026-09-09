@@ -49,6 +49,7 @@ import {
   MEMORY_OWNER_NAME,
   SPEECH_LEVEL_NAME,
   type MemoryOrigin,
+  type UserKnows,
 } from "./labels.js";
 import { wordDiff } from "./trace/diff.js";
 import { keyProblem } from "./memory.js";
@@ -119,7 +120,10 @@ export interface NightlySnapshot {
   // 진행 반영 대상 행의 이전 값 — 반영 뒤에는 값이 바뀌고 끝난 것은 사실 행으로 옮겨져 번호가 바뀐다.
   progress: Map<number, { label: string; value: string }>;
   // 시각을 고칠 일정 줄의 이전 값 — 고친 뒤에는 앞의 시각이 남지 않는다.
-  scheduleTimes: Map<number, { label: string; timeHint: string | null }>;
+  scheduleTimes: Map<
+    number,
+    { label: string; timeHint: string | null; userKnows: UserKnows }
+  >;
   relationship: RelationshipRow | undefined;
   profile: StoredUserProfile;
 }
@@ -164,7 +168,7 @@ export const beforeNightlyTrace = (
     }
     const scheduleTimes = new Map<
       number,
-      { label: string; timeHint: string | null }
+      { label: string; timeHint: string | null; userKnows: UserKnows }
     >();
     for (const u of out.extract?.schedule_updates ?? []) {
       const id = Number(u?.id);
@@ -174,6 +178,7 @@ export const beforeNightlyTrace = (
         scheduleTimes.set(id, {
           label: `${r.date} ${r.content}`,
           timeHint: r.time_hint,
+          userKnows: r.user_knows,
         });
     }
     return {
@@ -316,10 +321,22 @@ const headText = (
     .map((u) => {
       const before = snap.scheduleTimes.get(Number(u.id));
       if (!before) return `[${u.id}] 반영 대상이 아니라 건너뜀`;
-      return `${before.label} · ${before.timeHint ?? "시각 없음"} → ${u.time_hint.trim()}`;
+      return `${before.label} · ${before.timeHint ?? "시각 없음"} → ${u.time_hint?.trim()}`;
     });
   const times = listSection("일정 시각 고침", timeFixes);
   if (times) parts.push(times);
+  // 이미 [상대가 앎]이던 줄은 바뀐 것이 없어 반영 자리가 건너뛴다. 게시도 같게 적는다.
+  const knownFixes = (out.extract?.schedule_updates ?? [])
+    .filter((u) => Number.isInteger(Number(u?.id)) && u?.user_knows === "known")
+    .map((u) => {
+      const before = snap.scheduleTimes.get(Number(u.id));
+      if (!before) return `[${u.id}] 반영 대상이 아니라 건너뜀`;
+      return before.userKnows === "known"
+        ? `${before.label} · 이미 상대가 아는 일정`
+        : `${before.label} · 상대는 모름 → 상대가 앎`;
+    });
+  const knowns = listSection("상대에게 말한 일정", knownFixes);
+  if (knowns) parts.push(knowns);
   return parts.join("\n\n");
 };
 
