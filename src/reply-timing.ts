@@ -131,7 +131,7 @@ const HOLD_SYSTEM = `너는 메신저 대화를 읽고 한 가지만 판정한�
 - 내 답이 없는 채로 몇 분에 걸쳐 짧은 말을 이어 보내는 것. 한 번에 몰아 보낸 여러 통은 내용으로만 본다
 읽기만 하면 되는 전달, 알려 두는 말, 나중에 답해 달라고 한 물음, 반응 한 마디는 아님으로 본다.
 
-예시
+예시. 이어 보낸 말은 /로 나눠 적었고 실제로는 줄마다 온다.
 자? → 붙잡음
 있어? → 붙잡음
 지금 바빠? → 붙잡음
@@ -194,9 +194,13 @@ export const buildHoldPrompt = (input: {
   now?: number;
 }): string => {
   const { burst } = input;
+  const waited = burst
+    ? (input.now ?? Date.now()) - parseKst(burst.firstAt)
+    : NaN;
+  // 첫 통 시각을 못 읽으면 한 통일 때와 같은 글로 간다 — 잘못 센 시간을 적는 것보다 낫다.
   const said =
-    burst && burst.n >= 2
-      ? `상대가 내 답을 못 받은 채로 ${waitedText((input.now ?? Date.now()) - parseKst(burst.firstAt))} 이어 보낸 말 ${burst.n}통:\n${input.userText}`
+    burst && burst.n >= 2 && Number.isFinite(waited)
+      ? `상대가 내 답을 못 받은 채로 ${waitedText(waited)} 이어 보낸 말 ${burst.n}통:\n${input.userText}`
       : `상대가 방금 보낸 말: ${input.userText}`;
   return [`내가 지금 하는 일: ${input.activity}`, input.knows, said]
     .filter(Boolean)
