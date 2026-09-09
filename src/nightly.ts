@@ -72,6 +72,9 @@ import { userStateLabel } from "./user-state.js";
 import { isSameScheduleContent } from "./schedule-dedupe.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import {
+  awayPhaseOf,
+  awayRuleLines,
+  checkPlanAway,
   ensureTodayPlan,
   lastNightSleep,
   normalizePlan,
@@ -287,6 +290,7 @@ export interface NightlyGathered {
   arcs: Record<string, string>;
   todaySeed: DaySeed | null; // 오늘의 컨디션 시드(있으면)
   lastNight: NightSleep | null; // 어젯밤 잠든 시각과 충분히 잔 기준 시각 — 오늘 피곤한지는 이 값으로(이슈 #289)
+  awayRule: string; // 오늘 각본의 자리 비움 규칙. 관계 국면으로 상한이 달라져서 외부 생성 경로가 이 줄을 그대로 각본 규칙에 넣는다(이슈 #335)
   rhythmNeeded: { ym: string; days: { date: string; label: string }[] }[]; // 이번 새벽에 생성해야 할 월 리듬
   // 침묵 백오프 상태 — 외부 생성 경로가 이를 보고 산출물을 조절한다
   // (normal=평소대로 / quiet·dormant=각본·선톡 생성 불필요 / checkin=저녁 재연결 문안만)
@@ -559,6 +563,7 @@ export const gatherNightlyInput = (
     arcs: getArcs(character.id),
     todaySeed: getDaySeed(character.id, today) ?? null,
     lastNight: lastNightSleep(character.id, today),
+    awayRule: awayRuleLines(awayPhaseOf(character.id, today)),
     rhythmNeeded: monthsNeedingRhythm(character.id, today).map((ym) => ({
       ym,
       days: monthDays(ym),
@@ -749,13 +754,17 @@ const applyNightlyTxn = db.transaction(
       out.plan &&
       (!getDayPlan(g.characterId, g.today) ||
         getDayPlanMadeBy(g.characterId, g.today) === "ondemand")
-    )
-      saveDayPlan(
-        g.characterId,
-        g.today,
-        JSON.stringify(normalizePlan(out.plan)),
-        "nightly",
-      );
+    ) {
+      const plan = normalizePlan(out.plan);
+      // 외부 생성분은 다시 만들 수 없으니 자리 비움 상한을 어겼으면 로그만 남기고 저장한다.
+      // 아침 게시가 같은 셈을 보여서 어긴 날을 알 수 있다(이슈 #335).
+      const away = checkPlanAway(g.characterId, g.today, plan);
+      if (away.violations.length)
+        console.warn(
+          `[nightly] 자리 비움 상한 어김 (캐릭터 ${g.characterId}, ${g.today}): ${away.violations.join(" / ")}`,
+        );
+      saveDayPlan(g.characterId, g.today, JSON.stringify(plan), "nightly");
+    }
 
     if (out.arcs) {
       for (const h of ["year", "season", "month", "week"] as const)

@@ -19,6 +19,15 @@
 //
 // 유저와는 메시지로만 이어진 사이라 유저와 만나는 블록은 만들지 않는다. 유저가 하루에 들어오는
 // 자리는 메시지를 보내거나 답하는 시간뿐이다(이슈 #322).
+//
+// 자리를 비우는 불가 구간(잠 제외)은 밀도를 관계 국면으로 조절한다(이슈 #335). 알리고 나가는 긴
+// 구간은 없는 날이 기본이고, 관계 단계가 1이거나 만난 지 한 달이 안 된 초반에는 출퇴근처럼 뺄 수
+// 없는 것만 하루 1개까지 둬 유저가 마음을 붙일 틈을 끊지 않는다. 그 뒤에는 하루 0~2개로 날마다
+// 달라 가끔 비는 자리가 그리워할 틈이 된다. 한 구간은 40분까지이고 더 긴 운동은 중간에 폰을 보는
+// 틈으로 나눈다. 시험·면접·발표 같은 공적 일은 길이 제한이 없고, 영화관·공연 같은 확정 일정은
+// 관계가 쌓인 뒤에만 실제 길이대로 둔다. 짧은 구간의 개수·합과 구간 사이 간격에도 상한이 있다.
+// 프롬프트가 그날 국면의 값을 말하고, 만든 각본은 awayStats로 다시 세어 봇 안 생성은 어기면 한 번
+// 더 만들고, 외부 생성분은 기록만 남긴다. 아침 게시가 그 셈을 보인다.
 
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
@@ -31,6 +40,8 @@ import {
   getRecentDiaries,
   getDaySeed,
   getCharacterChatId,
+  getMetAt,
+  getStage,
   lastCharMessageTsBetween,
   listMemoryItems,
   type DaySeed,
@@ -47,13 +58,20 @@ import { ensureRhythmRunway } from "./life-plan.js";
 import {
   kstLogicalDate,
   dayLabelOf,
+  logicalDaysAgo,
   shiftDate,
   nightSleepOf,
   type NightSleep,
 } from "./kst.js";
 import {
+  AWAY_BLOCK_MAX_MIN,
   AWAY_DAILY_MAX,
+  AWAY_EARLY_DAILY_MAX,
+  AWAY_EARLY_DAYS,
+  AWAY_GAP_MIN,
   AWAY_MIN_BLOCK_MIN,
+  AWAY_SHORT_DAILY_MAX,
+  AWAY_SHORT_TOTAL_MAX_MIN,
   PLAN_ONGOING_MAX,
 } from "./thresholds.js";
 import {
@@ -138,6 +156,183 @@ export const isSleeping = (b: {
   /잠|수면|숙면/.test(b.activity) &&
   !/준비/.test(b.activity);
 
+// ── 자리 비움 밀도(이슈 #335) ───────────────────────────────────────────────
+
+/** 자리 비움 상한을 정하는 관계 국면. 단계가 1이거나 만난 지 AWAY_EARLY_DAYS일이 안 됐으면
+ * 초반이다. days는 만난 날을 0으로 센 날수다. */
+export interface AwayPhase {
+  early: boolean;
+  stage: number;
+  days: number;
+}
+
+export const awayPhaseOf = (characterId: number, date: string): AwayPhase => {
+  const stage = getStage(characterId)?.stage_no ?? 1;
+  const metAt = getMetAt(characterId);
+  const days = metAt ? Math.max(0, logicalDaysAgo(metAt, date)) : 0;
+  return { early: stage <= 1 || days < AWAY_EARLY_DAYS, stage, days };
+};
+
+/** 그 국면에서 각본이 지킬 상한. 긴 구간(AWAY_MIN_BLOCK_MIN 이상)은 알리고 나가는 자리라
+ * 개수를 국면으로 조절한다. 개수는 최대치이고 없는 날이 기본이다. 한 구간의 길이, 짧은 구간,
+ * 간격은 국면과 상관없다. */
+export interface AwayCaps {
+  longMax: number;
+  longBlockMaxMin: number;
+  shortMax: number;
+  shortTotalMaxMin: number;
+  gapMin: number;
+}
+
+export const awayCapsOf = (phase: AwayPhase): AwayCaps => ({
+  longMax: phase.early ? AWAY_EARLY_DAILY_MAX : AWAY_DAILY_MAX,
+  longBlockMaxMin: AWAY_BLOCK_MAX_MIN,
+  shortMax: AWAY_SHORT_DAILY_MAX,
+  shortTotalMaxMin: AWAY_SHORT_TOTAL_MAX_MIN,
+  gapMin: AWAY_GAP_MIN,
+});
+
+/** 길이 상한을 받지 않는 불가 구간. 시험·면접·발표처럼 자리를 뜰 수 없는 공적 일은 언제나
+ * 실제 길이대로 두고, 영화관·공연처럼 확정 일정에서 나온 구간은 관계가 쌓인 뒤에만 그렇다.
+ * 초반에는 상대가 먼저 권한 것이 아니면 그런 일정을 각본에 넣지 않는 것이 규칙이라 상한을 받는다.
+ * 개수 상한은 예외 없이 다 센다. */
+export const awayLengthExempt = (b: PlanBlock, phase: AwayPhase): boolean =>
+  blockCategory(b) === "official" || (!phase.early && b.source === "schedule");
+
+/** 각본 하나의 자리 비움 셈. 잠은 빼고 센다. longCapped는 길이 상한을 받는 긴 구간의 이름과
+ * 길이, longExempt는 상한을 안 받는 긴 구간의 수다. minGapMin은 불가 구간 사이에 있는 답할 수
+ * 있는 시간 중 가장 짧은 것이고, 불가 구간이 하나 이하면 null이다. */
+export interface AwayStats {
+  long: number;
+  longestMin: number;
+  longCapped: { activity: string; min: number }[];
+  longExempt: number;
+  short: number;
+  shortMin: number;
+  awayMin: number;
+  minGapMin: number | null;
+}
+
+const minutesOf = (hhmm: string): number => {
+  const [h, m] = hhmm.split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+};
+const durationOf = (b: PlanBlock): number =>
+  Math.max(0, minutesOf(b.end) - minutesOf(b.start));
+
+export const awayStats = (plan: DayPlan, phase: AwayPhase): AwayStats => {
+  const s: AwayStats = {
+    long: 0,
+    longestMin: 0,
+    longCapped: [],
+    longExempt: 0,
+    short: 0,
+    shortMin: 0,
+    awayMin: 0,
+    minGapMin: null,
+  };
+  // 마지막 불가 구간 뒤로 쌓인 답할 수 있는 시간. 아직 불가 구간을 못 만났으면 null.
+  let gap: number | null = null;
+  for (const b of plan.blocks) {
+    const dur = durationOf(b);
+    if (!isAwayUnavail(b)) {
+      if (gap !== null) gap += dur;
+      continue;
+    }
+    if (gap !== null)
+      s.minGapMin = s.minGapMin === null ? gap : Math.min(s.minGapMin, gap);
+    gap = 0;
+    s.awayMin += dur;
+    if (dur >= AWAY_MIN_BLOCK_MIN) {
+      s.long += 1;
+      s.longestMin = Math.max(s.longestMin, dur);
+      if (awayLengthExempt(b, phase)) s.longExempt += 1;
+      else s.longCapped.push({ activity: b.activity, min: dur });
+    } else {
+      s.short += 1;
+      s.shortMin += dur;
+    }
+  }
+  return s;
+};
+
+/** 상한을 어긴 것을 사람이 읽는 줄로. 비어 있으면 다 지킨 것이다. 다시 만들 때 프롬프트에
+ * 그대로 붙이고, 아침 게시에도 올린다. */
+export const awayViolations = (stats: AwayStats, caps: AwayCaps): string[] => {
+  const out: string[] = [];
+  if (stats.long > caps.longMax)
+    out.push(
+      `${AWAY_MIN_BLOCK_MIN}분 이상 불가 구간이 ${stats.long}개 (상한 ${caps.longMax}개)`,
+    );
+  const over = stats.longCapped.filter((c) => c.min > caps.longBlockMaxMin);
+  if (over.length)
+    out.push(
+      `한 구간이 ${caps.longBlockMaxMin}분을 넘는 불가 구간: ${over.map((c) => `${c.activity} ${c.min}분`).join(", ")} (중간에 폰을 보는 틈을 넣어 나눈다)`,
+    );
+  if (stats.short > caps.shortMax)
+    out.push(
+      `${AWAY_MIN_BLOCK_MIN}분 미만 불가 구간이 ${stats.short}개 (상한 ${caps.shortMax}개)`,
+    );
+  if (stats.shortMin > caps.shortTotalMaxMin)
+    out.push(
+      `${AWAY_MIN_BLOCK_MIN}분 미만 불가 구간의 합이 ${stats.shortMin}분 (상한 ${caps.shortTotalMaxMin}분)`,
+    );
+  if (stats.minGapMin !== null && stats.minGapMin < caps.gapMin)
+    out.push(
+      `불가 구간 사이에 답할 수 있는 시간이 ${stats.minGapMin}분 (최소 ${caps.gapMin}분)`,
+    );
+  return out;
+};
+
+export interface AwayCheck {
+  phase: AwayPhase;
+  caps: AwayCaps;
+  stats: AwayStats;
+  violations: string[];
+}
+
+/** 정규화한 각본이 그날 국면의 상한을 지켰는지. 저장하는 두 자리(봇 안 생성·외부 생성분)와
+ * 아침 게시가 같은 셈을 쓴다. */
+export const checkPlanAway = (
+  characterId: number,
+  date: string,
+  plan: DayPlan,
+): AwayCheck => {
+  const phase = awayPhaseOf(characterId, date);
+  const caps = awayCapsOf(phase);
+  const stats = awayStats(plan, phase);
+  return { phase, caps, stats, violations: awayViolations(stats, caps) };
+};
+
+/** 아침 게시와 로그에 올리는 한 줄. */
+export const awaySummary = (c: AwayCheck): string => {
+  const phase = c.phase.early
+    ? `관계 초반(${c.phase.stage}단계, 만난 지 ${c.phase.days}일째)`
+    : `${c.phase.stage}단계, 만난 지 ${c.phase.days}일째`;
+  const longCap = `상한 ${c.caps.longMax}개·한 구간 ${c.caps.longBlockMaxMin}분${c.stats.longExempt ? `, 길이 제한 없는 공적·일정 구간 ${c.stats.longExempt}개` : ""}`;
+  const longest = c.stats.long ? ` · 가장 긴 것 ${c.stats.longestMin}분` : "";
+  return `자리 비움: ${AWAY_MIN_BLOCK_MIN}분 이상 ${c.stats.long}개(${longCap})${longest} · 미만 ${c.stats.short}개 ${c.stats.shortMin}분(상한 ${c.caps.shortMax}개 ${c.caps.shortTotalMaxMin}분) · 잠 빼고 ${c.stats.awayMin}분 · ${phase}`;
+};
+
+/** 생성 프롬프트의 자리 비움 규칙. 국면에 따라 상한 숫자와 까닭이 달라진다. 봇 안 생성은
+ * planPrompt에 넣고, 외부 생성 경로는 새벽 수집 입력의 awayRule로 같은 줄을 받는다. */
+export const awayRuleLines = (phase: AwayPhase): string => {
+  const caps = awayCapsOf(phase);
+  const phaseLine = phase.early
+    ? `지금은 ${phase.stage}단계이고 만난 지 ${phase.days}일째인 관계 초반이라 상대가 부르면 답할 수 있는 시간이 중요하다. 운전 출퇴근처럼 정해져 있어 뺄 수 없는 일이 있으면 하루 ${caps.longMax}개까지 두고, 쉬는 날에는 그것도 없어도 된다. 영화관·공연처럼 오래 묶이는 여가는 상대가 먼저 권한 것이 아니면 초반에는 각본에 넣지 않는다. 생활을 없애라는 뜻은 아니고, 하던 일은 그대로 두되 폰을 볼 수 있는 방식으로 한다.`
+    : `${phase.stage}단계이고 만난 지 ${phase.days}일째라 관계가 쌓였으니, 상대가 그리워할 틈이 생기도록 가끔 자리를 비우는 날이 있어도 된다. 그래도 매일 두지는 않고, 하나도 없는 날과 ${caps.longMax}개까지 있는 날이 섞이게 한다. 영화관·공연처럼 오래 묶이는 확정 일정은 실제 길이대로 둔다.`;
+  const exempt = phase.early
+    ? "시험·면접·발표처럼 자리를 뜰 수 없는 공적 일만"
+    : "시험·면접·발표처럼 자리를 뜰 수 없는 공적 일과 확정 일정의 영화관·공연만";
+  return [
+    `- 하루의 기본은 답할 수 있는 상태다. 근무·이동·집안일·식사·장보기·집에서 하는 여가는 폰을 곁에 두고 하는 일이라 "intermittent"이고, "unavailable"은 손이나 정신이 진짜로 묶인 때만이다. 저녁이 즉답으로만 이어지는 것을 피하려고 불가 구간을 만들지 않는다. 저녁의 변화는 "intermittent"로 준다.`,
+    `- ${AWAY_MIN_BLOCK_MIN}분 이상 자리를 비우는 불가 구간(잠 제외)은 나가기 전에 상대에게 알리고 가는 자리라, 없는 날이 기본이다. ${phaseLine}`,
+    `- 긴 불가 구간이라도 한 구간은 ${caps.longBlockMaxMin}분을 넘기지 않는다. 1시간짜리 운동이나 수업처럼 더 길게 손이 묶이는 일은 중간에 폰을 보는 틈("intermittent", ${caps.gapMin}분 이상)을 넣어 두 구간으로 나눈다. ${exempt} 실제 길이대로 둔다.`,
+    `- ${AWAY_MIN_BLOCK_MIN}분 미만의 짧은 불가 구간(씻기·운전·통화, 나눈 운동의 조각)은 알리지 않고 다녀오는 자리라, 하루 ${caps.shortMax}개, 합쳐서 ${caps.shortTotalMaxMin}분까지만 둔다.`,
+    `- 불가 구간끼리 붙이지 않는다. 짧든 길든 두 불가 구간 사이에는 답할 수 있는 구간("instant" 또는 "intermittent")을 최소 ${caps.gapMin}분 둔다. 운동 뒤에 귀가 운전과 씻기를 바로 이어 붙이면 상대는 알린 시간보다 훨씬 오래 기다린다. 도착해서 정리하는 시간을 사이에 넣는다.`,
+  ].join("\n");
+};
+
 // trace.ts가 슬랙에 각본 생성 프롬프트를 올릴 때도 이 시스템 문장을 함께 보여준다.
 export const PLAN_SYSTEM = `너는 한 인물의 하루 흐름을 짜는 작가다. 과장 없이, 실제 그 직업과 성격의 사람이 보낼 법한 평범한 하루를 시간 블록으로 만든다. 루틴이 기본이고 변화는 잔잔하게 준다.`;
 
@@ -204,6 +399,7 @@ const planPrompt = (
   diary: string,
   seed: DaySeed | undefined,
   lastNight: NightSleep | null,
+  phase: AwayPhase,
 ): string => `아래 인물의 ${date} (${label}) 하루를 시간 블록으로 짜줘.
 
 [인물 — 같은 항목이 두 줄이면 아래쪽이 최신]
@@ -240,13 +436,11 @@ ${diary || "(없음)"}
   - 닥쳐야 아는 일 (advance_known=false): 오후에 갑자기 바빠짐, 급한 업무, 예정에 없던 호출, 갑자기 마트에 감, 친구의 급한 전화 같은 그때 가서야 겪는 일 — 이런 갑작스러운 일을 하루 한둘은 자연스럽게 껴 넣는다.
   - 그래도 아무 이벤트 없는 평범한 날도 가끔은 자연스럽다.
 - 상대(메시지를 주고받는 사람)와는 메시지로만 이어진 사이라 실제로 만날 수 없다. 상대와 만나는 블록(같이 밥·영화·산책, 상대 집 방문, 상대가 오는 자리)은 만들지 않는다. 상대가 하루에 들어오는 자리는 메시지를 보내거나 답하는 시간뿐이다. 위 [이 날의 확정 일정]에 상대와 만나는 줄이 있으면 그건 대화에서 잡힌 것이니 그 줄만 따르고, 여기서 새로 지어내지 않는다.
-- 하루 곳곳에 '자리를 비우는' 불가 구간을 자연스럽게 넣는다: 운동(한 시간쯤), 씻기, 저녁 준비·식사, 장보기/마트, 집중 업무, 통화. 사람은 늘 답할 수 있는 게 아니다 — 특히 저녁 시간이 즉답으로만 쭉 이어지지 않게 unavailable·intermittent를 섞는다. 이 중 일부는 미리 아는 일(advance_known=true, 예: 정해둔 운동)이고 일부는 갑작스러운 것(false, 예: 급하게 마트 감·집안일)이다.
-- **${AWAY_MIN_BLOCK_MIN}분 넘게 자리를 비우는 불가 구간(잠 제외)은 하루 ${AWAY_DAILY_MAX}개까지.** 나가기 전에 상대에게 알리고 가는 자리라, 이보다 많으면 하루 종일 자리를 비운다는 말만 주고받게 된다. 더 넣고 싶으면 짧게(${AWAY_MIN_BLOCK_MIN}분 미만) 두거나 틈틈이 폰을 볼 수 있는 일로 바꾼다.
-- **${AWAY_MIN_BLOCK_MIN}분 미만의 짧은 불가 구간을 연달아 붙이지 않는다.** 짧은 것은 알리지 않고 다녀오는 자리라, 둘이 붙으면 상대는 이유를 모른 채 그 합만큼 기다린다. 사이에 답할 수 있는 구간("instant" 또는 "intermittent")을 최소 5분 넣는다.
+${awayRuleLines(phase)}
 - 각 블록의 responsiveness = 그 시간에 메신저 답장을 얼마나 할 수 있는가. 값은 셋 중 하나:
   - "instant"(즉답 — 쉬는 중·대화 시간) / "intermittent"(틈틈이 — 근무·이동·집안일·장보기처럼 틈틈이 볼 수 있음) / "unavailable"(불가 — 손이나 정신이 묶여 못 봄).
   - "unavailable"은 손이나 정신이 진짜로 묶인 때만: 통화(전화 받는 중)·운전·공식 회의·운동·씻기·영화관·잠.
-  - **업무로 자리를 비우는 공적 "unavailable"(회의·시험·발표·급한 처리 등)는 한 블록 최대 1시간.** 더 길 일이면 블록을 쪼개 사이에 "intermittent"(잠깐 폰 보는 틈) 구간을 넣는다 — 업무로 한 시간 넘게 통째로 사라지지 않게. (원래 틈틈이 폰을 볼 수 있는 일은 해당 없음.)
+  - **공적 "unavailable"은 회의·시험·면접·발표처럼 자리를 뜰 수 없는 일에만 쓴다.** 회의·급한 처리처럼 쉬는 틈을 낼 수 있는 일은 한 블록 최대 1시간이고, 더 길면 블록을 쪼개 사이에 "intermittent"(잠깐 폰 보는 틈) 구간을 넣는다. 시험·면접·발표는 실제 길이대로 둔다. (원래 틈틈이 폰을 볼 수 있는 업무는 해당 없음.)
   - **성격이 다른 일을 한 "unavailable" 블록으로 묶지 않는다.** 두 일 사이에 폰을 볼 수 있는 시간이 있으면 블록을 나누고 그 사이를 "instant"로 둔다. 예를 들어 퇴근 운전과 집에 와서 씻기는 사이에 도착해서 짐을 내려놓는 시간이 있으므로 "퇴근 운전"(unavailable) / "집 도착해서 정리"(instant, 10분쯤) / "씻기"(unavailable) 세 블록이다. 통째로 묶으면 상대가 "집 도착하면 연락 줘"라고 해도 답할 시간이 하루 안에 없어진다. 활동 이름에 '~하고 ~하기'처럼 두 일이 들어가면 나눠야 하는 신호다.
   - **사교 자리(친구 약속·회식·모임)는 "unavailable"이 아니라 "intermittent"다** — 사람들과 있어도 폰은 틈틈이 본다. 다만 회식은 텀이 더 길고(자리를 오래 못 뜸), 친구 약속은 대체로 틈틈이 보지만 가끔 텀이 길어진다.
   - **집에서 하는 여가는 "unavailable"이 아니라 "intermittent"다** — 집에서 영화·드라마(OTT)·독서·집안일·가계부는 폰을 곁에 두고 하므로 틈틈이 답할 수 있다. 영화라도 '영화관에 감'만 "unavailable"이고 '집에서 봄'은 "intermittent".
@@ -269,7 +463,7 @@ ${diary || "(없음)"}
   - 어느 쪽도 아닌 블록(잠·식사·이동·그날 갑자기 생긴 일)에는 두 값을 적지 않는다.
 
 [JSON 형식 — 이 구조 그대로]
-{"date":"${date}","blocks":[{"start":"05:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"09:00","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"unavailable","advance_known":false,"category":"official"},{"start":"19:00","end":"20:00","activity":"운동","responsiveness":"unavailable","advance_known":true,"category":"personal","source":"routine"},{"start":"22:00","end":"23:00","activity":"책 이어 읽기","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"ongoing","source_id":61},{"start":"24:10","end":"29:00","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"}]}
+{"date":"${date}","blocks":[{"start":"05:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"08:40","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"intermittent","advance_known":false,"category":"official"},{"start":"19:00","end":"19:40","activity":"저녁 산책","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"routine"},{"start":"20:00","end":"20:20","activity":"씻기","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"22:00","end":"23:00","activity":"책 이어 읽기","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"ongoing","source_id":61},{"start":"24:10","end":"29:00","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"}]}
 위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다. source_id의 12와 61도 예시이니, 실제 번호는 위 [이 날의 확정 일정]과 [진행 중인 일]에 적힌 것을 쓴다.`;
 
 // 행 번호로 쓸 수 있는 값인가. 생성이 숫자를 따옴표에 넣어 답하는 일이 있어 문자열도 받는다.
@@ -376,6 +570,7 @@ export const buildPlanPrompt = (characterId: number, date: string): string => {
     lastDiary,
     seed,
     lastNightSleep(characterId, date),
+    awayPhaseOf(characterId, date),
   );
 };
 
@@ -392,7 +587,9 @@ export const lastNightSleep = (
   if (raw) {
     try {
       const plan = JSON.parse(raw) as DayPlan;
-      const night = plan.blocks.find((b) => isSleeping(b) && b.start >= "20:00");
+      const night = plan.blocks.find(
+        (b) => isSleeping(b) && b.start >= "20:00",
+      );
       sleepStart = night?.start ?? null;
     } catch {
       sleepStart = null;
@@ -430,17 +627,36 @@ export const ensureTodayPlan = async (
   await ensureRhythmRunway(characterId, date).catch((e) =>
     console.error("[day-plan] rhythm runway error:", e),
   );
-  const plan = await chatJson<DayPlan>(
-    PLAN_SYSTEM,
-    buildPlanPrompt(characterId, date),
-    3000,
-    config.modelDeep,
-    { purpose: "day_plan", characterId },
-  );
+  const prompt = buildPlanPrompt(characterId, date);
+  const generate = async (user: string): Promise<DayPlan> =>
+    normalizePlan(
+      await chatJson<DayPlan>(PLAN_SYSTEM, user, 3000, config.modelDeep, {
+        purpose: "day_plan",
+        characterId,
+      }),
+    );
+  let plan = await generate(prompt);
+  let check = checkPlanAway(characterId, date, plan);
+  // 자리 비움 상한을 어겼으면 어긴 줄을 붙여 한 번 더 만든다. 두 번째도 어기면 덜 어긴 쪽을
+  // 저장하고 로그만 남긴다 — 각본이 없는 것보다 낫고, 아침 게시가 어긴 줄을 보인다.
+  if (check.violations.length) {
+    const retry = await generate(
+      `${prompt}\n\n[앞서 만든 각본이 어긴 것. 이번에는 지킨다]\n${check.violations.map((v) => `- ${v}`).join("\n")}`,
+    );
+    const again = checkPlanAway(characterId, date, retry);
+    if (again.violations.length < check.violations.length) {
+      plan = retry;
+      check = again;
+    }
+  }
+  if (check.violations.length)
+    console.warn(
+      `[day-plan] 자리 비움 상한 어김 (캐릭터 ${characterId}, ${date}): ${check.violations.join(" / ")}`,
+    );
   saveDayPlan(
     characterId,
     date,
-    JSON.stringify(normalizePlan(plan)),
+    JSON.stringify(plan),
     nightly ? "nightly" : "ondemand",
   );
 };

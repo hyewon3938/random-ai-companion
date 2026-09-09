@@ -3,6 +3,9 @@
 // 1분 틱이 부른다. 오늘 각본이 있으면 각본 한 장과 생성 프롬프트를 스레드로 쌓고, 없으면
 // 무응답 관계인지 새벽 정리가 안 돈 것인지 가려 한 줄만 남긴다. 게시함 키로 하루에 한 번만
 // 쌓이고, 슬랙으로 내보내는 일은 trace.ts의 틱이 맡는다.
+//
+// 머리에는 자리 비움 셈 한 줄이 붙는다. 긴 불가 구간과 짧은 불가 구간의 개수·합을 그날
+// 관계 국면의 상한과 나란히 적고, 어긴 것이 있으면 그 줄도 올린다(이슈 #335).
 
 import {
   db,
@@ -15,9 +18,12 @@ import {
   type DaySeed,
 } from "../db.js";
 import {
+  awaySummary,
   blockCategory,
   buildPlanPrompt,
+  checkPlanAway,
   isSleeping,
+  normalizePlan,
   PLAN_SYSTEM,
   type DayPlan,
   type PlanBlock,
@@ -68,7 +74,8 @@ const seedText = (seed: DaySeed | undefined): string =>
     : "없음";
 
 // 각본 생성 프롬프트는 고정 지시문 사이에 DB 값이 들어가는 한 장짜리 틀이라, 규칙이 시작하는
-// 자리에서 잘라 그날 데이터와 매일 같은 규칙을 따로 올린다(day-plan.ts planPrompt와 짝).
+// 자리에서 잘라 그날 데이터와 규칙을 따로 올린다(day-plan.ts planPrompt와 짝). 규칙 쪽도
+// 자리 비움 상한은 관계 국면으로 숫자가 바뀐다.
 const RULE_MARK = "[컨디션→기상→활동을 하나로 잇기]";
 
 export const promptSections = (prompt: string): { label: string; body: string }[] => {
@@ -81,7 +88,8 @@ export const promptSections = (prompt: string): { label: string; body: string }[
       body: prompt.slice(0, at).trimEnd(),
     },
     {
-      label: "각본 생성 프롬프트 2 — 고정 규칙 (매일 같음)",
+      label:
+        "각본 생성 프롬프트 2 — 규칙 (자리 비움 상한만 관계 국면으로 바뀌고 나머지는 매일 같음)",
       body: prompt.slice(at),
     },
   ];
@@ -112,9 +120,14 @@ const enqueuePlanPost = (c: CharacterRow, date: string, raw: string): void => {
 
   const seed = getDaySeed(c.id, date);
   const surprise = plan.blocks.some((b) => !b.advance_known);
+  const away = checkPlanAway(c.id, date, normalizePlan(plan));
   const head = [
     `:spiral_calendar_pad: *${dateLabel(date)} 하루 각본* — ${madeByLabel}`,
     `컨디션 시드: ${esc(seedText(seed))}`,
+    esc(awaySummary(away)),
+    ...(away.violations.length
+      ? [`:warning: 상한 어김: ${esc(away.violations.join(" / "))}`]
+      : []),
     "```",
     ...plan.blocks.map(blockLine),
     "```",
