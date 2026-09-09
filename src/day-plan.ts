@@ -192,12 +192,18 @@ export const awayCapsOf = (phase: AwayPhase): AwayCaps => ({
   gapMin: AWAY_GAP_MIN,
 });
 
-/** 길이 상한을 받지 않는 불가 구간. 시험·면접·발표처럼 자리를 뜰 수 없는 공적 일은 언제나
+/** 자리를 뜰 수 없는 공적 일의 이름. 회의는 쉬는 틈을 낼 수 있어 공적이어도 길이 상한을 받고,
+ * 시험 공부·발표 준비처럼 그 일을 준비하는 시간도 폰을 볼 틈이 있어 예외가 아니다. */
+const CANT_LEAVE_HINT =
+  /(?:시험|면접|발표|프레젠테이션|심사)(?!\s*(?:공부|준비|연습|자료))/;
+
+/** 길이 상한을 받지 않는 불가 구간. 시험·면접·발표처럼 자리를 뜰 수 없는 일은 언제나
  * 실제 길이대로 두고, 영화관·공연처럼 확정 일정에서 나온 구간은 관계가 쌓인 뒤에만 그렇다.
  * 초반에는 상대가 먼저 권한 것이 아니면 그런 일정을 각본에 넣지 않는 것이 규칙이라 상한을 받는다.
  * 개수 상한은 예외 없이 다 센다. */
 export const awayLengthExempt = (b: PlanBlock, phase: AwayPhase): boolean =>
-  blockCategory(b) === "official" || (!phase.early && b.source === "schedule");
+  CANT_LEAVE_HINT.test(b.activity) ||
+  (!phase.early && b.source === "schedule");
 
 /** 각본 하나의 자리 비움 셈. 잠은 빼고 센다. longCapped는 길이 상한을 받는 긴 구간의 이름과
  * 길이, longExempt는 상한을 안 받는 긴 구간의 수다. minGapMin은 불가 구간 사이에 있는 답할 수
@@ -231,17 +237,20 @@ export const awayStats = (plan: DayPlan, phase: AwayPhase): AwayStats => {
     awayMin: 0,
     minGapMin: null,
   };
-  // 마지막 불가 구간 뒤로 쌓인 답할 수 있는 시간. 아직 불가 구간을 못 만났으면 null.
-  let gap: number | null = null;
-  for (const b of plan.blocks) {
+  // 마지막 불가 구간이 끝난 시각. 아직 불가 구간을 못 만났으면 null. 블록으로 안 덮인 빈 시간도
+  // 답할 수 있는 시간이라 블록 길이를 더하지 않고 시계로 잰다. 블록은 시작 시각순으로 본다.
+  let lastAwayEnd: number | null = null;
+  const blocks = [...plan.blocks].sort(
+    (a, b) => minutesOf(a.start) - minutesOf(b.start),
+  );
+  for (const b of blocks) {
+    if (!isAwayUnavail(b)) continue;
     const dur = durationOf(b);
-    if (!isAwayUnavail(b)) {
-      if (gap !== null) gap += dur;
-      continue;
-    }
-    if (gap !== null)
+    if (lastAwayEnd !== null) {
+      const gap = Math.max(0, minutesOf(b.start) - lastAwayEnd);
       s.minGapMin = s.minGapMin === null ? gap : Math.min(s.minGapMin, gap);
-    gap = 0;
+    }
+    lastAwayEnd = Math.max(lastAwayEnd ?? 0, minutesOf(b.end));
     s.awayMin += dur;
     if (dur >= AWAY_MIN_BLOCK_MIN) {
       s.long += 1;
@@ -440,7 +449,7 @@ ${awayRuleLines(phase)}
 - 각 블록의 responsiveness = 그 시간에 메신저 답장을 얼마나 할 수 있는가. 값은 셋 중 하나:
   - "instant"(즉답 — 쉬는 중·대화 시간) / "intermittent"(틈틈이 — 근무·이동·집안일·장보기처럼 틈틈이 볼 수 있음) / "unavailable"(불가 — 손이나 정신이 묶여 못 봄).
   - "unavailable"은 손이나 정신이 진짜로 묶인 때만: 통화(전화 받는 중)·운전·공식 회의·운동·씻기·영화관·잠.
-  - **공적 "unavailable"은 회의·시험·면접·발표처럼 자리를 뜰 수 없는 일에만 쓴다.** 회의·급한 처리처럼 쉬는 틈을 낼 수 있는 일은 한 블록 최대 1시간이고, 더 길면 블록을 쪼개 사이에 "intermittent"(잠깐 폰 보는 틈) 구간을 넣는다. 시험·면접·발표는 실제 길이대로 둔다. (원래 틈틈이 폰을 볼 수 있는 업무는 해당 없음.)
+  - **공적 "unavailable"도 같은 길이 규칙을 따른다.** 회의·급한 처리처럼 쉬는 틈을 낼 수 있는 일은 ${AWAY_BLOCK_MAX_MIN}분을 넘기면 블록을 쪼개 사이에 "intermittent"(잠깐 폰 보는 틈) 구간을 넣고, 시험·면접·발표처럼 자리를 뜰 수 없는 일만 실제 길이대로 둔다. (원래 틈틈이 폰을 볼 수 있는 업무는 해당 없음.)
   - **성격이 다른 일을 한 "unavailable" 블록으로 묶지 않는다.** 두 일 사이에 폰을 볼 수 있는 시간이 있으면 블록을 나누고 그 사이를 "instant"로 둔다. 예를 들어 퇴근 운전과 집에 와서 씻기는 사이에 도착해서 짐을 내려놓는 시간이 있으므로 "퇴근 운전"(unavailable) / "집 도착해서 정리"(instant, 10분쯤) / "씻기"(unavailable) 세 블록이다. 통째로 묶으면 상대가 "집 도착하면 연락 줘"라고 해도 답할 시간이 하루 안에 없어진다. 활동 이름에 '~하고 ~하기'처럼 두 일이 들어가면 나눠야 하는 신호다.
   - **사교 자리(친구 약속·회식·모임)는 "unavailable"이 아니라 "intermittent"다** — 사람들과 있어도 폰은 틈틈이 본다. 다만 회식은 텀이 더 길고(자리를 오래 못 뜸), 친구 약속은 대체로 틈틈이 보지만 가끔 텀이 길어진다.
   - **집에서 하는 여가는 "unavailable"이 아니라 "intermittent"다** — 집에서 영화·드라마(OTT)·독서·집안일·가계부는 폰을 곁에 두고 하므로 틈틈이 답할 수 있다. 영화라도 '영화관에 감'만 "unavailable"이고 '집에서 봄'은 "intermittent".
@@ -640,13 +649,20 @@ export const ensureTodayPlan = async (
   // 자리 비움 상한을 어겼으면 어긴 줄을 붙여 한 번 더 만든다. 두 번째도 어기면 덜 어긴 쪽을
   // 저장하고 로그만 남긴다 — 각본이 없는 것보다 낫고, 아침 게시가 어긴 줄을 보인다.
   if (check.violations.length) {
-    const retry = await generate(
-      `${prompt}\n\n[앞서 만든 각본이 어긴 것. 이번에는 지킨다]\n${check.violations.map((v) => `- ${v}`).join("\n")}`,
-    );
-    const again = checkPlanAway(characterId, date, retry);
-    if (again.violations.length < check.violations.length) {
-      plan = retry;
-      check = again;
+    try {
+      const retry = await generate(
+        `${prompt}\n\n[앞서 만든 각본이 어긴 것. 이번에는 지킨다]\n${check.violations.map((v) => `- ${v}`).join("\n")}`,
+      );
+      const again = checkPlanAway(characterId, date, retry);
+      if (again.violations.length < check.violations.length) {
+        plan = retry;
+        check = again;
+      }
+    } catch (e) {
+      // 다시 만들기가 실패해도 첫 각본은 있다. 그걸 저장하고 실패만 남긴다.
+      console.warn(
+        `[day-plan] 각본 다시 만들기 실패, 첫 각본을 저장한다 (캐릭터 ${characterId}, ${date}): ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }
   if (check.violations.length)

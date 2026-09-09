@@ -122,28 +122,41 @@ test("긴 구간 개수 상한만 국면으로 다르고, 한 구간 길이·짧
 
 // ── awayLengthExempt / awayStats ──────────────────────────────────────────
 
-test("공적 구간은 언제나 길이 상한을 안 받고, 확정 일정 구간은 관계가 쌓인 뒤에만 안 받는다", () => {
+test("시험·면접·발표만 언제나 길이 상한을 안 받고, 확정 일정 구간은 관계가 쌓인 뒤에만 안 받는다", () => {
   const exam = block("13:00", "16:00", "자격증 시험", "unavailable", {
     category: "official",
   });
+  const interview = block("14:00", "15:00", "면접", "unavailable");
   const movie = block("19:00", "21:30", "영화관", "unavailable", {
     source: "schedule",
     source_id: 7,
   });
   const gym = block("19:00", "20:00", "헬스", "unavailable");
-  assert.equal(awayLengthExempt(exam, EARLY), true);
-  assert.equal(awayLengthExempt(exam, LATER), true);
+  // 회의는 공적이어도 쉬는 틈을 낼 수 있고, 시험 공부·발표 준비는 그 일 자체가 아니다.
+  const meeting = block("10:00", "11:00", "업무 회의", "unavailable", {
+    category: "official",
+  });
+  const study = block("20:00", "22:00", "시험 공부", "unavailable", {
+    category: "official",
+  });
+  const prep = block("20:00", "21:00", "발표 자료 만들기", "unavailable");
+  for (const phase of [EARLY, LATER]) {
+    assert.equal(awayLengthExempt(exam, phase), true);
+    assert.equal(awayLengthExempt(interview, phase), true);
+    assert.equal(awayLengthExempt(gym, phase), false);
+    assert.equal(awayLengthExempt(meeting, phase), false);
+    assert.equal(awayLengthExempt(study, phase), false);
+    assert.equal(awayLengthExempt(prep, phase), false);
+  }
   assert.equal(awayLengthExempt(movie, EARLY), false);
   assert.equal(awayLengthExempt(movie, LATER), true);
-  assert.equal(awayLengthExempt(gym, EARLY), false);
-  assert.equal(awayLengthExempt(gym, LATER), false);
 });
 
 test("잠은 세지 않고, 긴 구간과 짧은 구간을 나눠 세며 길이 상한을 받는 구간만 이름을 남긴다", () => {
   const s = awayStats(
     plan(
       block("05:00", "07:00", "잠", "unavailable"),
-      block("08:00", "09:00", "업무 회의", "unavailable", {
+      block("08:00", "09:00", "자격증 시험", "unavailable", {
         category: "official",
       }),
       block("09:00", "12:00", "근무", "intermittent"),
@@ -161,8 +174,29 @@ test("잠은 세지 않고, 긴 구간과 짧은 구간을 나눠 세며 길이 
   assert.equal(s.short, 1);
   assert.equal(s.shortMin, 20);
   assert.equal(s.awayMin, 120);
-  // 헬스와 씻기 사이 정리 20분이 가장 짧은 간격이다(빈 시간은 블록이 아니라 안 센다).
+  // 헬스와 씻기 사이 정리 20분이 가장 짧은 간격이다. 시험과 헬스 사이는 블록이 없는 시간까지 시계로 재서 600분이다.
   assert.equal(s.minGapMin, 20);
+});
+
+test("공적 회의도 길이 상한을 받는 구간으로 세고, 블록이 없는 빈 시간도 간격으로 센다", () => {
+  const s = awayStats(
+    plan(
+      // 시작 시각순이 아니어도 시계로 잰다.
+      block("20:00", "20:20", "씻기", "unavailable"),
+      block("08:00", "09:00", "업무 회의", "unavailable", {
+        category: "official",
+      }),
+    ),
+    LATER,
+  );
+  assert.equal(s.long, 1);
+  assert.equal(s.longExempt, 0);
+  assert.deepEqual(s.longCapped, [{ activity: "업무 회의", min: 60 }]);
+  assert.equal(s.short, 1);
+  assert.equal(s.minGapMin, 660);
+  assert.deepEqual(awayViolations(s, awayCapsOf(LATER)), [
+    `한 구간이 ${AWAY_BLOCK_MAX_MIN}분을 넘는 불가 구간: 업무 회의 60분 (중간에 폰을 보는 틈을 넣어 나눈다)`,
+  ]);
 });
 
 test("불가 구간이 하나 이하면 간격은 null이다", () => {
