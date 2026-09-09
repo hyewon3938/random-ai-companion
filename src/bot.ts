@@ -1068,6 +1068,8 @@ const respond = async (
       kind,
       // 발송·폐기 결과를 이 답장을 만든 호출의 트레이스에 잇는다.
       callId: reply.callId,
+      // 쓴 수·오늘 일정 말함 — 발송할 때 대화 기록 행의 meta_json으로 옮겨 적는다.
+      replyMeta: reply.replyMeta,
     });
     reply.attach({ sendAt: scheduled.sendAt });
     // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
@@ -1115,12 +1117,27 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
     kstStamp(),
     {
       kind,
+      // 답장 행의 meta_json에 실어 온 관계 값(move·told_plan)을 기록 행으로 옮긴다.
+      ...(kind === "reply" ? parseReplyMeta(row.meta_json) : {}),
       ...(sent.length < bubbles.length
         ? { partial: `${sent.length}/${bubbles.length}` }
         : {}),
     },
   );
 });
+
+/** 예약 답장 행의 meta_json을 기록 행에 옮길 모양으로. 없거나 깨졌으면 빈 객체. */
+const parseReplyMeta = (raw: string | null): Record<string, unknown> => {
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw) as unknown;
+    return v && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+};
 
 // 구간 끝 표시가 울리는 자리 — 답장 불가 구간이 끝났다. 갈래는 넷:
 // ① 그 사이 온 메시지가 있으면 몰아 답장 한 번 ("방금 끝났고 이제 봤다"가 사실인 시점에 만든다).
@@ -1188,6 +1205,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
       {
         kind: "reply",
         gathered: meta.blockStart ?? true,
+        ...(reply.replyMeta ?? {}),
         ...(sent.length < bubbles.length
           ? { partial: `${sent.length}/${bubbles.length}` }
           : {}),
@@ -1415,6 +1433,7 @@ setPromiseHandler(async (row: PendingReplyRow) => {
       {
         kind: "reply",
         promised: true,
+        ...(reply.replyMeta ?? {}),
         ...(sent.length < bubbles.length
           ? { partial: `${sent.length}/${bubbles.length}` }
           : {}),

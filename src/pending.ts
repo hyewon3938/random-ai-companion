@@ -309,11 +309,17 @@ export const schedulePendingReply = (p: {
   kind: string;
   /** 이 답장을 만든 모델 호출 번호. 발송·폐기 결과를 그 호출의 트레이스에 잇는다. */
   callId?: number | null;
+  /** 답장 신호에서 나온 관계 값(move·told_plan). 발송할 때 대화 기록 행의 meta_json에 옮겨 적는다. */
+  replyMeta?: Record<string, unknown> | null;
 }): { id: number; sendAt: string } => {
   const sendAt = stampAfter(p.waitMs);
   const createdAt = stamp();
-  // 답장 행은 meta_json을 쓰지 않는다 — 깨우기·약속 행만 자기 근거를 싣는다.
-  const metaJson = null;
+  // 답장 행의 meta_json은 관계 값(move·told_plan)만 싣는다 — 깨우기·약속 행처럼 자기 근거를
+  // 싣는 자리가 아니라, 발송 뒤 대화 기록 행으로 옮겨 적을 값을 잠시 들고 가는 자리다.
+  const metaJson =
+    p.replyMeta && Object.keys(p.replyMeta).length
+      ? JSON.stringify(p.replyMeta)
+      : null;
   const id = insertPendingReply({
     chatId: p.chatId,
     characterId: p.characterId,

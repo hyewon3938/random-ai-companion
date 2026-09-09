@@ -10,20 +10,31 @@
 // 풀렸다는 표시는 따로 없다 — 상태가 바뀌면 새 값이 앞 값을 덮는다. 바뀐 턴에는 판정 직전의
 // 값(prev)도 돌려줘 슬랙 답장 게시가 이전 → 지금으로 적는다(이슈 #312). 주제 고르기(tag-pick)와
 // 나란히 돌려 답장이 늦어지지 않게 한다.
+//
+// 같은 호출이 상대가 얼마나 열렸는지도 판정한다(관계 설계 §6, #353) — 자기 얘기를 꺼냈는지,
+// 캐릭터의 근황을 물었는지, 호감을 말했는지, 직전에 캐릭터가 쓴 수를 어떻게 받았는지. 이 넷은
+// 상태와 달리 바뀌었는지와 상관없이 턴마다 나오고, reply-compose가 relationship_signals에
+// 1행으로 적는다. 읽는 자리(readOpenSignals)를 상태 판정과 갈라 둔 것은 상태 쪽 검사와 호출부가
+// 그대로 남게 하려는 것이다 — 열림 칸이 빠진 답도 상태 판정은 그대로 쓴다.
 
 import { chat, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
 import {
   getRecentMessages,
   getRelationship,
+  lastAssistantMessage,
   setCallContext,
   type MessageRow,
   type RelationshipRow,
   type UserStateValue,
 } from "./db.js";
 import {
+  MOVE_NAME,
+  MOVE_REACTION_NAME,
   USER_STATE_CAUSE_NAME,
   USER_STATE_TONE_NAME,
+  type Move,
+  type MoveReaction,
   type UserStateCause,
   type UserStateTone,
 } from "./labels.js";
@@ -40,6 +51,18 @@ export interface UserStateVerdict {
   callId: number | null;
   /** changed일 때 판정 직전의 값(한 줄 이름표). 없던 상태에서 생겼으면 null. */
   prev: string | null;
+  /** 이 턴의 열림 4항목. 호출을 안 했거나 답에 이 칸이 없으면 빠진다. */
+  signals?: OpenSignals;
+}
+
+/** 상대가 얼마나 열렸는지 — 턴마다 relationship_signals에 1행으로 적히는 값. */
+export interface OpenSignals {
+  openedSelf: boolean;
+  askedAboutChar: boolean;
+  saidAffection: boolean;
+  /** 직전에 캐릭터가 쓴 수. 없으면 null이고 그때 반응은 none이다. */
+  prevMove: Move | null;
+  moveReaction: MoveReaction;
 }
 
 const SYSTEM = `너는 두 사람의 메시지 대화를 옆에서 읽는 관찰자다. 캐릭터가 아니라 제3자다.
@@ -53,9 +76,15 @@ const SYSTEM = `너는 두 사람의 메시지 대화를 옆에서 읽는 관찰
 - 지난 판정과 실제로 같은 상태면 changed를 false로 하고 나머지는 비운다. 상태가 풀렸거나 다른 상태로 옮겨 갔으면 changed를 true로 하고 새 값을 적는다. 풀렸는지는 상대가 그렇게 말했거나 말투가 분명히 달라졌을 때만 인정한다 — 캐릭터가 사과했다고 풀린 것은 아니다.
 - 상대 말이 없거나 판정할 근거가 없으면 changed를 false로 한다.
 
-JSON 한 줄로만 답한다:
-{"changed":true,"state":"...","cause":"char|other","tone":"good|neutral|bad","since":"HH:MM"}
-또는 {"changed":false}`;
+열림 판정 — 캐릭터의 마지막 말 뒤에 온 상대의 말만 보고, changed와 상관없이 늘 적는다:
+- opened_self: 상대가 묻지 않았는데 자기 얘기(자기 하루·기분·과거·고민)를 꺼냈으면 true.
+- asked_about_char: 상대가 캐릭터의 근황이나 상태를 물었으면 true. 뭐 해?처럼 지금 하는 일을 묻는 것도 포함한다.
+- said_affection: 상대가 캐릭터에게 호감을 말로 드러냈으면 true(좋다·보고 싶다·기다렸다·생각났다 같은 말).
+- move_reaction: [직전에 캐릭터가 쓴 수]가 있을 때, 상대가 그 수를 받아 반응했으면 accepted, 답하지 않고 다른 얘기로 넘어갔으면 ignored, 밀어내거나 싫다고 했으면 rejected. 수가 없었으면 none.
+
+JSON 한 줄로만 답한다. 열림 4항목은 두 모양 모두에 넣는다:
+{"changed":true,"state":"...","cause":"char|other","tone":"good|neutral|bad","since":"HH:MM","opened_self":true,"asked_about_char":false,"said_affection":false,"move_reaction":"none"}
+또는 {"changed":false,"opened_self":false,"asked_about_char":true,"said_affection":false,"move_reaction":"accepted"}`;
 
 const CAUSES: readonly UserStateCause[] = ["char", "other"];
 const TONES: readonly UserStateTone[] = ["good", "neutral", "bad"];
@@ -121,11 +150,8 @@ const sinceOf = (hhmm: string, rows: MessageRow[]): string | null => {
   return `${last.sent_at.slice(0, 10)} ${clockLabel(want)}:00`;
 };
 
-/** 모델 답을 판정으로 읽는다. 형식이 깨졌으면 null. rows는 since를 시각으로 되돌리는 데 쓴다. */
-export const parseUserStateVerdict = (
-  raw: string,
-  rows: MessageRow[],
-): { changed: boolean; state: UserStateValue | null } | null => {
+/** 모델 답에서 JSON 객체 하나를 꺼낸다. 코드펜스는 벗기고, 객체가 아니면 null. */
+const parseObject = (raw: string): Record<string, unknown> | null => {
   const text = raw
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
@@ -140,7 +166,16 @@ export const parseUserStateVerdict = (
     return null;
   }
   if (!o || typeof o !== "object") return null;
-  const v = o as Record<string, unknown>;
+  return o as Record<string, unknown>;
+};
+
+/** 모델 답을 판정으로 읽는다. 형식이 깨졌으면 null. rows는 since를 시각으로 되돌리는 데 쓴다. */
+export const parseUserStateVerdict = (
+  raw: string,
+  rows: MessageRow[],
+): { changed: boolean; state: UserStateValue | null } | null => {
+  const v = parseObject(raw);
+  if (!v) return null;
   if (v.changed !== true) return { changed: false, state: null };
   const state = typeof v.state === "string" ? v.state.trim() : "";
   const cause = CAUSES.find((c) => c === v.cause);
@@ -152,6 +187,51 @@ export const parseUserStateVerdict = (
     null;
   if (!since) return null;
   return { changed: true, state: { state, cause, tone, since } };
+};
+
+const asFlag = (x: unknown): boolean | null =>
+  x === true || x === "true" ? true : x === false || x === "false" ? false : null;
+
+/**
+ * 같은 답에서 열림 4항목을 읽는다. 세 예/아니오 가운데 하나라도 없으면 null — 그 턴은 행을 안 적는다.
+ * 직전에 쓴 수가 없으면 반응은 늘 none이고, 수가 있었는데 반응 칸이 목록 밖이면 null이다.
+ */
+export const readOpenSignals = (
+  raw: string,
+  prevMove: Move | null,
+): OpenSignals | null => {
+  const v = parseObject(raw);
+  if (!v) return null;
+  const openedSelf = asFlag(v.opened_self);
+  const askedAboutChar = asFlag(v.asked_about_char);
+  const saidAffection = asFlag(v.said_affection);
+  if (openedSelf === null || askedAboutChar === null || saidAffection === null)
+    return null;
+  let moveReaction: MoveReaction = "none";
+  if (prevMove) {
+    const r = v.move_reaction;
+    if (typeof r !== "string" || !(r in MOVE_REACTION_NAME)) return null;
+    moveReaction = r as MoveReaction;
+  }
+  return { openedSelf, askedAboutChar, saidAffection, prevMove, moveReaction };
+};
+
+/** 캐릭터의 마지막 말이 판정이 보는 대화 안에 있고 수를 썼으면 그 코드. */
+const lastMoveIn = (
+  chatId: string,
+  characterId: number,
+  windowStart: string,
+): Move | null => {
+  const last = lastAssistantMessage(chatId, characterId);
+  if (!last || last.sent_at < windowStart || !last.meta_json) return null;
+  try {
+    const meta = JSON.parse(last.meta_json) as { move?: unknown };
+    return typeof meta.move === "string" && meta.move in MOVE_NAME
+      ? (meta.move as Move)
+      : null;
+  } catch {
+    return null;
+  }
 };
 
 const noChange = (
@@ -178,8 +258,10 @@ export const judgeUserState = async (
   const rel = getRelationship(characterId);
   const last = rows[rows.length - 1]!;
   const prev = rel ? userStateLabel(rel, logicalDateOf(last.sent_at)) : null;
+  const prevMove = lastMoveIn(chatId, characterId, rows[0]!.sent_at);
   const content = [
     `[지난 판정]\n${prev ?? "(없음)"}`,
+    `[직전에 캐릭터가 쓴 수]\n${prevMove ? MOVE_NAME[prevMove] : "(없음)"}`,
     `[최근 대화]\n${userStateTranscript(rows)}`,
   ].join("\n\n");
   const meta: CallMeta = { purpose: "user_state", characterId, chatId };
@@ -187,7 +269,7 @@ export const judgeUserState = async (
     const out = await chat(
       SYSTEM,
       [{ role: "user", content }],
-      160,
+      260,
       config.model,
       meta,
       { think: false },
@@ -199,13 +281,23 @@ export const judgeUserState = async (
       if (callId) record(callId, { failed: true });
       return noChange(true, callId);
     }
+    const signals = readOpenSignals(out, prevMove);
+    if (!signals)
+      console.warn("[user-state] 열림 칸이 없다 — 이 턴의 관계 신호는 적지 않는다");
     if (callId)
       record(callId, {
         changed: parsed.changed,
         state: parsed.state,
         prev,
+        ...(signals ? { opened: signals } : {}),
       });
-    return { ...parsed, failed: false, callId, prev: parsed.changed ? prev : null };
+    return {
+      ...parsed,
+      failed: false,
+      callId,
+      prev: parsed.changed ? prev : null,
+      ...(signals ? { signals } : {}),
+    };
   } catch (e) {
     console.warn("[user-state] 판정 호출 실패 — 값을 그대로 둔다:", e);
     return noChange(true, meta.callId ?? null);

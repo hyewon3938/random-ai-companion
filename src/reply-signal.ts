@@ -6,10 +6,17 @@
 // 이제는 답장 본문과 신호를 JSON 한 덩이로 받아 코드가 가른다 — 본문은 reply 배열에만 있고
 // 신호는 형제 칸에 있으니, 읽기가 실패해도 신호가 문장으로 새지 않는다(이슈 #138).
 //
-// 신호를 늘릴 때 고칠 자리는 이 파일 안 다섯이다: ReplySignals(칸) · SIGNAL_KEYS(키 이름)
-// · SIGNAL_LINES(프롬프트 한 줄) · readSignals(값 읽기) · mergeSignals(두 답 합치기).
-// 잘린 답에서 건져 올리는 자리와 객체 밖에서 주워 오는 자리는 앞의 둘을 그대로 쓰므로
+// 신호를 늘릴 때 고칠 자리는 이 파일 안 일곱이다: ReplySignals(칸) · EMPTY_SIGNALS(빈 값)
+// · SIGNAL_KEYS(키 이름) · SIGNAL_LINES(프롬프트 한 줄) · readSignals(값 읽기)
+// · mergeSignals(두 답 합치기) · hasSignal(신호가 하나라도 있는지).
+// 잘린 답에서 건져 올리는 자리와 객체 밖에서 주워 오는 자리는 앞의 것들을 그대로 쓰므로
 // 따로 손대지 않는다.
+//
+// 관계 신호 셋(move·first·told_plan)은 코드 값이라 이름표(labels.ts)의 목록에 있는 것만
+// 받는다 — 모델이 지어낸 코드가 표의 CHECK에 걸려 답장 저장이 통째로 실패하면 안 된다.
+
+import type { FirstBy, FirstKind, Move } from "./labels.js";
+import { FIRST_BY_NAME, FIRST_KIND_NAME, MOVE_NAME } from "./labels.js";
 
 /** 답장에 함께 실려 오는 신호. 값이 없으면 신호가 없는 것이다. */
 export interface ReplySignals {
@@ -23,6 +30,12 @@ export interface ReplySignals {
   addressTerms: string | null;
   /** 이번 답장에서 무엇을 마치고 다시 연락하겠다고 한 약속 한 문장. 시각은 코드가 정한다(이슈 #308). */
   promise: string | null;
+  /** 이번 답장이 쓴 설렘의 수 코드 하나. 안 썼으면 null(관계 설계 §5). */
+  move: Move | null;
+  /** 이번 답장에서 처음 일어난 일과 누가 먼저였는지. 없으면 null. */
+  first: { kind: FirstKind; by: FirstBy } | null;
+  /** 이번 답장에서 오늘 자기 일정을 먼저 말했으면 true. */
+  toldPlan: boolean;
 }
 
 /** 답을 어느 길로 읽었는지 — 운영에서 형식이 얼마나 지켜지는지 보려고 남긴다. */
@@ -41,6 +54,9 @@ export const EMPTY_SIGNALS: ReplySignals = {
   stage: null,
   addressTerms: null,
   promise: null,
+  move: null,
+  first: null,
+  toldPlan: false,
 };
 
 // 객체 키·따옴표가 본문 밖에서 토큰을 쓰고, 잘리면 본문 일부가 아니라 JSON 한 덩이가 통째로
@@ -53,6 +69,15 @@ export const REPLY_MAX_TOKENS = 2000;
 
 // 신호 칸 설명 — 언제 넣는지는 규칙층(src/prompts/reply.ts의 NOTE_RULE·CATEGORY_RULE)이 따로 말한다.
 // 여기는 어느 칸에 무엇을 담는지만 적는다.
+
+// 코드 목록을 프롬프트에 '코드(뜻)' 꼴로 편다 — 모델이 코드 대신 뜻을 적는 것을 막으려면 둘을
+// 나란히 보여 줘야 한다.
+const codeList = (table: Record<string, string>): string =>
+  Object.entries(table)
+    .map(([code, name]) => `${code}(${name})`)
+    .join(" · ");
+const moveCodeList = (): string => codeList(MOVE_NAME);
+const firstCodeList = (): string => codeList(FIRST_KIND_NAME);
 /** 객체에 실려 오는 신호 키. 프롬프트가 쓰는 이름 그대로다. */
 const SIGNAL_KEYS = [
   "stay",
@@ -60,6 +85,10 @@ const SIGNAL_KEYS = [
   "stage",
   "address_terms",
   "promise",
+  "move",
+  "first",
+  "first_by",
+  "told_plan",
 ] as const;
 
 // note는 나머지 넷과 성격이 다르다. 넷은 드물게만 켜지는 신호이고 note는 매 답장에서 해당할 수
@@ -73,11 +102,15 @@ const SIGNAL_KEYS = [
 // 모양이 어긋난다. 둘 중 기록 쪽을 살렸다 — 빈 칸을 심은 것이 형식을 지키게 만든 값이라
 // (turns.ts) 기록에서 칸을 빼면 그 값이 같이 내려간다.
 const SIGNAL_LINES = [
-  `- note: 오늘 메모로 남길 한 문장. 뒤에 가서도 알고 있어야 할 것이 나오면 적는 칸이라, 아래 넷과 달리 이 칸은 늘 넣는다 — 남길 것이 없는 답장에서만 null로 둔다. 무엇을 적는지는 위 note 신호 규칙에 있다.`,
+  `- note: 오늘 메모로 남길 한 문장. 뒤에 가서도 알고 있어야 할 것이 나오면 적는 칸이라, 아래 칸들과 달리 이 칸은 늘 넣는다 — 남길 것이 없는 답장에서만 null로 둔다. 무엇을 적는지는 위 note 신호 규칙에 있다.`,
   `- stay: 하려던 일을 접거나 미루고 상대 곁에 남기로 했을 때만 true.`,
   `- stage: 둘 사이가 실제로 달라졌을 때 지금 어떤 사이인지 한 줄로 새로 쓴다. 위 [상대와의 관계]의 '지금 어떤 사이'와 뜻이 같으면 넣지 않는다. 같은 사이를 다른 말로 바꿔 쓰는 자리가 아니다.`,
   `- address_terms: 서로 부르는 말이 달라졌을 때만, 서로를 뭐라고 부르는지 짧게 적는다. 부르던 대로면 넣지 않는다.`,
   `- promise: 이번 답장에서 지금 하는 일을 마치고 다시 연락하겠다고 상대에게 말했을 때만, 무엇을 마치고 연락할지 한 문장으로 적는다(예: 통화 끝나고 다시 연락). 시각은 적지 않는다 — 그 일이 끝나는 시각에 코드가 너를 다시 불러 그때 말을 만든다. 그런 말을 안 했으면 넣지 않는다.`,
+  `- move: 이번 답장이 상대를 설레게 하려고 쓴 수가 있을 때만, 그 코드 하나를 적는다. 코드는 ${moveCodeList()} 가운데 하나다. 한 답장에 둘 이상 썼으면 앞세운 것 하나만 적는다.`,
+  `- first: 이번 답장에서 위 [지금 관계]의 '아직 안 한 처음'에 있는 일이 처음으로 일어났을 때만, 그 코드 하나를 적는다. 코드는 ${firstCodeList()} 가운데 하나다. 이미 한 처음은 다시 적지 않는다.`,
+  `- first_by: first를 적을 때만 같이 적는다. 네가 먼저 했으면 character, 상대가 먼저 해서 네가 받은 것이면 user.`,
+  `- told_plan: 이번 답장에서 오늘 네 일정을 상대가 묻지 않았는데 먼저 말했을 때만 true.`,
 ].join("\n");
 
 // 답장 경로에서만 프롬프트 맨 끝에 붙는다(context.ts BuildOptions.signals).
@@ -135,12 +168,33 @@ const asText = (v: unknown): string | null => {
 // 참으로 읽는 값을 좁게 잡는다 — 형식이 흔들려도 신호는 명시적으로 켠 것만 켠다.
 const asFlag = (v: unknown): boolean => v === true || v === "true";
 
+// 코드 값은 목록에 있는 것만 받는다. 모델이 이름을 쓰거나(별명) 비슷한 코드를 지어내면 버린다.
+const asMove = (v: unknown): Move | null =>
+  typeof v === "string" && v.trim() in MOVE_NAME ? (v.trim() as Move) : null;
+
+const asFirst = (
+  kind: unknown,
+  by: unknown,
+): { kind: FirstKind; by: FirstBy } | null => {
+  if (typeof kind !== "string" || !(kind.trim() in FIRST_KIND_NAME)) return null;
+  // 누가 먼저였는지를 안 적으면 네가 먼저 한 것으로 본다 — 처음은 대개 캐릭터가 먼저 건넨 쪽이고,
+  // 상대가 먼저 한 것은 프롬프트가 따로 적으라고 시킨다.
+  const b =
+    typeof by === "string" && by.trim() in FIRST_BY_NAME
+      ? (by.trim() as FirstBy)
+      : "character";
+  return { kind: kind.trim() as FirstKind, by: b };
+};
+
 const readSignals = (o: Record<string, unknown>): ReplySignals => ({
   stay: asFlag(o.stay),
   note: asText(o.note),
   stage: asText(o.stage),
   addressTerms: asText(o.address_terms),
   promise: asText(o.promise),
+  move: asMove(o.move),
+  first: asFirst(o.first, o.first_by),
+  toldPlan: asFlag(o.told_plan),
 });
 
 /** 첫 답이 비어 다시 부른 경우 — 두 답의 신호를 하나로 합친다(먼저 나온 값을 남긴다). */
@@ -153,6 +207,9 @@ export const mergeSignals = (
   stage: a.stage ?? b.stage,
   addressTerms: a.addressTerms ?? b.addressTerms,
   promise: a.promise ?? b.promise,
+  move: a.move ?? b.move,
+  first: a.first ?? b.first,
+  toldPlan: a.toldPlan || b.toldPlan,
 });
 
 // 배열이면 원소마다, 문자열 하나면 그것만. 원소 안에 줄바꿈이 들어와도 말풍선으로 나눈다 —
@@ -246,7 +303,10 @@ const hasSignal = (s: ReplySignals): boolean =>
   s.note !== null ||
   s.stage !== null ||
   s.addressTerms !== null ||
-  s.promise !== null;
+  s.promise !== null ||
+  s.move !== null ||
+  s.first !== null ||
+  s.toldPlan;
 
 // JSON을 쓰려다 만 답(대개 상한에 걸려 잘린 경우)에서 온전한 조각만 건진다.
 // 닫는 따옴표가 없는 마지막 문장은 걸리지 않는다 — 반 토막 난 말을 보내느니 버린다.
