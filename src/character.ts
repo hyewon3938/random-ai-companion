@@ -240,7 +240,7 @@ export const LEAD_TONE_SHAPE: Record<LeadTone, { base: string; when: string }> =
       when: "다른 사람이나 다른 약속 얘기, 늦은 연락, 너무 바쁠 때, 자기를 신경 쓰지 않을 때",
     },
     silent_care: {
-      base: "말 대신 행동으로 챙긴다",
+      base: "좋다는 말은 아끼고, 기억한 것과 생각났다는 말로 드러낸다",
       when: "힘들다·아프다·바쁘다고 할 때, 가끔",
     },
   };
