@@ -16,10 +16,18 @@
 import { getBlob, getLlmCallBrief, type LlmCallRow } from "../db.js";
 import {
   ACTIVITY_CATEGORY_NAME,
+  FIRST_BY_NAME,
+  FIRST_KIND_NAME,
+  MOVE_NAME,
+  MOVE_REACTION_NAME,
   RESPONSIVENESS_NAME,
   SPEECH_LEVEL_NAME,
   toActivityCategory,
   toResponsiveness,
+  type FirstBy,
+  type FirstKind,
+  type Move,
+  type MoveReaction,
   type SpeechLevel,
 } from "../labels.js";
 import { clockLabel } from "../kst.js";
@@ -120,6 +128,20 @@ export interface CallContext {
     callId?: number | null;
     label?: string | null;
     prev?: string | null;
+  };
+  /** 관계 — 지금 단계와 며칠째, 이 답장이 쓴 수, 처음으로 적은 일(#353). */
+  relationship?: {
+    stage?: number;
+    days?: number;
+    move?: Move | null;
+    first?: { kind: FirstKind; by?: FirstBy; confirmed?: boolean } | null;
+  };
+  /** 열림 — 판정 호출이 돌려준 4항목. */
+  opened?: {
+    openedSelf?: boolean;
+    askedAboutChar?: boolean;
+    saidAffection?: boolean;
+    moveReaction?: MoveReaction;
   };
   /**
    * 이 답장에서 한 연락 약속과 코드가 정한 시각. 시각을 못 정했으면 dropped에 사유,
@@ -422,6 +444,31 @@ const outcomeLines = (ctx: CallContext): string[] => {
         : u.changed
           ? `*상대 상태* 바뀜 · ${u.prev ? esc(u.prev) : "없음"} → ${now}`
           : `*상대 상태* 그대로 · ${now}`,
+    );
+  }
+  // 관계와 열림은 상대 상태 옆에 둔다 — 단계가 오르는 근거(처음·열림 신호)를 답장마다 같은
+  // 자리에서 보게 하려는 것이다.
+  if (ctx.relationship) {
+    const r = ctx.relationship;
+    const parts = [
+      `${r.stage ?? 1}단계${r.days ? ` ${r.days}일째` : ""}`,
+      r.move ? `쓴 수 ${MOVE_NAME[r.move] ?? r.move}` : "쓴 수 없음",
+    ];
+    if (r.first)
+      parts.push(
+        `처음 ${FIRST_KIND_NAME[r.first.kind] ?? r.first.kind}` +
+          `${r.first.by === "user" ? ` (${FIRST_BY_NAME.user})` : ""}` +
+          `${r.first.confirmed === false ? " 미확정" : ""}`,
+      );
+    out.push(`*관계* ${parts.join(" · ")}`);
+  }
+  if (ctx.opened) {
+    const o = ctx.opened;
+    const yn = (v: boolean | undefined): string => (v ? "예" : "아니오");
+    out.push(
+      `*열림* 자기 얘기 ${yn(o.openedSelf)} · 근황 물음 ${yn(o.askedAboutChar)}` +
+        ` · 호감 ${yn(o.saidAffection)}` +
+        ` · 수 반응 ${MOVE_REACTION_NAME[o.moveReaction ?? "none"]}`,
     );
   }
   // 메모는 붙었는지와 무엇을 적었는지를 같은 줄에서 본다 — 다른 신호와 묶어 두면
