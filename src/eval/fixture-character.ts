@@ -7,6 +7,7 @@
 //
 // 값은 genesisProblem이 요구하는 칸을 다 채운다 — 정체성 키 27개와 취미 3개, 주변 인물 3명,
 // 진행 중인 일 2개, 관계 첫 값 다섯, 첫 인사. 칸 목록을 고치면 이 값도 같이 고쳐야 한다.
+// 원하는 방식과 결점의 정체성 행 둘은 persistGenesis가 입력 선택지로 만들어 여기 없다.
 // 아크는 만들지 않는다. 모델을 한 번 더 부르는 자리이고, 없으면 그 줄이 빠질 뿐이다.
 import {
   persistGenesis,
@@ -18,7 +19,10 @@ export const EVAL_INPUT: CharacterInput = {
   gender: "남성",
   ageBand: "30대 중반",
   personality: "담백하고 차분한 편. 리액션을 과장하지 않고 은근히 챙긴다.",
-  relationship: "알게 된 지 얼마 안 된 사이. 존댓말로 시작한다.",
+  relationship: "직장 선배 소개로 두 번 봤다.",
+  speechLevel: "polite",
+  leadTone: "silent_care",
+  flaw: "clumsy",
   wish: "하루를 같이 나누는 사람.",
 };
 
