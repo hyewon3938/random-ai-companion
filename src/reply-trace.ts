@@ -1,10 +1,11 @@
-// 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고, 연락 약속의 단계를 게시함에 쌓는다.
+// 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고와 틈새 한 줄, 연락 약속의 단계를 게시함에 쌓는다.
 //
 // 답장 본문은 trace/reply-post.ts가 호출 행을 읽어 뒤늦게 올리지만, 여기 있는 것은 그 일이
 // 일어나는 자리(pending·bot·proactive-send·presence)가 그때 바로 쌓는다. 답장 결과는 그 답장을
 // 만든 호출 스레드에 달리고, 선톡은 나간 뒤 발송 행이 따로 붙는다. 재시도를 다 쓰고 끝내 못
 // 나가면 그 문안 스레드에 발송 포기가 달린다 — 문안만 보고 나간 것으로 읽지 않게.
-// 자리 비움 예고를 코드가 접은 자리도 사유와 함께 같은 게시함에 쌓는다(traceAwaySkip).
+// 자리 비움 예고와 틈새 한 줄을 코드가 접은 자리도 사유와 함께 같은 게시함에 쌓는다(traceAwaySkip·
+// traceGlanceSkip).
 // 캐릭터가 한 연락 약속이 그 뒤 어떻게 됐는지(맡김·다시 걺·지킴·접음·거둠·포기)도 약속을 한
 // 답장 스레드에 단다(tracePromise, 이슈 #312) — 약속은 답장 본문에 시각까지 적히는데 그
 // 시각에 무슨 일이 있었는지는 콘솔에만 남아 슬랙에서는 지켰는지 알 수 없었다.
@@ -126,6 +127,40 @@ export const traceAwaySkip = (p: {
     text:
       `:mute: *자리비움 예고 접음* · ${clock()} — ${clockLabel(p.block)} ${esc(p.activity)}` +
       `\n${AWAY_SKIP_NAME[p.reason]}${p.detail ? ` (${esc(p.detail)})` : ""}`,
+  });
+};
+
+/** 틈새 한 줄을 접은 사유. 값은 kind에 그대로 실어 나중에 사유별로 셀 수 있게 한다. */
+export type GlanceSkipReason = "not_check" | "conversation_moved";
+
+const GLANCE_SKIP_NAME: Record<GlanceSkipReason, string> = {
+  not_check: "있는지·뭐 하는지 묻는 확인 말이 아니라 모델이 보내지 않았다",
+  conversation_moved: "문안을 만드는 사이 마지막 메시지가 바뀌었다",
+};
+
+/**
+ * 틈새 한 줄을 접은 자리(glance.ts). 모델이 확인 말이 아니라고 답해 접은 것은 그 판정
+ * 호출 스레드에 달린다 — 문안만 남아 나간 것으로 읽히지 않게. 같은 블록에 같은 사유는
+ * 하루 한 번만 쌓는다(이슈 #339).
+ */
+export const traceGlanceSkip = (p: {
+  characterId: number;
+  reason: GlanceSkipReason;
+  activity: string;
+  /** 그 불가 블록의 시작 시각. 하루 안에서 이 틈새 한 줄을 가리키는 이름이다. */
+  block: string;
+  /** 판정 호출 번호. 부르기 전에 접었으면 없다. */
+  callId?: number;
+}): void => {
+  if (!traceEnabled()) return;
+  recordTraceEvent({
+    characterId: p.characterId,
+    kind: `glance_skip_${p.reason}`,
+    dedupeKey: `glance_skip:${p.characterId}:${kstLogicalDate()}:${p.block}:${p.reason}`,
+    parentKey: p.callId ? callKey(p.callId) : undefined,
+    text:
+      `:mute: *틈새 한 줄 접음* · ${clock()} — ${clockLabel(p.block)} ${esc(p.activity)}` +
+      `\n${GLANCE_SKIP_NAME[p.reason]}`,
   });
 };
 

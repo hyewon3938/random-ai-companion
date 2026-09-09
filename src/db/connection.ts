@@ -316,7 +316,7 @@ const TABLES: Record<string, string> = {
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id TEXT NOT NULL,
   character_id INTEGER,
-  kind TEXT NOT NULL CHECK (kind IN ('away','catchup','goodnight','mend','lunch')),
+  kind TEXT NOT NULL CHECK (kind IN ('away','catchup','goodnight','mend','lunch','glance')),
   error TEXT NOT NULL,
   failed_at TEXT NOT NULL`,
 
@@ -1095,5 +1095,6 @@ const rebuildSendFailures = (marker: string): void => {
 };
 rebuildSendFailures("mend");
 rebuildSendFailures("lunch");
+rebuildSendFailures("glance");
 
 db.pragma("foreign_keys = ON");

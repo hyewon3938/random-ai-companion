@@ -24,6 +24,7 @@ import { runNightly } from "./nightly.js";
 import { runDispatchTick } from "./dispatch.js";
 import { runFollowupTick } from "./followup.js";
 import { runPresenceTick } from "./presence.js";
+import { runGlanceTick } from "./glance.js";
 import { resumePendingReplies } from "./pending.js";
 import { runTraceTick } from "./trace.js";
 import { enqueueReplyTraces } from "./trace/reply-post.js";
@@ -79,6 +80,16 @@ cron.schedule(
   "*/10 * * * *",
   () => {
     runPresenceTick().catch((e) => logErr("[presence] tick error:", e));
+  },
+  { timezone: "Asia/Seoul" },
+);
+
+// 틈새 한 줄: 5분 틱. 불가 구간에 유저가 있는지·뭐 하는지 묻는 말을 남기면 지금 하는 일과
+// 끝나는 시각을 짧게 알린다. 구간이 40분까지라 10분 틱으로는 조건이 맞는 자리를 놓친다(이슈 #339).
+cron.schedule(
+  "*/5 * * * *",
+  () => {
+    runGlanceTick().catch((e) => logErr("[glance] tick error:", e));
   },
   { timezone: "Asia/Seoul" },
 );

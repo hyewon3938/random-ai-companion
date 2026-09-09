@@ -18,6 +18,7 @@ const { createFixtureCharacter } = await import("../src/eval/fixture-character.j
 const {
   awayNoticeCountToday,
   awayNoticeSent,
+  glanceSentForBlock,
   mendSentSince,
   proactiveCountToday,
   proactiveKindCountToday,
@@ -38,6 +39,7 @@ before(() => {
   say("2026-09-06 08:00:00", { kind: "morning", proactive: true });
   say("2026-09-06 09:00:00", { kind: "away", proactive: true, block: "09:30" });
   say("2026-09-06 11:00:00", { kind: "away", proactive: true, return: true, block: "09:30" });
+  say("2026-09-06 11:30:00", { kind: "glance", proactive: true, block: "11:00" });
   say("2026-09-06 12:00:00", { kind: "reply" });
   logMessage(CHAT, characterId, "user", "응", "2026-09-06 12:30:00");
   say("2026-09-06 13:00:00", { kind: "reply" });
@@ -48,7 +50,7 @@ after(() => {
   db.close();
 });
 
-test("오늘 선톡 수는 자리 비움을 빼고 센다", () => {
+test("오늘 선톡 수는 자리 비움과 틈새 한 줄을 빼고 센다", () => {
   assert.equal(proactiveCountToday(CHAT, characterId, SINCE), 3);
   assert.equal(proactiveKindCountToday(CHAT, characterId, SINCE, "checkin"), 1);
   assert.equal(proactiveKindCountToday(CHAT, characterId, SINCE, "morning"), 1);
@@ -58,6 +60,11 @@ test("자리 비움 예고는 블록별로 찾고 복귀 인사는 빼고 센다
   assert.equal(awayNoticeSent(CHAT, characterId, SINCE, "09:30"), true);
   assert.equal(awayNoticeSent(CHAT, characterId, SINCE, "18:00"), false);
   assert.equal(awayNoticeCountToday(CHAT, characterId, SINCE), 1);
+});
+
+test("틈새 한 줄은 블록별로 하루 한 번인지 찾는다", () => {
+  assert.equal(glanceSentForBlock(CHAT, characterId, SINCE, "11:00"), true);
+  assert.equal(glanceSentForBlock(CHAT, characterId, SINCE, "18:00"), false);
 });
 
 test("마지막 유저 말 이후 구간만 본다", () => {

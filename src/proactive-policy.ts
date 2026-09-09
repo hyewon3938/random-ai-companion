@@ -159,7 +159,13 @@ export const lunchDueToday = (chatId: string, characterId: number): boolean => {
 // 활동 블록까지 같아야 한다 — 다음 블록의 예고를 앞 블록 문안으로 보내면 엉뚱한 말이 나간다.
 // 다른 하나는 나이다. 만든 지 오래된 문안은 지금 상황을 더 이상 말하지 못하므로 버린다.
 
-export type HeldDraftKind = "goodnight" | "mend" | "catchup" | "lunch" | "away";
+export type HeldDraftKind =
+  | "goodnight"
+  | "mend"
+  | "catchup"
+  | "lunch"
+  | "away"
+  | "glance";
 
 export interface HeldDraft {
   kind: HeldDraftKind;
@@ -223,7 +229,8 @@ export const takeHeldDraft = (
 //
 // 자리비움 선톡은 여기서 뺀다 — 캐릭터가 나갔다 오는 일정 수만큼 나가는 말이라 성격이
 // 다르고, 그쪽은 AWAY_DAILY_MAX가 따로 막는다. 약속 연락도 뺀다 — 답장에서 한 약속을
-// 지키는 말이라 상한에 막히면 약속을 어기는 쪽이 된다(이슈 #308).
+// 지키는 말이라 상한에 막히면 약속을 어기는 쪽이 된다(이슈 #308). 틈새 한 줄도 뺀다 — 불가
+// 구간에 유저가 먼저 건 말에 붙는 한 마디라 새로 거는 연락이 아니다(이슈 #339).
 export const proactiveCountToday = (
   chatId: string,
   characterId: number,
@@ -231,7 +238,7 @@ export const proactiveCountToday = (
 ): number =>
   countAssistantMeta(chatId, characterId, since, {
     like: [PROACTIVE],
-    notLike: [AWAY, kindPattern("promise")],
+    notLike: [AWAY, kindPattern("promise"), kindPattern("glance")],
   });
 
 // 오늘 보낸 선톡을 종류별로 센다.
@@ -254,6 +261,17 @@ export const awayNoticeSent = (
 ): boolean =>
   hasAssistantMeta(chatId, characterId, since, {
     like: [AWAY, `%"block":"${blockStart}"%`],
+  });
+
+/** 그 블록의 틈새 한 줄이 오늘 이미 나갔는가. 블록마다 한 번이다(이슈 #339). */
+export const glanceSentForBlock = (
+  chatId: string,
+  characterId: number,
+  since: string,
+  blockStart: string,
+): boolean =>
+  hasAssistantMeta(chatId, characterId, since, {
+    like: [kindPattern("glance"), `%"block":"${blockStart}"%`],
   });
 
 // 오늘 알리고 나간 자리비움 선톡 수. 돌아와서 하는 인사는 이미 알린 구간을 마무리하는

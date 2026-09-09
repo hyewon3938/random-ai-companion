@@ -132,6 +132,13 @@ export const AWAY_SHORT_TOTAL_MAX_MIN = 90;
  * 붙이면 예고한 시간보다 훨씬 오래 답이 끊긴다. 짧은 구간끼리 붙어도 마찬가지다. */
 export const AWAY_GAP_MIN = 5;
 
+/** 틈새 한 줄(glance)의 조건 둘. 불가 구간 안에서 유저가 있는지·뭐 하는지 묻는 말을 남기고
+ * GLANCE_AFTER_USER_MIN분 이상 지났고 구간 끝까지 GLANCE_MIN_LEFT_MIN분 넘게 남았을 때만,
+ * 지금 하는 일과 끝나는 시각을 짧게 알린다. 한 구간이 AWAY_BLOCK_MAX_MIN(40분)까지인 것에 맞춘
+ * 값이다 — 10분·30분으로 두면 40분짜리 구간에서는 한 번도 성립하지 않는다(이슈 #339). */
+export const GLANCE_AFTER_USER_MIN = 5;
+export const GLANCE_MIN_LEFT_MIN = 15;
+
 /** 선톡 전체의 하루 상한. 자리비움은 이 상한에서 빼고 위 상한으로만 관리한다. */
 export const PROACTIVE_DAILY_MAX = 6;
 

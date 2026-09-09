@@ -59,7 +59,7 @@ yarn dev        # 로컬 기동 (long polling)
 - **이 파일 크기**: 세션마다 컨텍스트에 통째로 들어가는 지시서라 짧게 유지한다. 상태 절에는 아직 볼 것이 남은 항목만 두고, 무엇을 왜 그렇게 했는지는 이슈·PR 본문에 남긴다. 배포 기록은 서버 경로가 들어가서 공개 repo에 두지 않고 LOCAL-HISTORY.md에 적는다. 상한 12,000자는 `.githooks/pre-commit`이 강제하고 10,000자를 넘으면 경고한다. 새 작업 디렉터리에서는 `git config core.hooksPath .githooks`를 한 번 실행해 켠다. 막히면 상한을 올리지 말고 상태 절을 먼저 줄인다.
 - **자동 검사**: main 푸시와 PR마다 GitHub Actions가 `yarn typecheck`·`yarn test`를 돌린다(`.github/workflows/ci.yml`). 모델을 부르는 표기 규칙 평가(`yarn eval`)는 호출 비용이 붙고 통과율이 그날 응답에 따라 흔들려서 자동으로 돌리지 않는다. `src/prompts/reply.ts`·`src/eval/`·`src/reply-signal.ts`를 고친 PR에는 `eval` 라벨을 붙여 평가를 돌리고 통과율을 확인한 뒤 머지한다(`.github/workflows/eval.yml`). 테스트 파일은 `test/`에 둔다. `scripts/gen-modules.mjs`가 `src/` 아래 `.ts` 전부를 색인으로 훑는다.
 - **설계 일관성**: 캐릭터 stance(프레임 존중·신경 쓰는 티·무근거 핑 금지)는 character-design.md §5가 원본. 코드의 stance 문자열과 문서가 어긋나면 문서 기준으로 맞춘다.
-- **출력 규칙 단일 소스**: 캐릭터가 내보내는 모든 글에 공통으로 적용할 규칙(태도·대화 규칙·표기·말의 결)은 `src/prompts/reply.ts`의 고정 문안에서만 관리한다 — PERSON·SPEECH·EXEMPLARS·OUTPUT_FORMAT·FACT_CARE·NOTE_RULE. EXEMPLARS는 캐릭터 고유값이 없는 목표 말투 예시로, 금지 목록만으로는 안 잡히는 결(말풍선 끝 어미·추측형 말끝·반응어)을 보여준다. 캐릭터마다 다른 값으로 두면 생성 결과에 따라 규칙이 흔들리므로 정체성 항목에 넣지 않는다. 선톡 문안 프롬프트 7곳(nightly 아침·안부, followup 근황·굿나잇·달래기, presence 자리비움·복귀)도 전부 `buildSystemBlocks`(3층+상황 문단)를 타므로 같은 규칙이 자동으로 들어간다. 큰 결을 바꿀 일이 생기면 이 블록들을 고친다. 다만 답장이 내보내는 **형식**(JSON 객체)은 규칙층이 아니라 `src/reply-signal.ts`가 갖는다 — 선톡 문안 6곳은 같은 3층을 쓰되 자기 형식으로 답하므로, 규칙층에 넣으면 두 형식이 부딪힌다.
+- **출력 규칙 단일 소스**: 캐릭터가 내보내는 모든 글에 공통으로 적용할 규칙(태도·대화 규칙·표기·말의 결)은 `src/prompts/reply.ts`의 고정 문안에서만 관리한다 — PERSON·SPEECH·EXEMPLARS·OUTPUT_FORMAT·FACT_CARE·NOTE_RULE. EXEMPLARS는 캐릭터 고유값이 없는 목표 말투 예시로, 금지 목록만으로는 안 잡히는 결(말풍선 끝 어미·추측형 말끝·반응어)을 보여준다. 캐릭터마다 다른 값으로 두면 생성 결과에 따라 규칙이 흔들리므로 정체성 항목에 넣지 않는다. 선톡 문안 프롬프트 8곳(nightly 아침·안부, followup 근황·굿나잇·달래기, presence 자리비움·복귀, glance 틈새 한 줄)도 전부 `buildSystemBlocks`(3층+상황 문단)를 타므로 같은 규칙이 자동으로 들어간다. 큰 결을 바꿀 일이 생기면 이 블록들을 고친다. 다만 답장이 내보내는 **형식**(JSON 객체)은 규칙층이 아니라 `src/reply-signal.ts`가 갖는다 — 선톡 문안 8곳은 같은 3층을 쓰되 자기 형식으로 답하므로, 규칙층에 넣으면 두 형식이 부딪힌다.
 - **영역 표와 파일 색인**: 어느 파일이 어느 영역인지는 areas.md의 영역 표가 단일 소스다. `node scripts/gen-modules.mjs`가 그 표를 아키텍처 요약에 옮겨 적고, 각 파일 맨 위 주석의 첫 줄로 areas.md의 파일 색인을 다시 쓴다. 손으로 고치지 않고, 요약 주석을 고치거나 파일을 새로 만들면 표에 넣은 뒤 이 명령을 돌려 함께 커밋한다. 색인이 밀렸거나 요약 주석이 없거나 표에 없는 파일이 있으면 커밋 훅이 막는다.
 - **모델**: 기본 `claude-sonnet-5` (환경변수 `MODEL`로 교체 가능).
 
@@ -79,7 +79,7 @@ yarn dev        # 로컬 기동 (long polling)
 | 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-pick, user-profile |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
 | 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, context/*, prompts/reply, turns, reply-signal, reply-ask, reply-compose, reply-promise, user-state, relationship-update, speech-level, reply-timing, proactive-policy |
-| 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 3개, 크론표 | index, bot, pending, presence, followup, dispatch, proactive-send |
+| 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 4개, 크론표 | index, bot, pending, presence, glance, followup, dispatch, proactive-send |
 | 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
 | 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, trace/*, reply-trace, feedback, tools/*, eval/* |
 
