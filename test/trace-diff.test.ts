@@ -1,6 +1,6 @@
 // 슬랙 게시용 비교(trace/diff.ts)가 줄 단위와 낱말 단위로 달라진 자리만 표시하는지 검사한다 — 모델도 DB도 쓰지 않는다.
 //
-// 줄 단위 비교는 바뀐 줄만 `- `·`+ `로 남기고 너무 길면 자르는지, 낱말 단위 비교는 전문
+// 줄 단위 비교는 바뀐 줄만 `[빠짐]`·`[더함]`으로 남기고 너무 길면 자르는지, 낱말 단위 비교는 전문
 // 하나 안에서 빠진 말을 `[-…-]`, 더한 말을 `{+…+}`로 감싸는지 본다. 이전 값 전문과 새 값
 // 전문을 나란히 적지 않는 것이 이슈 #312의 요구라, 같은 낱말은 표시 없이 그대로 남아야 한다.
 import assert from "node:assert/strict";
@@ -10,7 +10,9 @@ import { lineDiff, wordDiff } from "../src/trace/diff.js";
 
 test("줄 단위 비교는 바뀐 줄만 남기고 너무 길면 자른다", () => {
   assert.equal(lineDiff("a\nb", "a\nb"), "(줄 단위로는 같다 — 공백만 바뀌었다)");
-  assert.equal(lineDiff("a\nb\nc", "a\nx\nc"), "- b\n+ x");
+  assert.equal(lineDiff("a\nb\nc", "a\nx\nc"), "[빠짐] b\n[더함] x");
+  // 본문이 `- `로 시작하는 목록이어도 표시와 겹치지 않는다 (이슈 #347)
+  assert.equal(lineDiff("- 가\n- 나", "- 가\n- 다"), "[빠짐] - 나\n[더함] - 다");
   const before = ["1", "2", "3", "4"].join("\n");
   const after = ["5", "6", "7", "8"].join("\n");
   const cut = lineDiff(before, after, 2);
