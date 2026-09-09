@@ -41,7 +41,10 @@ export const insertScheduledSend = (
   ).run(characterId, chatId, date, windowStart, windowEnd, text, now, kind);
 };
 
-export const hasScheduledSendOn = (characterId: number, date: string): boolean =>
+export const hasScheduledSendOn = (
+  characterId: number,
+  date: string,
+): boolean =>
   !!db
     .prepare(
       `SELECT 1 FROM scheduled_messages WHERE character_id = ? AND date = ? LIMIT 1`,
@@ -198,11 +201,25 @@ export const hasWaitingPendingReply = (chatId: string): boolean =>
     .get(chatId);
 
 /** 이 구간이 끝나는 시각에 울릴 행이 이미 걸려 있는가. 두 종류를 함께 센다 — 한 구간에 행은
- *  하나이고, 유저가 말을 걸면 새로 만드는 대신 promoteWakeRow가 그 행의 종류를 바꾼다. */
-export const hasWaitingWakeRow = (chatId: string): boolean =>
+ *  하나이고, 유저가 말을 걸면 새로 만드는 대신 promoteWakeRow가 그 행의 종류를 바꾼다.
+ *  exceptRowId는 지금 울리고 있는 행이다 — 그 핸들러 안에서 다음 구간의 행을 걸 때는 그 행을
+ *  빼고 센다(울린 행은 핸들러가 끝나야 sent로 닫힌다). */
+export const hasWaitingWakeRow = (
+  chatId: string,
+  exceptRowId?: number,
+): boolean =>
   !!db
     .prepare(
-      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return') LIMIT 1`,
+      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return') AND id != ? LIMIT 1`,
+    )
+    .get(chatId, exceptRowId ?? -1);
+
+/** 연락 약속이 걸려 있는가. 약속 행이 있으면 그 시각에 약속 핸들러가 먼저 말을 걸므로 구간 끝
+ *  표시를 따로 걸지 않는다 — 같은 자리에 두 행이 울리면 하나는 헛돈다. */
+export const hasWaitingPromiseRow = (chatId: string): boolean =>
+  !!db
+    .prepare(
+      `SELECT 1 FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind = 'promise' LIMIT 1`,
     )
     .get(chatId);
 

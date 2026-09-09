@@ -61,7 +61,8 @@ export const silenceState = (
 ): SilenceState => {
   // 유저 메시지가 아직 없으면 관계 시작 시점을 기준으로 센다(첫 인사 후 무응답도 백오프 대상)
   const anchor =
-    lastUserTs(chatId, characterId) ?? getCharacterById(characterId)?.created_at;
+    lastUserTs(chatId, characterId) ??
+    getCharacterById(characterId)?.created_at;
   if (!anchor) return { tier: "normal", days: 0 };
 
   const days = Math.max(
@@ -84,7 +85,6 @@ export const proactiveAllowed = (
   chatId: string,
   characterId: number,
 ): boolean => silenceState(chatId, characterId).tier === "normal";
-
 
 // 미리 만들어 두는 선톡(아침·안부)을 그날 무엇으로 보낼지 정한다. 새벽 정리의 문안 준비,
 // 반영 직전 확인, 발송 직전 재확인이 같은 판정을 쓰도록 한곳에 둔다.
@@ -160,12 +160,7 @@ export const lunchDueToday = (chatId: string, characterId: number): boolean => {
 // 다른 하나는 나이다. 만든 지 오래된 문안은 지금 상황을 더 이상 말하지 못하므로 버린다.
 
 export type HeldDraftKind =
-  | "goodnight"
-  | "mend"
-  | "catchup"
-  | "lunch"
-  | "away"
-  | "glance";
+  "goodnight" | "mend" | "catchup" | "lunch" | "away" | "glance";
 
 export interface HeldDraft {
   kind: HeldDraftKind;
@@ -222,7 +217,6 @@ export const takeHeldDraft = (
 // 캐릭터 말의 meta_json으로 무엇이 선톡이고 어떤 종류인지 가른다. 패턴은 여기서만 정하고
 // db 쪽은 패턴을 받아 세기만 한다.
 
-
 // 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸 선톡 수 — 하루 총량 상한을 지키는 데 쓴다.
 // followup·dispatch가 공유한다. 채널별 상한만 있으면 합이 통제되지 않아서, 각자 자기 몫을
 // 다 쓰면 하루 10통까지 나갈 수 있었다.
@@ -274,8 +268,8 @@ export const glanceSentForBlock = (
     like: [kindPattern("glance"), `%"block":"${blockStart}"%`],
   });
 
-// 오늘 알리고 나간 자리비움 선톡 수. 돌아와서 하는 인사는 이미 알린 구간을 마무리하는
-// 말이라 빼고 센다.
+// 오늘 알리고 나간 자리비움 선톡 수. 돌아와서 하는 인사와 이어지는 불가 구간 사이에 다음 일을
+// 알리는 사이 예고는 이미 알린 자리를 잇는 말이라 빼고 센다.
 export const awayNoticeCountToday = (
   chatId: string,
   characterId: number,
@@ -283,7 +277,7 @@ export const awayNoticeCountToday = (
 ): number =>
   countAssistantMeta(chatId, characterId, since, {
     like: [AWAY],
-    notLike: ['%"return"%'],
+    notLike: ['%"return"%', '%"between"%'],
   });
 
 // 마지막 유저 발화 이후 구간의 시작. 유저가 한 번도 말한 적이 없으면 대화 전체를 본다.

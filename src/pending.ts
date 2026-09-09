@@ -17,6 +17,10 @@
 // 시각에 걸어 둔다. 유저가 말을 더 보내도 이 행은 살아남고(구간 끝 시각은 그대로다),
 // 지우는 것은 dropWakeRows다. 기다리는 동안 isWaiting이 참이라 선톡 틱이 물러난다.
 //
+// 아직 답할 말이 없는 구간 끝 표시(kind='return')를 거는 armReturnRow도 여기 있다 — 자리 비움
+// 틱과 구간 끝 핸들러가 같은 함수로 걸어야 조건(한 구간에 행 하나, 약속 행이 있으면 안 걺)이
+// 두 곳에서 어긋나지 않는다(이슈 #341).
+//
 // 캐릭터가 답장에서 한 연락 약속도 같은 표를 쓴다(이슈 #308) — 문안 없이 kind='promise'
 // 행으로 약속 시각에 걸어 두고, 울리면 그때 모델을 불러 말을 만든다. 유저가 말을 더 보내도
 // 살아남고 선톡 틱을 막지 않으며, 지우는 것은 dropPromiseRows다.
@@ -29,6 +33,8 @@ import {
   getWaitingPendingReplies,
   getPendingReply,
   hasWaitingPendingReply,
+  hasWaitingPromiseRow,
+  hasWaitingWakeRow,
   supersedePendingReplies,
   supersedeWakeRows,
   supersedePromiseRows,
@@ -40,7 +46,10 @@ import {
 } from "./db.js";
 import { saveTodayNote } from "./memory.js";
 import { tracePromise, traceReplyOutcome } from "./reply-trace.js";
-import { getKstNow, kstDateString } from "./kst.js";
+import { getKstNow, kstDateString, kstLogicalClock } from "./kst.js";
+import { toMin } from "./context/day-progress.js";
+import { BLOCK_END_JITTER_MS } from "./thresholds.js";
+import type { PlanBlock } from "./day-plan.js";
 
 // 대기 중인 답장.
 //
@@ -404,6 +413,44 @@ export const scheduleWakeRow = (p: {
     `[pending] ${WAKE_LABEL[kind]} #${id} ${p.chatId} ${p.meta.activity} → ${sendAt} (${Math.round(p.waitMs / 1000)}초 뒤)`,
   );
   return { id, sendAt };
+};
+
+/**
+ * 지금 들어가 있는 자리 비움 불가 구간이 끝나는 시각에 'return' 표시를 건다. 자리 비움 틱과
+ * 구간 끝 핸들러가 같이 쓴다(이슈 #341).
+ *
+ * 예고를 보냈는지와 무관하게 건다 — 예고가 막혀 조용히 사라진 날이야말로 돌아와서 말을
+ * 거는 게 필요한 날이다. 유저가 그 구간에 말을 걸면 이 행이 'wake'로 바뀌어(promoteWakeRow)
+ * 몰아 답장 쪽으로 간다. 걸지 않고 null인 경우는 셋 — 울릴 행이 이미 있을 때(한 구간에 행은
+ * 하나), 연락 약속이 걸려 있을 때(그 시각엔 약속 핸들러가 말을 건다), 구간이 이미 끝났을 때.
+ * exceptRowId는 지금 울리고 있는 행이다 — 그 핸들러 안에서 다음 구간의 표시를 걸 때 그 행은
+ * 아직 waiting이라 빼고 센다.
+ */
+export const armReturnRow = (p: {
+  chatId: string;
+  characterId: number;
+  block: Pick<PlanBlock, "activity" | "start" | "end">;
+  userMsgAt: string;
+  exceptRowId?: number;
+}): { id: number; sendAt: string } | null => {
+  if (hasWaitingWakeRow(p.chatId, p.exceptRowId)) return null;
+  if (hasWaitingPromiseRow(p.chatId)) return null;
+  const remainMin = toMin(p.block.end) - toMin(kstLogicalClock());
+  if (remainMin <= 0) return null;
+  const waitMs =
+    remainMin * 60_000 + Math.floor(Math.random() * BLOCK_END_JITTER_MS);
+  return scheduleWakeRow({
+    chatId: p.chatId,
+    characterId: p.characterId,
+    userMsgAt: p.userMsgAt,
+    waitMs,
+    meta: {
+      activity: p.block.activity,
+      blockStart: p.block.start,
+      blockEnd: p.block.end,
+    },
+    kind: "return",
+  });
 };
 
 /**

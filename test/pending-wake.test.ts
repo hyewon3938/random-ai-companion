@@ -1,8 +1,9 @@
-// 답장 대기 행(pending.ts)의 meta 읽기·깨우기 행 거두기·걸어 두기·이어받기를 검사한다.
+// 답장 대기 행(pending.ts)의 meta 읽기·깨우기 행 거두기·걸어 두기·이어받기·구간 끝 표시 걸기를 검사한다.
 //
 // meta는 깨져 있어도 예외 없이 빈 값으로 읽히는지, dropWakeRows가 wake·return만 거두고 promise와
 // reply는 남기는지, schedulePendingReply가 적은 행이 입력과 같은지, resumePendingReplies가 남은
-// 행을 다시 걸어 시각이 지난 행은 바로 울리고 먼 행은 기다리는지 본다. 울리는 쪽은
+// 행을 다시 걸어 시각이 지난 행은 바로 울리고 먼 행은 기다리는지, armReturnRow가 지금 블록 끝에
+// return 행을 걸고 울릴 행이나 약속 행이 있거나 구간이 끝났으면 걸지 않는지 본다. 울리는 쪽은
 // setPendingSender로 가짜 발송기를 넣어 받는다 — bot.ts를 읽으면 그쪽 발송기가 등록되므로 여기서는
 // 읽지 않는다.
 //
@@ -22,13 +23,12 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:1";
 
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다 — 정적 import는 이 줄들보다 먼저 돈다.
-const { db, getWaitingPendingReplies, insertPendingReply } = await import(
-  "../src/db.js"
-);
-const { createFixtureCharacter } = await import(
-  "../src/eval/fixture-character.js"
-);
+const { db, getWaitingPendingReplies, insertPendingReply } =
+  await import("../src/db.js");
+const { createFixtureCharacter } =
+  await import("../src/eval/fixture-character.js");
 const {
+  armReturnRow,
   dropPendingReplies,
   dropPromiseRows,
   dropWakeRows,
@@ -37,7 +37,13 @@ const {
   schedulePendingReply,
   setPendingSender,
 } = await import("../src/pending.js");
+const { kstLogicalClock } = await import("../src/kst.js");
+const { toMin } = await import("../src/context/day-progress.js");
 type PendingReplyRow = Parameters<typeof parseWakeMeta>[0];
+
+// 분 수를 각본 표기 "HH:MM"으로 — 새벽은 24를 넘긴 채 둔다(kstLogicalClock과 같은 표기).
+const clockAt = (min: number): string =>
+  `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
 
 const AT = "2026-09-07 13:20:00";
 const characterId = createFixtureCharacter("chat-wake");
@@ -204,4 +210,83 @@ test("이어받기는 시각이 지난 행을 바로 울리고 먼 행은 그대
 
   assert.equal(dropPendingReplies("chat-resume-later"), 1);
   assert.equal(statusOf(later), "superseded");
+});
+
+test("구간 끝 표시는 지금 블록이 끝나는 시각에 return 행으로 걸린다", () => {
+  const chat = "chat-arm";
+  const now = toMin(kstLogicalClock());
+  const block = { activity: "씻기", start: clockAt(now - 5), end: clockAt(now + 10) };
+  const armed = armReturnRow({ chatId: chat, characterId, block, userMsgAt: AT });
+  assert.ok(armed);
+  const row = db
+    .prepare(
+      `SELECT kind, status, user_msg_at, meta_json FROM pending_replies WHERE id = ?`,
+    )
+    .get(armed.id) as {
+    kind: string;
+    status: string;
+    user_msg_at: string;
+    meta_json: string;
+  };
+  assert.equal(row.kind, "return");
+  assert.equal(row.status, "waiting");
+  assert.equal(row.user_msg_at, AT);
+  assert.deepEqual(JSON.parse(row.meta_json), {
+    activity: "씻기",
+    blockStart: block.start,
+    blockEnd: block.end,
+  });
+  // 블록 끝 시각에서 1분 안(지터)에 울린다 — 지금 시각은 분 단위라 앞뒤로 1분씩 여유를 둔다.
+  const diffMin =
+    (Date.parse(armed.sendAt.replace(" ", "T") + "+09:00") - Date.now()) /
+    60_000;
+  assert.ok(diffMin >= 9 && diffMin <= 11.1, `끝 시각과 ${diffMin}분 차이`);
+
+  // 같은 대화에 울릴 행이 있으면 걸지 않고, 울리는 중인 행을 빼라고 하면 그 행은 세지 않는다.
+  assert.equal(
+    armReturnRow({ chatId: chat, characterId, block, userMsgAt: AT }),
+    null,
+  );
+  const next = armReturnRow({
+    chatId: chat,
+    characterId,
+    block,
+    userMsgAt: AT,
+    exceptRowId: armed.id,
+  });
+  assert.ok(next);
+  assert.notEqual(next.id, armed.id);
+  assert.equal(dropWakeRows(chat), 2);
+});
+
+test("연락 약속이 걸려 있으면 구간 끝 표시를 걸지 않는다", () => {
+  const chat = "chat-arm-promise";
+  const now = toMin(kstLogicalClock());
+  insert(chat, "promise", stampAfter(3600_000));
+  assert.equal(
+    armReturnRow({
+      chatId: chat,
+      characterId,
+      block: { activity: "씻기", start: clockAt(now - 5), end: clockAt(now + 10) },
+      userMsgAt: AT,
+    }),
+    null,
+  );
+  assert.equal(dropPromiseRows(chat), 1);
+});
+
+test("블록이 이미 끝났으면 구간 끝 표시를 걸지 않는다", () => {
+  const chat = "chat-arm-past";
+  const now = toMin(kstLogicalClock());
+  for (const end of [clockAt(now), clockAt(now - 1)])
+    assert.equal(
+      armReturnRow({
+        chatId: chat,
+        characterId,
+        block: { activity: "씻기", start: clockAt(now - 20), end },
+        userMsgAt: AT,
+      }),
+      null,
+    );
+  assert.equal(dropWakeRows(chat), 0);
 });

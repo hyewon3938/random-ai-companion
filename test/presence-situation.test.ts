@@ -3,7 +3,8 @@
 // 무슨 일로 자리를 비우는지 남기라는 줄이 상대가 방금 남긴 말이 있을 때만 붙어서, 마지막 말이
 // 캐릭터 것인 날은 예고가 지난 대화에 답만 하고 나갔다(이슈 #265). 마지막 말이 누구 것이든 그
 // 줄이 들어가는지, 캐릭터 말로 끝났으면 이미 답한 말에 다시 답하지 말라는 줄이 붙는지, 문안
-// 형식에 자리를 비우는 일을 적는 칸이 있는지 본다.
+// 형식에 자리를 비우는 일을 적는 칸이 있는지, 얼른 하고 오겠다는 결로 말하라는 줄(이슈 #341)이
+// 들어가는지 본다.
 //
 // presence.ts가 DB와 봇 모듈을 함께 읽으므로 DB는 임시 파일로 새로 만들고 토큰은 가짜다.
 import assert from "node:assert/strict";
@@ -59,4 +60,11 @@ test("문안 형식에 자리를 비우는 일을 적는 칸이 있다", () => {
   const out = presenceSituation(meeting, false, "", true);
   assert.match(out, /"send":true,"away":/);
   assert.match(out, /away 칸에는 무슨 일로 자리를 비우는지/);
+});
+
+test("얼른 하고 오겠다는 결과 상대가 그려 볼 한 마디를 붙이라는 줄이 들어간다", () => {
+  const out = presenceSituation(meeting, false, "", false);
+  assert.match(out, /얼른 하고 오겠다는 결/);
+  assert.match(out, /다시 물어보겠다는 식으로 대화를 닫거나/);
+  assert.match(out, /상대가 그려 볼 수 있는 한 마디/);
 });
