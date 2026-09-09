@@ -635,19 +635,29 @@ const handleOnboardingButton = async (
   return;
 };
 
+// 섞는 결 버튼만 처리 결과를 안내로 돌려주고, 나머지는 먼저 응답하고 처리한다 — 마지막 버튼은
+// 생성 두 콜을 기다리게 되어, 처리 뒤에 응답하면 텔레그램이 늦었다고 거부하고 스피너가 남는다.
 bot.on("callback_query:data", async (ctx) => {
   const chatId = String(ctx.chat?.id ?? ctx.callbackQuery.from.id);
   const data = ctx.callbackQuery.data;
-  const toast = data.startsWith("ob:")
-    ? await handleOnboardingButton(
-        chatId,
-        data,
-        ctx.callbackQuery.message?.message_id,
-      )
-    : undefined;
-  await ctx.answerCallbackQuery(toast ? { text: toast } : undefined).catch(() => {
-    /* 응답 실패는 무시 — 오래된 콜백은 텔레그램이 거부한다 */
-  });
+  const answer = (toast?: string): Promise<void> =>
+    ctx
+      .answerCallbackQuery(toast ? { text: toast } : undefined)
+      .then(() => undefined)
+      .catch(() => {
+        /* 응답 실패는 무시 — 오래된 콜백은 텔레그램이 거부한다 */
+      });
+  if (!data.startsWith("ob:m:")) {
+    await answer();
+    if (data.startsWith("ob:")) await handleOnboardingButton(chatId, data, undefined);
+    return;
+  }
+  const toast = await handleOnboardingButton(
+    chatId,
+    data,
+    ctx.callbackQuery.message?.message_id,
+  );
+  await answer(toast);
 });
 
 // TODO(D1 전): /새로만나기 — 비가역 확인 → 아카이브 → "어떤 점이 아쉬웠어?" → 새 캐릭터 생성
