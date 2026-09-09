@@ -777,7 +777,7 @@ export const farewellSituation = (b: PlanBlock): string =>
 // 몰아 답장 — 불가 구간이 끝나 깨어난 자리. 그 사이 온 메시지를 한 번에 읽고 답하는 상황 문단.
 export const gatherSituation = (activity: string): string =>
   [
-    `[몰아 답장 — 방금 자리에서 돌아왔다]`,
+    `[몰아 답장 — 방금 하던 일이 끝나 이제야 본다]`,
     `너는 방금 "${activity}"을(를) 끝냈다. 대화 기록 끝의 상대 메시지들은 그 동안 온 것이라 이제야 본다.`,
     `이제 끝나고 봤다는 결로, 쌓인 말을 한 번에 자연스럽게 받는다. 메시지가 여러 개면 억지로 하나하나 다 짚지 말고 흐름으로 답한다.`,
     `[지금] 절의 "지금 하는 일"은 방금 시작한 다음 일정이다 — 아직 하지 않았으니 끝냈다고 말하지 않는다.`,
@@ -1244,7 +1244,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
   const action = pickReturnAction(last.meta_json, cur);
   if (action === "skip") {
     console.log(
-      `[wake] 복귀 인사 접음 — ${cur && !isAwayUnavail(cur) ? "잠" : "직전에 이미 했다"} (chat=${chatId})`,
+      `[wake] 복귀 인사 접음 — ${last.meta_json?.includes('"return"') ? "직전에 이미 했다" : "잠"} (chat=${chatId})`,
     );
     return;
   }

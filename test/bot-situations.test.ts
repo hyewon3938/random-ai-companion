@@ -140,7 +140,7 @@ test("배웅 답 문단에 시작 시각과 활동이 들어간다", () => {
 
 test("몰아 답장 문단에 방금 끝낸 활동이 들어간다", () => {
   const out = gatherSituation("헬스장");
-  assert.match(out, /^\[몰아 답장 — 방금 자리에서 돌아왔다\]/);
+  assert.match(out, /^\[몰아 답장 — 방금 하던 일이 끝나 이제야 본다\]/);
   assert.match(out, /"헬스장"을\(를\) 끝냈다/);
 });
 
