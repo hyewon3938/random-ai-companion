@@ -10,9 +10,11 @@
 // 모른다.
 //
 // 관계 신호(#353)도 여기서 적는다 — 답장 신호의 first는 firsts에 미확정 행으로, told_plan은
-// 오늘 캐릭터 일정의 상대가 안다는 표시로, 판정 호출이 돌려준 열림 4항목은 relationship_signals에
-// 턴마다 1행으로. 쓴 수(move)와 told_plan은 replyMeta로 돌려줘 호출부가 대화 기록의 답장 행
-// meta_json에 싣는다 — 다음 판정 호출과 [지금 관계] 절이 그 행을 읽는다.
+// 오늘 캐릭터 일정이 하나뿐일 때 그 일정의 상대가 안다는 표시로, 판정 호출이 돌려준 열림
+// 4항목은 relationship_signals에 턴마다 1행으로. 만들어 둔 답장이 폐기되고 다시 만들어지면
+// 마지막으로 나간 답장 뒤의 열림 행을 걷어 내고 적어 한 턴에 1행을 지킨다. 쓴 수(move)와
+// told_plan은 replyMeta로 돌려줘 호출부가 대화 기록의 답장 행 meta_json에 싣는다 — 다음 판정
+// 호출과 [지금 관계] 절이 그 행을 읽는다.
 //
 // 만드는 동안 유저가 말을 더 보냈거나 답이 비어 있으면 null을 돌려준다. 그때도 호출 기록에는
 // 버린 이유와 객체를 어느 길로 읽었는지가 남는다 — 형식이 깨진 날을 되짚는 자리다.
@@ -23,11 +25,13 @@
 import { config } from "./config.js";
 import { buildSystemBlocks, type BuildTrace } from "./context.js";
 import {
+  deleteRelationshipSignalsAfter,
   getActiveSchedulesOn,
   getRecentMessages,
   getStage,
   insertFirst,
   insertRelationshipSignal,
+  lastAssistantMessage,
   markScheduleKnown,
   setCallContext,
   type MessageRow,
@@ -313,12 +317,28 @@ export const composeReply = async (
     } catch (e) {
       console.error(`${logTag} 처음 기록 실패:`, e);
     }
+  // 오늘 일정을 말했다는 신호는 어느 일정인지를 안 가리킨다 — 오늘 캐릭터 일정이 하나뿐일 때만
+  // 그 일정을 표시하고, 둘 이상이면 새벽 정리가 대화를 보고 고른다(#345의 schedule_updates).
+  // 표시는 한 방향이라 안 말한 일정까지 안다고 적으면 되돌릴 길이 없다.
   if (signals.toldPlan)
-    for (const s of getActiveSchedulesOn(characterId, "char", kstLogicalDate()))
-      markScheduleKnown(characterId, s.id);
+    try {
+      const todays = getActiveSchedulesOn(characterId, "char", kstLogicalDate());
+      if (todays.length === 1) markScheduleKnown(characterId, todays[0]!.id);
+    } catch (e) {
+      console.error(`${logTag} 일정 말함 표시 실패:`, e);
+    }
   if (verdict.signals)
     try {
       const o = verdict.signals;
+      // 한 유저 턴에 1행 — 만들어 둔 답장이 폐기되고 다시 만들어지면 앞선 답장의 행이 남아
+      // 있다. 마지막으로 나간 답장 뒤에 적힌 행이 그것이라 걷어 내고 적는다.
+      const replaced = deleteRelationshipSignalsAfter(
+        characterId,
+        chatId,
+        lastAssistantMessage(chatId, characterId)?.sent_at ?? null,
+      );
+      if (replaced)
+        console.log(`${logTag} 열림 신호 ${replaced}행을 이번 답장 것으로 바꾼다 (chat=${chatId})`);
       insertRelationshipSignal({
         characterId,
         chatId,

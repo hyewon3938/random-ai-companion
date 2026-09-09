@@ -282,6 +282,27 @@ export const insertRelationshipSignal = (
   return row.id;
 };
 
+/** 마지막으로 나간 답장 뒤에 적힌 이 대화의 신호 행을 지운다. 만들어 둔 답장이 폐기되고 다시
+ * 만들어질 때 앞선 행을 걷어 한 유저 턴에 1행을 지킨다. since가 없으면(아직 나간 답장이 없으면)
+ * 이 대화의 행 전부다. 지운 수를 돌려준다. */
+export const deleteRelationshipSignalsAfter = (
+  characterId: number,
+  chatId: string,
+  since: string | null,
+): number =>
+  since === null
+    ? db
+        .prepare(
+          `DELETE FROM relationship_signals WHERE character_id = ? AND chat_id = ?`,
+        )
+        .run(characterId, chatId).changes
+    : db
+        .prepare(
+          `DELETE FROM relationship_signals
+            WHERE character_id = ? AND chat_id = ? AND at > ?`,
+        )
+        .run(characterId, chatId, since).changes;
+
 /** 두 시각 사이의 신호. 새벽 정리가 어제치를 세어 문턱을 재고 반응 점수의 표본으로 쓴다.
  * from은 포함, to는 제외한다. */
 export const getRelationshipSignals = (

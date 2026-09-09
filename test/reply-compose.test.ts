@@ -29,7 +29,9 @@ const { composeReply, heldSituation, pendingUserTurn } = await import(
 );
 const { askReply } = await import("../src/reply-ask.js");
 const { userStateLabel } = await import("../src/user-state.js");
-const { kstLogicalDate, kstStamp, logicalDateOf } = await import("../src/kst.js");
+const { kstLogicalDate, kstStamp, kstStampBefore, logicalDateOf } = await import(
+  "../src/kst.js"
+);
 type ReplyAsker = import("../src/reply-compose.js").ReplyAsker;
 type SystemBlock = import("../src/llm.js").SystemBlock;
 type ChatTurn = import("../src/llm.js").ChatTurn;
@@ -409,5 +411,65 @@ describe("composeReply", () => {
     db.prepare(`DELETE FROM firsts WHERE character_id = ?`).run(characterId);
     db.prepare(`DELETE FROM relationship_signals WHERE character_id = ?`).run(characterId);
     db.prepare(`DELETE FROM schedules WHERE id = ?`).run(scheduleId);
+  });
+
+  it("일정 말함 — 오늘 캐릭터 일정이 둘 이상이면 어느 것인지 몰라 표시하지 않는다", async () => {
+    clearMessages();
+    const today = kstLogicalDate();
+    const ids = [
+      addSchedule(characterId, "char", today, "12:00", "점심 약속", kstStamp(), "rhythm"),
+      addSchedule(characterId, "char", today, "19:00", "저녁에 헬스", kstStamp(), "rhythm"),
+    ];
+    logMessage(CHAT, characterId, "user", "오늘 뭐 해?", kstStamp());
+    const turn = pendingUserTurn(CHAT, characterId);
+    assert.ok(turn);
+    const out = await composeReply({
+      judge: noJudge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]",
+      ask: canned([reply(["저녁에 헬스 가"], { told_plan: true })]),
+    });
+    assert.ok(out);
+    assert.deepEqual(out.replyMeta, { told_plan: true });
+    const knows = db
+      .prepare(`SELECT user_knows FROM schedules WHERE id IN (?, ?) ORDER BY id`)
+      .all(...ids) as { user_knows: string }[];
+    assert.deepEqual(knows.map((k) => k.user_knows), ["unknown", "unknown"]);
+    db.prepare(`DELETE FROM schedules WHERE id IN (?, ?)`).run(...ids);
+  });
+
+  it("열림 신호 — 폐기된 답장의 행은 다시 만든 답장의 행으로 바뀌고, 나간 답장 뒤의 턴은 새 행이다", async () => {
+    clearMessages();
+    const judge = async (): Promise<UserStateVerdict> => ({
+      changed: false, state: null, failed: false, callId: null, prev: null,
+      signals: {
+        openedSelf: true, askedAboutChar: false, saidAffection: false,
+        prevMove: null, moveReaction: "none",
+      },
+    });
+    const count = (): number =>
+      getRelationshipSignals(characterId, "2000-01-01", "2100-01-01").length;
+    const compose = async (text: string): Promise<void> => {
+      const turn = pendingUserTurn(CHAT, characterId);
+      assert.ok(turn);
+      const out = await composeReply({
+        judge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]",
+        ask: canned([reply([text])]),
+      });
+      assert.ok(out);
+    };
+    // 앞서 나간 답장은 1분 전, 유저 말이 온 뒤 답장을 만든다
+    logMessage(CHAT, characterId, "assistant", "먼저 보낸 말", kstStampBefore(60_000));
+    logMessage(CHAT, characterId, "user", "나 오늘 좀 힘들었어", kstStamp());
+    await compose("힘들었구나");
+    assert.equal(count(), 1);
+    // 그 답장이 나가기 전에 유저가 말을 더 보내 폐기하고 다시 만든다 — 행은 그대로 1
+    logMessage(CHAT, characterId, "user", "아니 그냥", kstStamp());
+    await compose("무슨 일인데");
+    assert.equal(count(), 1);
+    // 답장이 나간 뒤에 온 턴은 새 행이다
+    logMessage(CHAT, characterId, "assistant", "무슨 일인데", kstStamp());
+    logMessage(CHAT, characterId, "user", "회사에서", kstStamp());
+    await compose("아이고");
+    assert.equal(count(), 2);
+    db.prepare(`DELETE FROM relationship_signals WHERE character_id = ?`).run(characterId);
   });
 });

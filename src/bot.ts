@@ -1117,8 +1117,9 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
     kstStamp(),
     {
       kind,
-      // 답장 행의 meta_json에 실어 온 관계 값(move·told_plan)을 기록 행으로 옮긴다.
-      ...(kind === "reply" ? parseReplyMeta(row.meta_json) : {}),
+      // 답장 행의 meta_json에 실어 온 관계 값(move·told_plan)을 기록 행으로 옮긴다. 복구 답장도
+      // 같은 길로 만든 것이라 같이 옮긴다 — 빠지면 다음 판정이 직전 수를 못 본다.
+      ...parseReplyMeta(row.meta_json),
       ...(sent.length < bubbles.length
         ? { partial: `${sent.length}/${bubbles.length}` }
         : {}),
