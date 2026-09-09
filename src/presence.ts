@@ -28,26 +28,22 @@
 // 한 자리에서 한다.
 
 import { isHeldNow } from "./reply-timing.js";
-import {
-  awayNoticeCountToday,
-  awayNoticeSent,
-} from "./proactive-policy.js";
+import { awayNoticeCountToday, awayNoticeSent } from "./proactive-policy.js";
 import {
   getActiveCharacters,
   getDayPlan,
-  hasWaitingWakeRow,
   lastAssistantTs,
   lastMessage,
   lastUserTs,
 } from "./db.js";
-import { scheduleWakeRow } from "./pending.js";
+import { armReturnRow } from "./pending.js";
+import { LEAVING_LINES } from "./bot.js";
 import { noOverlap, sendProactiveDraft } from "./proactive-send.js";
 import { traceAwaySkip } from "./reply-trace.js";
 import type { DayPlan, PlanBlock } from "./day-plan.js";
 import { blockCategory, isAwayUnavail } from "./day-plan.js";
 import {
   AWAY_MIN_BLOCK_MIN,
-  BLOCK_END_JITTER_MS,
   AWAY_QUIET_MIN,
   AWAY_BEFORE_MIN,
   AWAY_AFTER_MIN,
@@ -71,9 +67,10 @@ import {
 // '찾을 때 있어주기'의 연장 — 막연한 침묵(이탈)을 '알고 하는 기다림'으로 바꾼다. 블록당 한 번.
 // 다녀온 뒤 무엇을 보낼지는 이 파일이 정하지 않는다 — 구간 끝에 울리는 표시(bot.ts의 wake
 // 핸들러)가 쌓인 메시지 몰아 답장과 복귀 인사를 한 자리에서 처리한다. 다만 그 표시를 거는
-// 것은 이 틱의 몫이다(armReturnRow): 예전에는 유저가 그 구간에 말을 걸어야만 표시가 생겨서,
-// 나가기 전 대화를 나누고 유저가 답하지 않은 채 구간이 지나가면 캐릭터가 다음 날 아침까지
-// 아무 말도 하지 않았다. 유저는 이따 보자는 말을 듣고 기다리는 중인데도.
+// 것은 이 틱의 몫이기도 하다(armCurrentBlockReturn → pending.ts의 armReturnRow): 예전에는
+// 유저가 그 구간에 말을 걸어야만 표시가 생겨서, 나가기 전 대화를 나누고 유저가 답하지 않은 채
+// 구간이 지나가면 캐릭터가 다음 날 아침까지 아무 말도 하지 않았다. 유저는 이따 보자는 말을
+// 듣고 기다리는 중인데도.
 //
 // 문안은 대화와 같은 3층 프롬프트(buildSystemBlocks)에 상황 문단만 얹는다 — 앞 두 층이
 // 대화와 같아야 캐시가 붙는다. 정체성·말투·표기 규칙·지금 시각은 3층이 들고 있으니 여기엔 상황만 적는다.
@@ -120,6 +117,7 @@ export const presenceSituation = (
     `- 나가는 경우: 이제 그 일을 하러 가고 그동안 답이 늦어질 거라고 가볍게 알리는 결.`,
     `- 방금 뭔가 하고 와서 또 나가는 경우: 방금 한 걸 자연스럽게 언급하며 이제 다음 걸 하러 간다고 말한다.`,
     `- 짧게 1~2개 말풍선(줄바꿈 구분). 재촉하거나 매달리지 않는다.`,
+    LEAVING_LINES,
     `- 억지스러우면(딱히 알릴 만한 상황이 아니면) send=false.`,
     `- away 칸에는 무슨 일로 자리를 비우는지 한 구절로 먼저 적고, text는 그 일이 들어가게 쓴다.`,
     ``,
@@ -130,40 +128,24 @@ export const presenceSituation = (
 /**
  * 지금 들어가 있는 불가 구간이 끝나는 시각에 울릴 표시를 걸어 둔다.
  *
- * 예고를 보냈는지와 무관하게 건다 — 예고가 막혀 조용히 사라진 날이야말로 돌아와서 말을
- * 거는 게 필요한 날이다. 유저가 그 구간에 말을 걸면 이 행이 'wake'로 바뀌어(promoteWakeRow)
- * 몰아 답장 쪽으로 간다. 걸어 둔 것이 이미 있으면 두지 않는다 — 한 구간에 행은 하나다.
+ * 거는 일 자체는 pending.ts의 armReturnRow가 한다(구간 끝 핸들러도 같은 함수로 건다). 여기서는
+ * 알리지 않고 다녀오는 짧은 구간만 거른다 — 나갈 때 말이 없었는데 들어와서만 말하면 유저
+ * 쪽에서는 앞뒤가 맞지 않는다. 몰아 답장에서 그리로 간다고 알린 짧은 구간은 핸들러 쪽이 직접
+ * 건다(이슈 #341).
  */
-const armReturnRow = (
+const armCurrentBlockReturn = (
   characterId: number,
   chatId: string,
   blocks: PlanBlock[],
   nowMin: number,
   userMsgAt: string,
 ): void => {
-  if (hasWaitingWakeRow(chatId)) return;
   const cur = blocks.find(
     (b) => toMin(b.start) <= nowMin && nowMin < toMin(b.end),
   );
   if (!cur || !isAwayUnavail(cur)) return;
-  // 알리지 않고 다녀오는 짧은 구간은 돌아와서 인사도 하지 않는다 — 나갈 때 말이 없었는데
-  // 들어와서만 말하면 유저 쪽에서는 앞뒤가 맞지 않는다.
   if (toMin(cur.end) - toMin(cur.start) < AWAY_MIN_BLOCK_MIN) return;
-  const waitMs =
-    (toMin(cur.end) - nowMin) * 60_000 +
-    Math.floor(Math.random() * BLOCK_END_JITTER_MS);
-  scheduleWakeRow({
-    chatId,
-    characterId,
-    userMsgAt,
-    waitMs,
-    meta: {
-      activity: cur.activity,
-      blockStart: cur.start,
-      blockEnd: cur.end,
-    },
-    kind: "return",
-  });
+  armReturnRow({ chatId, characterId, block: cur, userMsgAt });
 };
 
 const presenceTickBody = async (): Promise<void> => {
@@ -190,13 +172,14 @@ const presenceTickBody = async (): Promise<void> => {
 
     // 구간 끝에 울릴 표시부터 걸어 둔다. 아래 예고가 상한·중복·침묵으로 접히더라도
     // 돌아와서 말을 걸 자리는 남는다.
-    armReturnRow(c.id, c.chat_id, blocks, nowMin, lu);
+    armCurrentBlockReturn(c.id, c.chat_id, blocks, nowMin, lu);
 
     // 하루 예고 상한 — 나갔다 오는 일정이 많은 날도 알리는 말이 과해지지 않게 막는다.
     // 하루 각본을 만들 때부터 같은 상한을 지키므로 여기서 걸리는 날은 드물다.
     // dayStart는 논리일(새벽 5시 컷오프) 기준 — 달력일 기준이면 자정~새벽에 카운트가 리셋된다.
     const dayStart = logicalDayStartTs();
-    if (awayNoticeCountToday(c.chat_id, c.id, dayStart) >= AWAY_DAILY_MAX) continue;
+    if (awayNoticeCountToday(c.chat_id, c.id, dayStart) >= AWAY_DAILY_MAX)
+      continue;
 
     // 예고할 불가 블록 찾기: 미리 아는 일정은 시작 직전, 닥친 일은 시작 시점,
     // 연속 불가 사이는 경계(직후)에 알린다.

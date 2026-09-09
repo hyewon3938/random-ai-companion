@@ -5,10 +5,11 @@
 //
 // 답장 순서는 텀 결정(reply-timing.ts) → 생성(reply-compose.ts) → 대기 → 발송(pending.ts)이다.
 // 답장 불가 구간에 온 말은 답장을 만들지 않고 깨우기 표시만 걸어 두고, 구간이 끝나면
-// wake 핸들러가 세 갈래로 나뉜다 — 쌓인 메시지에 몰아 답하거나, 예고하고 나간 자리면
-// 복귀 인사를 하거나, 아무것도 하지 않는다. 몰아 답장도 같은 생성 순서를 타고, 상황 문단과
+// wake 핸들러가 네 갈래로 나뉜다 — 쌓인 메시지에 몰아 답하거나, 답할 수 있는 블록이면
+// 복귀 인사를 하거나, 다음 블록도 자리 비움이면 사이 예고를 보내고 그 끝에 표시를 다시 걸거나,
+// 아무것도 하지 않는다(pickReturnAction). 몰아 답장도 같은 생성 순서를 타고, 상황 문단과
 // 시간 표시 기준만 다르게 준다. 예고한 블록이 시작하기 전까지 온 말에는 farewellSituation으로
-// 배웅 답을 보낸다. 답장에서 연락 약속을 하면 코드가 각본 경계에서 시각을 골라 걸어 두고,
+// 배웅 답을 보낸다. 자리를 비우러 가는 말의 결(LEAVING_LINES)은 자리 비움 예고와 같은 줄을 쓴다. 답장에서 연락 약속을 하면 코드가 각본 경계에서 시각을 골라 걸어 두고,
 // 그 시각에 promise 핸들러가 그 사이 온 말에 답하거나 먼저 연락한다(이슈 #308). 약속이 그 뒤
 // 어떻게 됐는지는 단계마다 약속을 한 답장의 슬랙 스레드에 남긴다(tracePromise, 이슈 #312).
 //
@@ -60,6 +61,7 @@ import { awayNoticeSent } from "./proactive-policy.js";
 import { composeReply, pendingUserTurn } from "./reply-compose.js";
 import { promiseSlotFor } from "./reply-promise.js";
 import {
+  armReturnRow,
   dropPendingReplies,
   dropPromiseRows,
   dropWakeRows,
@@ -409,7 +411,8 @@ const speechKeyboard = (): InlineKeyboard =>
 
 const leadKeyboard = (): InlineKeyboard => {
   const kb = new InlineKeyboard();
-  for (const tone of LEAD_TONES) kb.text(LEAD_TONE_NAME[tone], `ob:l:${tone}`).row();
+  for (const tone of LEAD_TONES)
+    kb.text(LEAD_TONE_NAME[tone], `ob:l:${tone}`).row();
   return kb;
 };
 
@@ -421,7 +424,10 @@ const mixKeyboard = (ob: Onboarding): InlineKeyboard => {
     const on = ob.mixTones.includes(tone);
     kb.text(`${on ? "✓ " : ""}${LEAD_TONE_NAME[tone]}`, `ob:m:${tone}`).row();
   }
-  kb.text(ob.mixTones.length ? "이대로 넘어가기" : "섞지 않고 넘어가기", "ob:m:done");
+  kb.text(
+    ob.mixTones.length ? "이대로 넘어가기" : "섞지 않고 넘어가기",
+    "ob:m:done",
+  );
   return kb;
 };
 
@@ -651,7 +657,8 @@ bot.on("callback_query:data", async (ctx) => {
       });
   if (!data.startsWith("ob:m:")) {
     await answer();
-    if (data.startsWith("ob:")) await handleOnboardingButton(chatId, data, undefined);
+    if (data.startsWith("ob:"))
+      await handleOnboardingButton(chatId, data, undefined);
     return;
   }
   const toast = await handleOnboardingButton(
@@ -739,17 +746,32 @@ export const upcomingAnnouncedAway = (
     if (!isAwayUnavail(b)) continue;
     const rel = toMinOfDay(b.start) - nowMin;
     if (rel <= 0 || rel > 15) continue;
-    if (awayNoticeSent(chatId, characterId, logicalDayStartTs(), b.start)) return b;
+    if (awayNoticeSent(chatId, characterId, logicalDayStartTs(), b.start))
+      return b;
   }
   return null;
 };
+
+// 자리를 비우러 가는 말의 결 — 자리 비움 예고(presence.ts)·몰아 답장·배웅 답·사이 예고가
+// 같은 줄을 쓴다(이슈 #341). 끝나고 다시 물어보겠다는 식으로 대화를 닫으면 상대는 그 말을
+// 듣고 기다리는 자리가 되고, 몇 분 걸린다고 재는 말은 예고가 아니라 통보로 읽힌다. 얼른 하고
+// 오겠다는 결에, 그 일이 어떤지 상대가 그려 볼 수 있는 한 마디를 붙인다.
+export const LEAVING_LINES = [
+  `- 자리를 비우러 가는 말은 얼른 하고 오겠다는 결로 짧게 한다(얼른 씻고 올게, 금방 올게처럼). 끝나면 다시 물어보겠다는 식으로 대화를 닫거나, 몇 분 걸린다고 재는 말로 끝내지 않는다.`,
+  `- 그 일이 어떤지 상대가 그려 볼 수 있는 한 마디를 붙인다 — 운동 뒤라 땀이 많이 났다든가, 밖이 벌써 어둡다든가. 지어낸 사건이 아니라 각본과 [지금] 절에 있는 일에서 나온 한 마디다.`,
+].join("\n");
+
+// 각본에 없는 일을 지어내지 않는 줄 — 상황 문단이 말한 일과 [지금] 절의 일만 말한다. 이 줄이
+// 없으면 돌아왔다는 문안에서 씻으러 간다는 식으로 각본에 없는 다음 일을 만들어 붙인다.
+export const NO_INVENT_LINE = `- 지금 하는 일과 이제 할 일은 이 문단과 [지금] 절에 적힌 것만 말한다. 거기 없는 일을 하러 간다거나 했다고 지어내지 않는다.`;
 
 // 배웅 답 — 나간다고 이미 알린 뒤, 나가기 전까지 온 말에 짧게 받는 상황 문단.
 export const farewellSituation = (b: PlanBlock): string =>
   [
     `[배웅 답 — 곧 자리를 비운다]`,
     `너는 곧 ${clockLabel(b.start)}부터 "${b.activity}" 때문에 자리를 비운다. 상대에게는 이미 예고해 뒀다.`,
-    `나가기 직전의 짧은 주고받음이다 — 지금 온 말에 짧게만 받고, 새 화제를 벌이지 않는다. 필요하면 다녀와서 이어 가자는 결로.`,
+    `나가기 직전의 짧은 주고받음이다 — 지금 온 말에 짧게만 받고, 새 화제를 벌이지 않는다. 필요하면 얼른 다녀오겠다는 결로.`,
+    LEAVING_LINES,
   ].join("\n");
 
 // 몰아 답장 — 불가 구간이 끝나 깨어난 자리. 그 사이 온 메시지를 한 번에 읽고 답하는 상황 문단.
@@ -760,7 +782,50 @@ export const gatherSituation = (activity: string): string =>
     `이제 끝나고 봤다는 결로, 쌓인 말을 한 번에 자연스럽게 받는다. 메시지가 여러 개면 억지로 하나하나 다 짚지 말고 흐름으로 답한다.`,
     `[지금] 절의 "지금 하는 일"은 방금 시작한 다음 일정이다 — 아직 하지 않았으니 끝냈다고 말하지 않는다.`,
     `그 다음 일정의 답장 여건이 불가면, 이제 그리로 간다는 것까지 이 답장에서 함께 알린다. 같은 말을 하는 예고가 따로 나가지 않는다.`,
+    LEAVING_LINES,
+    NO_INVENT_LINE,
   ].join("\n");
+
+// 사이 예고 — 불가 구간이 끝났는데 다음 블록도 자리 비움 불가일 때, 돌아왔다는 말 대신 방금 한
+// 일과 이제 하러 가는 일을 알리는 상황 문단(이슈 #341). 자리 비움 틱의 경계 예고와 같은 자리지만
+// 이 문안은 구간 끝 핸들러가 만들어 보내므로 away 칸 없이 선톡 형식으로 받는다.
+export const betweenSituation = (
+  prevActivity: string,
+  next: PlanBlock,
+): string =>
+  [
+    `[문안 — 지금 보낼 사이 예고 한 통]`,
+    `너는 방금 "${prevActivity}"을(를) 막 끝냈고, 이제 곧 "${next.activity}"을(를) 하러 간다. 아직 집에 돌아온 것도, 한가해진 것도 아니다. 그 동안은 답장이 어렵다.`,
+    `이 일은 ${clockLabel(next.end)}에 끝난다(${toMinOfDay(next.end) - toMinOfDay(next.start)}분짜리). 얼마나 걸리는지 말할지는 네가 정하되, 말한다면 이 시각 그대로 쓴다 — 어림해서 다른 시각을 지어내지 않는다.`,
+    `- 방금 한 일을 자연스럽게 언급하며 이제 다음 걸 하러 간다고 말한다. 상대 말에는 그때 이미 답했으니 다시 답하지 않는다.`,
+    `- 무슨 일로 자리를 비우는지는 반드시 남긴다. 상대가 네가 뭘 하는지 알고 기다리게 하는 말이다.`,
+    LEAVING_LINES,
+    NO_INVENT_LINE,
+    `- 짧게 1~2개 말풍선(줄바꿈 구분). 재촉하거나 답을 요구하지 않는다.`,
+    `- 억지스러우면 send=false.`,
+    ``,
+    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
+  ].join("\n");
+
+/** 구간 끝 표시가 울렸는데 온 말이 없을 때 무엇을 할지(이슈 #341). */
+export type ReturnAction = "greet" | "between" | "rearm" | "skip";
+
+/**
+ * 구간 끝 표시가 울렸는데 온 말이 없을 때의 갈래. 직전 말이 복귀 인사면 또 하지 않는다(불가
+ * 구간이 이어지는 날 유저가 답하지 않는 동안 인사가 구간마다 쌓인다). 지금 블록이 답할 수 있는
+ * 블록이거나 각본에 없으면 복귀 인사(greet), 자리 비움 불가면 돌아왔다고 말하는 대신 사이
+ * 예고(between)를 보내고 그 끝에 표시를 다시 건다. 직전 말이 이미 사이 예고면 문안 없이 표시만
+ * 다시 건다(rearm). 잠이면 조용히 지나간다 — 굿나잇과 잠 정책이 따로 있다.
+ */
+export const pickReturnAction = (
+  lastMetaJson: string | null,
+  cur: PlanBlock | null,
+): ReturnAction => {
+  if (lastMetaJson?.includes('"return"')) return "skip";
+  if (!cur || cur.responsiveness !== "unavailable") return "greet";
+  if (!isAwayUnavail(cur)) return "skip";
+  return lastMetaJson?.includes('"between"') ? "rearm" : "between";
+};
 
 // 복귀 인사 — 자리를 비운 사이 상대에게서 온 말이 없었을 때, 돌아왔음을 먼저 알리는 상황 문단.
 //
@@ -775,6 +840,7 @@ export const returnSituation = (activity: string): string =>
     `- 돌아왔음을 가볍게 알린다(그 일이 이제 끝났고 돌아왔다는 결). 아까 하려던 안부를 자연스럽게 이어도 좋다. 매달림이 아니라 자연스러운 복귀 인사다.`,
     `- 나가기 전에 이따 보자고 해 뒀으면 그 말을 지키는 자리다. 대화 기록에서 그때 한 말을 보고 어긋나지 않게 받는다.`,
     `- 나가면서 아무 말도 못 했으면 무엇을 하다 왔는지 한 마디만 붙인다. 길게 변명하지 않는다.`,
+    NO_INVENT_LINE,
     `- 짧게 1~2개 말풍선(줄바꿈 구분). 재촉하거나 답을 요구하지 않는다.`,
     `- 억지스러우면 send=false.`,
     ``,
@@ -804,7 +870,10 @@ export const promiseSituation = (
     `- 짧게 1~2개 말풍선(줄바꿈 구분). 재촉하거나 답을 요구하지 않는다.`,
     ...(replying
       ? []
-      : [``, `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`]),
+      : [
+          ``,
+          `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
+        ]),
   ].join("\n");
 
 /**
@@ -838,7 +907,9 @@ const keepPromise = (
   }
   const replaced = dropPromiseRows(chatId, undefined, exceptRowId);
   if (replaced)
-    console.log(`[promise] 앞 약속 ${replaced}건 거둠 — 새 약속으로 갈아 끼운다`);
+    console.log(
+      `[promise] 앞 약속 ${replaced}건 거둠 — 새 약속으로 갈아 끼운다`,
+    );
   const meta: WakeMeta = {
     activity: slot.block.activity,
     blockStart: slot.block.start,
@@ -1048,10 +1119,14 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
   );
 });
 
-// 구간 끝 표시가 울리는 자리 — 답장 불가 구간이 끝났다. 갈래는 셋:
-// ① 그 사이 온 메시지가 있으면 몰아 답장 한 번 ("방금 끝났고 이제 봤다"가 사실인 시점에 만든다)
-// ② 온 말이 없으면 복귀 인사 ("이제 끝났어") — 나가기 전에 예고를 보냈는지로 문안만 갈린다
-// ③ 직전에 이미 복귀 인사를 했으면 조용히 지나간다.
+// 구간 끝 표시가 울리는 자리 — 답장 불가 구간이 끝났다. 갈래는 넷:
+// ① 그 사이 온 메시지가 있으면 몰아 답장 한 번 ("방금 끝났고 이제 봤다"가 사실인 시점에 만든다).
+//    지금 블록이 자리 비움 불가면 답장에서 그리로 간다고 말했으니 그 끝에 표시를 다시 건다.
+// ② 온 말이 없고 지금 답할 수 있으면 복귀 인사 ("이제 끝났어") — 나가기 전에 예고를 보냈는지로
+//    문안만 갈린다.
+// ③ 온 말이 없는데 지금 블록도 자리 비움 불가면 돌아왔다는 말 대신 사이 예고를 보내고 그 끝에
+//    표시를 다시 건다. 직전 말이 이미 사이 예고면 문안 없이 표시만 다시 건다(이슈 #341).
+// ④ 직전에 이미 복귀 인사를 했거나 잠이면 조용히 지나간다.
 // presence.ts에 따로 있던 복귀 알림 경로를 여기로 합쳤다 — 답장과 복귀 인사가 겹쳐 나가는
 // 이중 발송이 구조적으로 사라진다(답할 말이 있는 kind='wake' 행이 있는 동안 isWaiting이
 // 선톡 틱을 전부 막고, 이 자리에서 둘 중 하나만 고른다).
@@ -1131,6 +1206,24 @@ setWakeHandler(async (row: PendingReplyRow) => {
           : { text: signals.promise, dropped: "각본에 남은 블록이 없음" },
       });
     }
+    // 지금 블록이 자리 비움 불가면 그 끝에 표시를 건다 — 이 답장에서 그리로 간다고 말했으니
+    // 돌아와서 말할 자리가 있어야 한다. 자리 비움 틱은 알리지 않은 짧은 구간을 거르지만 여기서는
+    // 방금 알렸으므로 길이를 보지 않는다. 약속을 걸었으면 그 약속이 그 자리라 armReturnRow가
+    // 약속 행을 보고 걸지 않는다. 울리고 있는 이 행은 아직 waiting이라 빼고 센다.
+    const next = currentBlock(row.character_id);
+    if (next && isAwayUnavail(next)) {
+      const armed = armReturnRow({
+        chatId,
+        characterId: row.character_id,
+        block: next,
+        userMsgAt: turn.at,
+        exceptRowId: row.id,
+      });
+      if (armed)
+        reply.attach({
+          returnRow: { sendAt: armed.sendAt, activity: next.activity },
+        });
+    }
     console.log(
       `[wake] 몰아 답장 chat=${chatId} @ ${activity} bubbles=${bubbles.length}`,
     );
@@ -1143,11 +1236,33 @@ setWakeHandler(async (row: PendingReplyRow) => {
   // 검사에 자주 막힌다. 그래서 나갈 때 답장으로 이따 보자고 해 놓고 예고만 막힌 날에는 상대가
   // 그 말을 믿고 기다리는데도 캐릭터가 다음 날 아침까지 아무 말도 하지 않았다.
   if (!last || last.role !== "assistant") return;
-  // 방금 보낸 것이 복귀 인사면 또 하지 않는다 — 불가 구간이 이어지는 날 유저가 답하지 않는
-  // 동안 인사가 구간마다 쌓인다. 유저가 한 번 답하면 last.role이 유저가 되어 다시 열린다.
-  if (last.meta_json?.includes('"return"')) {
-    console.log(`[wake] 복귀 인사 접음 — 직전에 이미 했다 (chat=${chatId})`);
+  // 지금 블록을 보고 갈래를 고른다. 방금 보낸 것이 복귀 인사면 또 하지 않는다 — 불가 구간이
+  // 이어지는 날 유저가 답하지 않는 동안 인사가 구간마다 쌓인다. 유저가 한 번 답하면 last.role이
+  // 유저가 되어 다시 열린다. 지금 블록도 자리 비움 불가면 돌아왔다고 말하지 않는다 — 그 문안은
+  // 다음 일을 모르니 집에 왔다고 하거나 각본에 없는 일을 하러 간다고 지어냈다(이슈 #341).
+  const cur = currentBlock(row.character_id);
+  const action = pickReturnAction(last.meta_json, cur);
+  if (action === "skip") {
+    console.log(
+      `[wake] 복귀 인사 접음 — ${cur && !isAwayUnavail(cur) ? "잠" : "직전에 이미 했다"} (chat=${chatId})`,
+    );
     return;
+  }
+  // 사이 예고와 표시 다시 걸기는 문안이 나가든 접히든 먼저 건다 — 그 끝에 울릴 행이 있어야
+  // 마지막 불가 구간 뒤에 복귀 인사가 나간다. 울리고 있는 이 행은 아직 waiting이라 빼고 센다.
+  const between = action === "between" || action === "rearm" ? cur : null;
+  if (between) {
+    const armed = armReturnRow({
+      chatId,
+      characterId: row.character_id,
+      block: between,
+      userMsgAt: row.user_msg_at,
+      exceptRowId: row.id,
+    });
+    console.log(
+      `[wake] 다음 블록도 자리 비움(${between.activity}) — ${armed ? `${armed.sendAt}에 표시 다시 걺` : "표시 안 걺(이미 있음)"} (chat=${chatId})`,
+    );
+    if (action === "rearm") return;
   }
   // 이 인사는 선톡과 같은 자리를 쓴다. 답할 말이 있는 'wake' 행과 달리 이 행은 선톡 틱을
   // 막지 않으므로(그래야 구간 안에서 다음 예고와 아침·점심 선톡이 창을 지킨다), 보내는 동안만
@@ -1157,12 +1272,18 @@ setWakeHandler(async (row: PendingReplyRow) => {
     const draft = await chatJson<{ send: boolean; text?: string }>(
       buildSystemBlocks(row.character_id, chatId, {
         recent: PROACTIVE_RECENT_LINES,
-        situation: returnSituation(activity),
+        situation: between
+          ? betweenSituation(activity, between)
+          : returnSituation(activity),
       }),
       "위 상황 문단대로 문안을 만들어.",
       400,
       config.model,
-      { purpose: "away", characterId: row.character_id, chatId },
+      {
+        purpose: between ? "away" : "comeback",
+        characterId: row.character_id,
+        chatId,
+      },
     );
     // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나 다른 경로가 보냈으면 접는다.
     if (
@@ -1170,10 +1291,20 @@ setWakeHandler(async (row: PendingReplyRow) => {
       draft.text &&
       lastMessage(chatId, row.character_id)?.sent_at === last.sent_at
     ) {
-      await sendProactive(chatId, row.character_id, draft.text, "away", {
-        return: meta.blockStart ?? true,
-      });
-      console.log(`[wake] return @ ${activity} → ${chatId}`);
+      // 사이 예고의 block은 자리 비움 틱의 예고와 같은 칸이다 — 틱이 같은 블록에 예고를 또
+      // 보내지 않게(awayNoticeSent) 하고, between은 하루 상한에서 빼는 표시다.
+      await sendProactive(
+        chatId,
+        row.character_id,
+        draft.text,
+        "away",
+        between
+          ? { between: between.start, block: between.start }
+          : { return: meta.blockStart ?? true },
+      );
+      console.log(
+        `[wake] ${between ? "between" : "return"} @ ${activity} → ${chatId}`,
+      );
     }
   } finally {
     releaseProactive(chatId);
@@ -1244,9 +1375,14 @@ setPromiseHandler(async (row: PendingReplyRow) => {
   // ③ 그 사이 온 말이 있다 — 약속을 지키는 답장.
   if (last?.role === "user") {
     // 만들어 둔 답장이 있으면 버린다 — 약속 시각의 답장이 그 말까지 함께 받는다.
-    const droppedReply = dropPendingReplies(chatId, "약속 시각이 되어 다시 만든다");
+    const droppedReply = dropPendingReplies(
+      chatId,
+      "약속 시각이 되어 다시 만든다",
+    );
     if (droppedReply)
-      console.log(`[promise] 만들어 둔 답장 ${droppedReply}건 거둠 (chat=${chatId})`);
+      console.log(
+        `[promise] 만들어 둔 답장 ${droppedReply}건 거둠 (chat=${chatId})`,
+      );
     const turn = pendingUserTurn(chatId, row.character_id);
     if (!turn) return;
     const reply = await composeReply({
@@ -1306,7 +1442,8 @@ setPromiseHandler(async (row: PendingReplyRow) => {
 
   // ④ 온 말이 없다 — 약속대로 먼저 연락한다.
   if (!last || last.role !== "assistant") return;
-  if (!acquireProactive(chatId)) throw new Error("선톡 자리가 차 있음 — 잠시 뒤 다시");
+  if (!acquireProactive(chatId))
+    throw new Error("선톡 자리가 차 있음 — 잠시 뒤 다시");
   try {
     const draftMeta: CallMeta = {
       purpose: "promise",
@@ -1328,7 +1465,9 @@ setPromiseHandler(async (row: PendingReplyRow) => {
       setCallContext(draftMeta.callId, {
         promised: { promise, activity, blockStart: meta.blockStart ?? null },
       });
-    const draftLabel = draftMeta.callId ? `문안 #${draftMeta.callId}` : undefined;
+    const draftLabel = draftMeta.callId
+      ? `문안 #${draftMeta.callId}`
+      : undefined;
     // 발송 직전 재확인 — 모델을 기다리는 사이 유저가 답했거나 다른 경로가 보냈으면 접는다.
     if (!draft.send || !draft.text) {
       console.log(`[promise] 약속 연락 접음 (chat=${chatId}): ${promise}`);
@@ -1337,7 +1476,9 @@ setPromiseHandler(async (row: PendingReplyRow) => {
         `모델이 보내지 않기로 했다${draftLabel ? ` (${draftLabel})` : ""}`,
         draftMeta.callId,
       );
-    } else if (lastMessage(chatId, row.character_id)?.sent_at !== last.sent_at) {
+    } else if (
+      lastMessage(chatId, row.character_id)?.sent_at !== last.sent_at
+    ) {
       console.log(
         `[promise] 약속 연락 접음 — 문안을 만드는 사이 마지막 메시지가 바뀌었다 (chat=${chatId})`,
       );

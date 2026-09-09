@@ -133,6 +133,8 @@ export interface CallContext {
     dropped?: string;
     replaced?: number;
   };
+  /** 몰아 답장 뒤 지금 블록 끝에 건 구간 끝 표시 — 그 시각에 돌아와서 말을 건다(이슈 #341). */
+  returnRow?: { sendAt: string; activity: string };
   /** 객체를 어느 길로 읽었는지(json·stray·salvage·plain·empty). */
   outputParse?: string;
   bubbles?: number;
@@ -439,6 +441,10 @@ const outcomeLines = (ctx: CallContext): string[] => {
           }`,
     );
   }
+  if (ctx.returnRow)
+    out.push(
+      `*구간 끝 표시* ${esc(ctx.returnRow.sendAt)} (${esc(ctx.returnRow.activity)} 끝)`,
+    );
   if (ctx.dayActual) {
     const d = ctx.dayActual;
     const by = d.by === "judge" ? "붙잡기 판정" : "답장의 남음 신호";
@@ -566,7 +572,8 @@ export const renderDraft = (row: CallRow, ctx?: CallContext): string => {
       `*지킨 약속* ${esc(ctx.promised.promise ?? "")} — ${esc(start ? `${start} ${activity}` : activity)} 구간이 끝나 약속대로 연락하는 자리`,
     );
   }
-  if (ctx?.userState?.label) lines.push(`*상대 상태* ${esc(ctx.userState.label)}`);
+  if (ctx?.userState?.label)
+    lines.push(`*상대 상태* ${esc(ctx.userState.label)}`);
   const raw = row.output_hash ? getBlob(row.output_hash) : null;
   if (raw) {
     let shown = false;
