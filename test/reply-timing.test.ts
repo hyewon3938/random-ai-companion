@@ -2,8 +2,11 @@
 //
 // 각본이 없을 때, 자는 시간에 온 첫 연락과 그 뒤 연락, 이미 붙잡혀 접힌 블록, 즉답·틈틈이의
 // 세 칸, 공적 불가 구간까지 표의 길마다 어느 경로로 나오고 텀이 어느 범위에 드는지 본다.
-// 개인·사회 불가 구간은 붙잡기 판정 모델을 부르는 자리라 여기서는 다루지 않는다. 붙잡힘 표시를
-// 읽고 적는 isHeldNow·recordHold와 유저 이어 보내기 텀을 기록에서 읽는 recentUserGaps도 본다.
+// 개인·사회 불가 구간은 붙잡기 판정 모델을 부르는 자리라, 정해 둔 답을 돌려주는 판정 함수를
+// 넘겨 판정에 무엇이 들어가고 답마다 어느 길로 나오는지 본다 — 붙잡음이면 개인은 취소·사회는
+// 미룸 행이 남고, 아님은 구간 끝이며, 빈 답과 호출 실패는 아님과 갈라 표시된다(이슈 #336).
+// 판정에 주는 글(buildHoldPrompt)이 이어 보낸 통 수와 기다린 시간을 어떻게 적는지도 본다. 붙잡힘
+// 표시를 읽고 적는 isHeldNow·recordHold와 유저 이어 보내기 텀을 기록에서 읽는 recentUserGaps도 본다.
 //
 // 지금 시각은 코드가 kstLogicalClock()으로 읽고 그 밑은 Date.now()라, node:test의 mock.timers로
 // Date만 고정해 각본 표기 시각을 정확히 짚는다. SQLite 쪽 now는 이 경로에 없다. DB는 임시
@@ -15,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { PlanBlock } from "../src/day-plan.js";
+import type { HoldJudge } from "../src/reply-timing.js";
 import type { ActivityCategory, Responsiveness } from "../src/labels.js";
 import {
   INSTANT_MIN_MS,
@@ -42,8 +46,13 @@ const { db, getDayActuals, logMessage, recordDayActual, saveDayPlan } =
   await import("../src/db.js");
 const { createFixtureCharacter } =
   await import("../src/eval/fixture-character.js");
-const { decideReplyTiming, isHeldNow, recordHold, recentUserGaps } =
-  await import("../src/reply-timing.js");
+const {
+  buildHoldPrompt,
+  decideReplyTiming,
+  isHeldNow,
+  recordHold,
+  recentUserGaps,
+} = await import("../src/reply-timing.js");
 const { HOLD_OUTCOME, WOKE_OUTCOME } = await import("../src/labels.js");
 
 // 각본이 담는 논리일 하나에 시각만 옮겨 가며 본다. 각본 표기(05:00~28:59)를 그날 KST의
@@ -247,6 +256,185 @@ test("공적 불가 블록은 판정 없이 구간 끝까지 미루고 몰아 �
   assert.ok(inRange(d.waitMs, untilEnd, untilEnd + BLOCK_END_JITTER_MS));
   // 판정을 안 불렀으니 실제 기록에도 아무것도 남지 않는다
   assert.equal(actualsOf(characterId).length, 0);
+});
+
+// ── 붙잡기 판정 ────────────────────────────────────────────────────────
+
+/** 정해 둔 답을 돌려주는 판정 함수. 무엇을 받았는지는 seen에 남긴다. */
+const judgeWith = (answer: string | Error) => {
+  const seen: { system: string; prompt: string; purpose: string }[] = [];
+  const judge: HoldJudge = async (system, turns, meta) => {
+    seen.push({
+      system,
+      prompt: turns.map((t) => t.content).join("\n---\n"),
+      purpose: meta.purpose,
+    });
+    if (answer instanceof Error) throw answer;
+    return answer;
+  };
+  return { judge, seen };
+};
+
+test("판정에 주는 글은 한 통이면 방금 보낸 말로, 여러 통이면 통 수와 기다린 시간을 앞세운다", () => {
+  setClock("25:10");
+  assert.equal(
+    buildHoldPrompt({ activity: "자는 중", knows: null, userText: "자?" }),
+    "내가 지금 하는 일: 자는 중\n상대가 방금 보낸 말: 자?",
+  );
+  // 한 통은 burst가 있어도 방금 보낸 말이다
+  assert.equal(
+    buildHoldPrompt({
+      activity: "자는 중",
+      knows: "상대는 내게 이 일정이 있다는 걸 안다.",
+      userText: "자?",
+      burst: { n: 1, firstAt: "2026-09-08 01:09:40" },
+    }),
+    "내가 지금 하는 일: 자는 중\n상대는 내게 이 일정이 있다는 걸 안다.\n상대가 방금 보낸 말: 자?",
+  );
+  // 세 통을 5분에 걸쳐 보냈다
+  assert.equal(
+    buildHoldPrompt({
+      activity: "자는 중",
+      knows: null,
+      userText: "자?\n자나 보네\n일어나면 답해",
+      burst: { n: 3, firstAt: "2026-09-08 01:05:00" },
+    }),
+    "내가 지금 하는 일: 자는 중\n상대가 내 답을 못 받은 채로 5분 동안 이어 보낸 말 3통:\n자?\n자나 보네\n일어나면 답해",
+  );
+});
+
+test("기다린 시간은 1분이 안 되면 한 번에 보낸 것으로, 한 시간을 넘으면 시간 단위로 적는다", () => {
+  setClock("13:20");
+  const line = (firstAt: string): string =>
+    buildHoldPrompt({
+      activity: "낮잠",
+      knows: null,
+      userText: "있어?\n자?",
+      burst: { n: 2, firstAt },
+    }).split("\n")[1] ?? "";
+  assert.equal(
+    line("2026-09-07 13:19:40"),
+    "상대가 내 답을 못 받은 채로 1분 안에 이어 보낸 말 2통:",
+  );
+  assert.equal(
+    line("2026-09-07 12:15:00"),
+    "상대가 내 답을 못 받은 채로 1시간 5분 동안 이어 보낸 말 2통:",
+  );
+  assert.equal(
+    line("2026-09-07 11:20:00"),
+    "상대가 내 답을 못 받은 채로 2시간 동안 이어 보낸 말 2통:",
+  );
+});
+
+test("개인 불가 블록에서 붙잡음이 나오면 취소 행을 적고 틈틈이·개인 칸으로 바로 답한다", async () => {
+  const { characterId } = roomWith([
+    block("13:00", "14:00", "헬스장 운동", "unavailable", "personal"),
+  ]);
+  setClock("13:20");
+  const { judge, seen } = judgeWith("붙잡음");
+  const d = await decideReplyTiming(characterId, "자?\n있어?", {
+    burst: { n: 2, firstAt: "2026-09-07 13:17:00" },
+    judge,
+  });
+  assert.equal(d.trace.path, "held");
+  assert.equal(d.trace.asked, true);
+  assert.equal(d.trace.heldJudged, true);
+  assert.equal(d.gather, null);
+  assert.deepEqual(d.held, {
+    outcome: HOLD_OUTCOME.cancelled,
+    activity: "헬스장 운동",
+  });
+  assert.ok(
+    inRange(
+      d.waitMs,
+      INTERMITTENT_PERSONAL_MIN_MS,
+      INTERMITTENT_PERSONAL_MAX_MS,
+    ),
+  );
+  const rows = actualsOf(characterId);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.outcome, HOLD_OUTCOME.cancelled);
+  assert.equal(rows[0]?.block_start, "13:00");
+
+  // 판정은 한 번만 물었고, 문안에 두 답과 붙잡음으로 볼 신호·경계 예시가 있으며, 글에는
+  // 지금 하는 일과 이어 보낸 통 수·기다린 시간이 들어간다
+  assert.equal(seen.length, 1);
+  const call = seen[0];
+  assert.equal(call?.purpose, "hold");
+  for (const s of [
+    '"붙잡음"',
+    '"아님"',
+    "지금 있는지, 자는지, 바쁜지를 묻는 말",
+    "답이 와야 다음 말이 이어지는 물음",
+    "짧은 말을 이어 보내는 것",
+    "자? → 붙잡음",
+    "오늘 발표 잘 끝났어 → 아님",
+    "이어 보낸 말 2통: 뭐해 / 자나 보네 → 붙잡음",
+  ])
+    assert.ok(call?.system.includes(s), s);
+  assert.equal(
+    call?.prompt,
+    "내가 지금 하는 일: 헬스장 운동\n상대가 내 답을 못 받은 채로 3분 동안 이어 보낸 말 2통:\n자?\n있어?",
+  );
+});
+
+test("사회 불가 블록에서 붙잡음이 나오면 미룸 행을 적는다", async () => {
+  const { characterId } = roomWith([
+    block("19:00", "21:00", "친구와 저녁", "unavailable", "social"),
+  ]);
+  setClock("19:30");
+  const d = await decideReplyTiming(characterId, "지금 통화 돼?", {
+    judge: judgeWith("붙잡음").judge,
+  });
+  assert.equal(d.trace.path, "held");
+  assert.deepEqual(d.held, {
+    outcome: HOLD_OUTCOME.deferred,
+    activity: "친구와 저녁",
+  });
+  assert.equal(actualsOf(characterId)[0]?.outcome, HOLD_OUTCOME.deferred);
+});
+
+test("아님이 나오면 일정을 그대로 두고 구간 끝까지 미루며 몰아 답장 정보를 넘긴다", async () => {
+  const { characterId } = roomWith([
+    block("13:00", "14:00", "헬스장 운동", "unavailable", "personal"),
+  ]);
+  setClock("13:20");
+  const d = await decideReplyTiming(characterId, "나 이제 집 가는 중", {
+    burst: { n: 1, firstAt: "2026-09-07 13:19:50" },
+    judge: judgeWith("아님").judge,
+  });
+  assert.equal(d.trace.path, "until_end");
+  assert.equal(d.trace.asked, true);
+  assert.equal(d.trace.heldJudged, false);
+  assert.equal(d.trace.holdFailed, false);
+  assert.equal(d.held, null);
+  assert.deepEqual(d.gather, {
+    activity: "헬스장 운동",
+    blockStart: "13:00",
+    blockEnd: "14:00",
+  });
+  const untilEnd = 40 * 60_000;
+  assert.ok(inRange(d.waitMs, untilEnd, untilEnd + BLOCK_END_JITTER_MS));
+  assert.equal(actualsOf(characterId).length, 0);
+});
+
+test("빈 답과 호출 실패는 아님과 갈라 표시하고 일정은 그대로 둔다", async () => {
+  for (const answer of ["", "  \n", new Error("overloaded")]) {
+    const { characterId } = roomWith([
+      block("13:00", "14:00", "헬스장 운동", "unavailable", "personal"),
+    ]);
+    setClock("13:20");
+    const d = await decideReplyTiming(characterId, "자?", {
+      judge: judgeWith(answer).judge,
+    });
+    assert.equal(d.trace.path, "until_end", String(answer));
+    assert.equal(d.trace.asked, true);
+    assert.equal(d.trace.heldJudged, false);
+    assert.equal(d.trace.holdFailed, true, String(answer));
+    assert.equal(d.held, null);
+    assert.ok(d.gather);
+    assert.equal(actualsOf(characterId).length, 0);
+  }
 });
 
 // ── isHeldNow ──────────────────────────────────────────────────────────

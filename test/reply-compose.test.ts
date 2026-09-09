@@ -81,6 +81,7 @@ describe("pendingUserTurn", () => {
     logMessage(CHAT, characterId, "user", "나도 배고픈데", "2026-09-06 19:02:30");
     assert.deepEqual(pendingUserTurn(CHAT, characterId), {
       at: "2026-09-06 19:02:30",
+      firstAt: "2026-09-06 19:02:00",
       text: "뭐 먹었어\n나도 배고픈데",
       n: 2,
     });

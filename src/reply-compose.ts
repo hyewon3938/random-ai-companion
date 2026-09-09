@@ -45,6 +45,8 @@ import { lastTurns, toTurns } from "./turns.js";
 export interface UserTurn {
   /** 덩어리의 마지막 메시지 시각. 생성이 끝났을 때 이보다 새 메시지가 있으면 답장을 버린다. */
   at: string;
+  /** 덩어리의 첫 메시지 시각. 붙잡기 판정이 상대가 내 답 없이 기다린 시간을 여기서 잰다. */
+  firstAt: string;
   /** 메시지들을 줄바꿈으로 이은 글. 붙잡기 판정과 검색 태그가 이 글을 읽는다. */
   text: string;
   /** 메시지 수. */
@@ -63,10 +65,12 @@ export const pendingUserTurn = (
     if (!r || r.role !== "user") break;
     mine.unshift(r);
   }
+  const first = mine[0];
   const last = mine[mine.length - 1];
-  if (!last) return null;
+  if (!first || !last) return null;
   return {
     at: last.sent_at,
+    firstAt: first.sent_at,
     text: mine.map((m) => m.text).join("\n"),
     n: mine.length,
   };
