@@ -57,6 +57,7 @@ import {
 } from "../kst.js";
 import { WOKE_OUTCOME } from "../labels.js";
 import { dayProgressOf, type DayProgress } from "./day-progress.js";
+import { readRelationshipInput, type RelationshipInput } from "./relationship.js";
 
 /** 이번 조립이 무엇을 찾아 넣었는지 — 답장 호출 기록에 붙여 "왜 저 기억을 꺼냈나"를 되짚는다. */
 export interface BuildTrace {
@@ -147,6 +148,8 @@ export interface ContextInput {
   contactGap: ContactGap | null;
   /** 방금까지 오간 말 — opts.recent를 켠 선톡 문안 경로에서만 채운다. */
   recent: MessageRow[];
+  /** 지금 관계 — 단계·며칠째·처음·오늘 쓴 수·오늘의 의도(#353). */
+  relationship: RelationshipInput;
 }
 
 /**
@@ -290,5 +293,6 @@ export const readContextInput = (
     lastTalk: prev ? lastTalkedLabel(prev.sent_at) : null,
     contactGap: gap ? contactGapOf(gap.lastChar, gap.firstUser) : null,
     recent: opts.recent ? getRecentMessages(chatId, characterId, opts.recent) : [],
+    relationship: readRelationshipInput(characterId, chatId, logicalToday),
   };
 };

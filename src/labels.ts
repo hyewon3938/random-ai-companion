@@ -185,7 +185,8 @@ export type Move =
   | "jealousy_light"
   | "dodge_after_direct"
   | "only_you"
-  | "ask_help";
+  | "ask_help"
+  | "notice";
 
 export const MOVE_NAME: Record<Move, string> = {
   remember: "기억해서 챙기기",
@@ -200,6 +201,7 @@ export const MOVE_NAME: Record<Move, string> = {
   dodge_after_direct: "직진 뒤 딴청",
   only_you: "너한테만",
   ask_help: "도움 청하기",
+  notice: "어떤 사람인지 말해 주기",
 };
 
 /** 수에 대한 유저 반응 — 판정 호출이 직전 턴의 수를 보고 고른다. */

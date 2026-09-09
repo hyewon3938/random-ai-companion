@@ -123,3 +123,41 @@ test("약속을 안 하면 null이고 합칠 때는 앞 것이 남는다", () =>
     "저녁 먹고 연락",
   );
 });
+
+test("관계 신호 셋은 목록에 있는 코드만 받는다", () => {
+  const got = parseReplyOutput(
+    '{"reply":["오늘 저녁엔 헬스 가"],"note":null,"move":"nickname","first":"first_nickname","first_by":"character","told_plan":true}',
+  );
+  assert.equal(got.parse, "json");
+  assert.equal(got.signals.move, "nickname");
+  assert.deepEqual(got.signals.first, { kind: "first_nickname", by: "character" });
+  assert.equal(got.signals.toldPlan, true);
+
+  // 지어낸 코드와 뜻 이름은 버린다. 처음의 주인을 안 적으면 캐릭터가 먼저 한 것으로 본다
+  const bad = parseReplyOutput(
+    '{"reply":["응"],"note":null,"move":"별명","first":"first_tease","told_plan":"maybe"}',
+  );
+  assert.equal(bad.signals.move, null);
+  assert.deepEqual(bad.signals.first, { kind: "first_tease", by: "character" });
+  assert.equal(bad.signals.toldPlan, false);
+
+  const none = parseReplyOutput('{"reply":["응"],"note":null}');
+  assert.equal(none.signals.move, null);
+  assert.equal(none.signals.first, null);
+  assert.equal(none.signals.toldPlan, false);
+});
+
+test("관계 신호도 흘린 줄에서 읽고 합칠 때는 앞 것이 남는다", () => {
+  const got = parseReplyOutput('{"reply":["응"]}\nmove: laugh\ntold_plan: true');
+  assert.equal(got.parse, "stray");
+  assert.equal(got.signals.move, "laugh");
+  assert.equal(got.signals.toldPlan, true);
+
+  const merged = mergeSignals(
+    { ...EMPTY_SIGNALS, move: "laugh" },
+    { ...EMPTY_SIGNALS, move: "nickname", first: { kind: "first_laugh", by: "user" }, toldPlan: true },
+  );
+  assert.equal(merged.move, "laugh");
+  assert.deepEqual(merged.first, { kind: "first_laugh", by: "user" });
+  assert.equal(merged.toldPlan, true);
+});

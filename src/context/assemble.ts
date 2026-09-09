@@ -3,10 +3,12 @@
 // DB와 시계는 부르지 않는다. 필요한 값은 전부 context/input.ts가 읽어 ContextInput으로 넘기고,
 // 여기는 그 값을 문자열로 옮기는 순서와 문안만 갖는다. 바뀌는 값을 전부 뒤로 몰아서 앞 두 층을
 // 캐시에 태운다.
-//   불변층   — 정체성 기억(creation), 유저 프로필, 공통 규칙(태도·대화·표기·말의 결·note 신호)
+//   불변층   — 정체성 기억(creation), 유저 프로필, 공통 규칙(태도·대화·표기·말의 결·note 신호),
+//              관계 단계 공통 틀과 지금 단계 블록(단계가 오를 때만 바뀐다)
 //   일간층   — 관계 8컬럼 서술, 주변 인물, 진행 중인 일, 아크, 일정, 최근 일기
-//   실시간   — 검색해 꺼낸 기억, 주제로 찾은 지난 일기와 일정, 오늘 각본, 오늘 메모,
-//              직전 대화 시점, 오늘 안의 연락 텀, 지금 시각, 말투, 상황 문단, 답장 객체 설명
+//   실시간   — 검색해 꺼낸 기억, 주제로 찾은 지난 일기와 일정, 오늘 각본, 오늘 메모, 지금 관계
+//              (며칠째·처음·오늘 쓴 수·오늘의 의도), 직전 대화 시점, 오늘 안의 연락 텀, 지금 시각,
+//              말투, 상황 문단, 답장 객체 설명
 //
 // 말투는 저장값(relationships.speech_level)을 먼저 보고, 없을 때만 최근 발화 판정값을 쓴다.
 // 판정만으로 정하면 존댓말로 되돌아간다.
@@ -55,8 +57,10 @@ import {
   BANMAL_NOTE,
   RESPONSIVENESS_NOTE,
 } from "../prompts/reply.js";
+import { RELATIONSHIP_FRAME, STAGE_BLOCKS } from "../prompts/relationship.js";
 import { toMin, wokeNowLine } from "./day-progress.js";
 import type { BuildOptions, ContextInput } from "./input.js";
+import { relationshipNowSection } from "./relationship.js";
 
 // 하루 각본 주입(일간층) — 하루 동안 같은 것만 남긴다. 지나온 오늘·지금 몇 분째 같은
 // 시각 의존 표시는 꼬리(nowSection)가 맡는다: 일간층에 두면 매 응답마다 캐시가 깨진다.
@@ -275,6 +279,8 @@ export const assembleSystemBlocks = (
     `${SPEECH}\n\n${EXEMPLARS}\n\n${OUTPUT_FORMAT}\n\n${FACT_CARE}\n\n${NOTE_RULE}`,
     `[네 생활 — 잠 · 자리 비움 · 유저가 붙잡을 때]\n\n${SLEEP}\n\n${PRESENCE_NARRATION}\n\n${CATEGORY_RULE}`,
     `[시간] 너희가 처음 연결된 날은 ${metAt.slice(0, 10)}. 시간은 현실과 똑같이 흐른다.`,
+    // 단계 블록은 단계가 오를 때만 바뀌므로 불변층에 둔다 — 며칠째·처음 같은 값은 실시간 꼬리로.
+    `${RELATIONSHIP_FRAME}\n\n${STAGE_BLOCKS[input.relationship.stage]}`,
     relationshipSection(rel),
     input.userBlock,
   ]
@@ -326,6 +332,7 @@ export const assembleSystemBlocks = (
     oldDiarySection(input.search.oldDiaries),
     scheduleSearchSection(input.search.schedules, input.today),
     todaySection,
+    relationshipNowSection(input.relationship),
     userStateSection,
     lastTalkSection,
     contactGapSection(input.contactGap),

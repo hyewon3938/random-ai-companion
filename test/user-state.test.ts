@@ -16,8 +16,13 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 
 const { db, logMessage } = await import("../src/db.js");
 const { createFixtureCharacter } = await import("../src/eval/fixture-character.js");
-const { judgeUserState, parseUserStateVerdict, userStateLabel, userStateTranscript } =
-  await import("../src/user-state.js");
+const {
+  judgeUserState,
+  parseUserStateVerdict,
+  readOpenSignals,
+  userStateLabel,
+  userStateTranscript,
+} = await import("../src/user-state.js");
 type MessageRow = import("../src/db.js").MessageRow;
 
 const row = (
@@ -146,6 +151,44 @@ test("한 줄 표기는 상태 글에 시작 시각·원인·결을 괄호로 �
     ),
     "연락 약속을 안 지켜 서운함",
   );
+});
+
+test("열림 4항목은 예/아니오 셋이 다 있을 때만 읽고 직전 수가 없으면 반응은 늘 none이다", () => {
+  const full =
+    '{"changed":false,"opened_self":true,"asked_about_char":false,"said_affection":"true","move_reaction":"ignored"}';
+  assert.deepEqual(readOpenSignals(full, "nickname"), {
+    openedSelf: true,
+    askedAboutChar: false,
+    saidAffection: true,
+    prevMove: "nickname",
+    moveReaction: "ignored",
+  });
+  // 직전 수가 없으면 모델이 뭐라고 적었든 none이다
+  assert.deepEqual(readOpenSignals(full, null), {
+    openedSelf: true,
+    askedAboutChar: false,
+    saidAffection: true,
+    prevMove: null,
+    moveReaction: "none",
+  });
+  // 상태 판정 모양만 있고 열림 칸이 없으면 null — 상태 판정은 그대로 읽힌다
+  const stateOnly = '{"changed":false}';
+  assert.equal(readOpenSignals(stateOnly, null), null);
+  assert.deepEqual(parseUserStateVerdict(stateOnly, ROWS), { changed: false, state: null });
+  // 셋 가운데 하나라도 빠지면 null
+  assert.equal(
+    readOpenSignals('{"changed":false,"opened_self":true,"asked_about_char":false}', null),
+    null,
+  );
+  // 직전 수가 있는데 반응이 목록 밖이면 null
+  assert.equal(
+    readOpenSignals(
+      '{"changed":false,"opened_self":false,"asked_about_char":false,"said_affection":false,"move_reaction":"maybe"}',
+      "nickname",
+    ),
+    null,
+  );
+  assert.equal(readOpenSignals("답할 수 없다", null), null);
 });
 
 test("최근 대화에 유저 말이 없으면 판정 호출 없이 그대로라고 답한다", async () => {

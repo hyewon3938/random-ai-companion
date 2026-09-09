@@ -23,6 +23,10 @@ const fixtures: {
   echo?: string[];
   /** 왜 좋으냐고 물은 자리인가. */
   whyLike?: boolean;
+  /** 1단계 관계의 자리인가. */
+  stage1?: boolean;
+  /** 치켜세우기 쉬운 자리인가. */
+  noFlattery?: boolean;
 }[] = [
   { name: "깨끗한 답", raw: '{"reply":["헐 진짜?","그래서 어떻게 됐어?"]}', noLaugh: true, want: [] },
   { name: "웃음 1회(허용)", raw: '{"reply":["아 ㅋㅋㅋ 뭐야"]}', noLaugh: false, want: [] },
@@ -73,6 +77,28 @@ const fixtures: {
   { name: "이유 아닌 자리의 편하게는 안 잡는다", raw: '{"reply":["글쎄","그냥 편하게 하는 말 말고","너랑 얘기하면 나도 모르게 이런저런 생각이 자꾸 나","그냥 너라서 그런 것 같아"]}', noLaugh: false, whyLike: true, want: [] },
   { name: "편한 것보다는이라고 부정하면 안 잡는다", raw: '{"reply":["음","그냥 너랑 얘기하면 편한 것보다는 자꾸 하고 싶은 얘기가 생겨서 그런 것 같아"]}', noLaugh: false, whyLike: true, want: [] },
   { name: "묻지 않은 자리에서는 안 잡는다", raw: '{"reply":["나는 네 얘기 들어주는 거 좋아"]}', noLaugh: false, want: [] },
+  { name: "문장 끝 냐", raw: '{"reply":["지금 뭐 하냐?"]}', noLaugh: false, want: ["문장 끝 냐"] },
+  { name: "웃음 뒤에 숨은 냐", raw: '{"reply":["지금 뭐 하냐? ㅋㅋㅋ"]}', noLaugh: false, want: ["문장 끝 냐"] },
+  { name: "물음표 없는 냐는 둘 다 걸린다", raw: '{"reply":["지금 뭐 하냐"]}', noLaugh: false, want: ["문장 끝 냐", "묻는 문장에 물음표 없음"] },
+  { name: "냐고는 통과", raw: '{"reply":["뭐 할 거냐고 물어봤어"]}', noLaugh: false, want: [] },
+  { name: "라자냐는 통과", raw: '{"reply":["저녁은 라자냐"]}', noLaugh: false, want: [] },
+  { name: "누나요는 통과", raw: '{"reply":["저보다 나이 많은 누나요"]}', noLaugh: false, want: [] },
+  { name: "1단계 좋아한다", raw: '{"reply":["나 너 좋아해"]}', noLaugh: false, stage1: true, want: ["1단계에서 아직 안 하는 말"] },
+  { name: "1단계 네가 좋아", raw: '{"reply":["그냥 네가 좋아"]}', noLaugh: false, stage1: true, want: ["1단계에서 아직 안 하는 말"] },
+  { name: "1단계 네가 좋아하는 노래는 통과", raw: '{"reply":["네가 좋아하는 노래 나왔어"]}', noLaugh: false, stage1: true, want: [] },
+  { name: "1단계 네가 좋아 보여는 통과", raw: '{"reply":["오늘 네가 좋아 보여"]}', noLaugh: false, stage1: true, want: [] },
+  { name: "1단계 보고 싶다", raw: '{"reply":["너 보고 싶다"]}', noLaugh: false, stage1: true, want: ["1단계에서 아직 안 하는 말"] },
+  { name: "1단계 영화 보고 싶다는 통과", raw: '{"reply":["그 영화 나도 보고 싶다"]}', noLaugh: false, stage1: true, want: [] },
+  { name: "1단계 네가 보고 싶다는 영화는 통과", raw: '{"reply":["네가 보고 싶다는 영화 나도 궁금해"]}', noLaugh: false, stage1: true, want: [] },
+  { name: "1단계 질투", raw: '{"reply":["질투 나네"]}', noLaugh: false, stage1: true, want: ["1단계에서 아직 안 하는 말"] },
+  { name: "1단계 귀엽다", raw: '{"reply":["귀엽다 진짜"]}', noLaugh: false, stage1: true, want: ["1단계에서 아직 안 하는 말"] },
+  { name: "1단계 답장 타박", raw: '{"reply":["답장 왜 이렇게 늦어?"]}', noLaugh: false, stage1: true, want: ["1단계에서 아직 안 하는 말"] },
+  { name: "1단계 꺼져 있으면 안 잡는다", raw: '{"reply":["귀엽다 진짜"]}', noLaugh: false, want: [] },
+  { name: "이유 없이 생각났다", raw: '{"reply":["그냥 네 생각 났어"]}', noLaugh: false, stage1: true, want: ["이유 없이 생각났다는 말"] },
+  { name: "사물에 얹은 생각은 통과", raw: '{"reply":["편의점에서 네가 말한 젤리 보고 생각났어"]}', noLaugh: false, stage1: true, want: [] },
+  { name: "근거 없이 치켜세움", raw: '{"reply":["와 대단하다"]}', noLaugh: false, noFlattery: true, want: ["근거 없이 치켜세우는 말"] },
+  { name: "한 것 하나를 짚으면 통과", raw: '{"reply":["하나도 안 빼먹은 게 제일 어려운 건데","그걸 했네"]}', noLaugh: false, noFlattery: true, want: [] },
+  { name: "치켜세움 자리가 아니면 안 잡는다", raw: '{"reply":["와 대단하다"]}', noLaugh: false, want: [] },
 ];
 
 const sorted = (v: string[]): string[] => [...v].sort();
@@ -84,6 +110,8 @@ for (const f of fixtures) {
       noLaugh: f.noLaugh,
       echo: f.echo,
       whyLike: f.whyLike,
+      stage1: f.stage1,
+      noFlattery: f.noFlattery,
     }).map(
       (v) => v.rule,
     );
@@ -98,4 +126,6 @@ test("골든셋이 세 종류의 자리를 모두 덮는다", () => {
   assert.ok(CASES.some((c) => c.noLaugh), "웃음 금지 자리가 없다");
   assert.ok(CASES.some((c) => c.wantsLaugh), "웃음 나올 자리가 없다");
   assert.ok(CASES.some((c) => c.wantsQuestion), "되묻는 자리가 없다");
+  assert.ok(CASES.some((c) => c.stage1), "1단계 자리가 없다");
+  assert.ok(CASES.some((c) => c.noFlattery), "치켜세우기 쉬운 자리가 없다");
 });

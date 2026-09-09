@@ -298,6 +298,35 @@ export const countAssistantMeta = (
   ).c;
 };
 
+/** 캐릭터의 마지막 말. 판정 호출이 직전에 쓴 수(meta_json.move)를 읽는 자리다. */
+export const lastAssistantMessage = (
+  chatId: string,
+  characterId: number,
+): { id: number; sent_at: string; meta_json: string | null } | undefined =>
+  db
+    .prepare(
+      `SELECT id, sent_at, meta_json FROM messages
+        WHERE chat_id = ? AND character_id = ? AND role = 'assistant'
+        ORDER BY id DESC LIMIT 1`,
+    )
+    .get(chatId, characterId) as
+    | { id: number; sent_at: string; meta_json: string | null }
+    | undefined;
+
+/** 캐릭터 말 가운데 조건에 맞는 행의 시각과 meta_json을 보낸 순서로 돌려준다.
+ *  오늘 답장이 쓴 수와 일정을 말한 시각을 「지금 관계」 절이 읽는 자리다. */
+export const getAssistantMetaSince = (
+  chatId: string,
+  characterId: number,
+  since: string,
+  f: AssistantMetaFilter = {},
+): { sent_at: string; meta_json: string | null }[] => {
+  const w = assistantMetaWhere(chatId, characterId, since, f);
+  return db
+    .prepare(`SELECT sent_at, meta_json FROM messages WHERE ${w.sql} ORDER BY id`)
+    .all(...w.params) as { sent_at: string; meta_json: string | null }[];
+};
+
 export const hasAssistantMeta = (
   chatId: string,
   characterId: number,
