@@ -402,6 +402,7 @@ export const lastNightSleep = (
   const lastChar = chatId
     ? lastCharMessageTsBetween(
         chatId,
+        characterId,
         `${yesterday} 05:00:00`,
         `${date} 05:00:00`,
       )

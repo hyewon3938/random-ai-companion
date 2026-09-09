@@ -61,7 +61,7 @@ test("표본이 모자라거나 존댓말이면 말투를 건드리지 않는다
   assert.deepEqual(speechRatchet(ratchetId, RATCHET, NOW1), []);
   reply(RATCHET, ratchetId, "응 잘 지냈어", "2026-09-06 10:00:10");
   reply(RATCHET, ratchetId, "밥 먹었어?", "2026-09-06 10:01:00");
-  assert.equal(currentSpeechLevel(RATCHET), null);
+  assert.equal(currentSpeechLevel(RATCHET, ratchetId), null);
   assert.deepEqual(speechRatchet(ratchetId, RATCHET, NOW1), []);
   assert.deepEqual(rel(ratchetId), before);
 
@@ -69,14 +69,14 @@ test("표본이 모자라거나 존댓말이면 말투를 건드리지 않는다
   reply(POLITE, politeId, "잘 지내세요?", "2026-09-06 10:00:10");
   reply(POLITE, politeId, "저는 괜찮아요", "2026-09-06 10:01:00");
   reply(POLITE, politeId, "네 그렇죠", "2026-09-06 10:02:00");
-  assert.equal(currentSpeechLevel(POLITE), "존댓말");
+  assert.equal(currentSpeechLevel(POLITE, politeId), "존댓말");
   assert.deepEqual(speechRatchet(politeId, POLITE, NOW1), []);
   assert.deepEqual(rel(politeId), politeBefore);
 });
 
 test("최근 답장이 반말이면 말투를 반말로 옮기고 바뀐 기록을 돌려준다", () => {
   reply(RATCHET, ratchetId, "나는 아직이야", "2026-09-06 10:02:00");
-  assert.equal(currentSpeechLevel(RATCHET), "반말");
+  assert.equal(currentSpeechLevel(RATCHET, ratchetId), "반말");
   assert.deepEqual(speechRatchet(ratchetId, RATCHET, NOW1), [
     { field: "말투", from: "polite", to: "casual" },
   ]);
@@ -88,7 +88,7 @@ test("최근 답장이 반말이면 말투를 반말로 옮기고 바뀐 기록�
 test("반말이 된 뒤에는 존댓말 답장이 쌓여도 되돌리지 않고 다시 저장하지도 않는다", () => {
   for (let i = 0; i < 6; i++)
     reply(RATCHET, ratchetId, `${i}번째 답도 알겠습니다`, `2026-09-06 11:0${i}:00`);
-  assert.equal(currentSpeechLevel(RATCHET), "존댓말");
+  assert.equal(currentSpeechLevel(RATCHET, ratchetId), "존댓말");
   assert.deepEqual(speechRatchet(ratchetId, RATCHET, NOW2), []);
   const row = rel(ratchetId);
   assert.equal(row.speech_level, "casual");
@@ -183,7 +183,8 @@ test("저장된 호칭이 없던 관계는 앞 값을 null로 기록한다", () 
       .get(),
   );
   db.prepare(
-    `INSERT INTO relationships (character_id, met_at) VALUES (?, '2026-09-06 09:00:00')`,
+    `INSERT INTO relationships (character_id, met_at, stage_since)
+     VALUES (?, '2026-09-06 09:00:00', '2026-09-06 09:00:00')`,
   ).run(bareId);
   assert.deepEqual(
     applyReplySignals(bareId, { ...EMPTY_SIGNALS, addressTerms: "누나" }, NOW1),

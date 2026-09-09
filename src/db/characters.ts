@@ -2,9 +2,15 @@
 //
 // 캐릭터 행은 생성 때 한 번 넣고 상태만 바뀐다. 관계 행은 생성 배치가 첫 값을 채우고
 // 새벽 정리가 항목별로 고쳐 쓴다. 유저 프로필은 chat_id 기준이라 캐릭터가 바뀌어도 남는다.
+// 관계가 쌓이면서 늘어나는 표(처음·반응 점수·관계 의도·열림 신호)는 relationship.ts에 있다.
 
 import { db } from "./connection.js";
-import type { SpeechLevel, UserStateCause, UserStateTone } from "../labels.js";
+import type {
+  RelationshipStage,
+  SpeechLevel,
+  UserStateCause,
+  UserStateTone,
+} from "../labels.js";
 
 export interface CharacterRow {
   id: number;
@@ -51,11 +57,23 @@ export const insertCharacter = (
     )
     .run(chatId, genesisJson, now);
   const characterId = Number(result.lastInsertRowid);
+  // 단계는 1, 시작일은 캐릭터를 만든 날로 두고 시작한다 — 관계 단계는 캐릭터가 생기는
+  // 순간부터 값이 있어야 하고, 나머지 관계 항목처럼 뒤에 채우는 값이 아니다. 시작일은
+  // 시각을 떼고 논리일만 적는다 — 새벽 정리가 단계를 올릴 때 넣는 값도 논리일이고, 한
+  // 컬럼에 두 형식이 섞이면 지금 단계로 지낸 날수를 세는 비교가 어긋난다.
   db.prepare(
-    `INSERT INTO relationships (character_id, met_at) VALUES (?, ?)`,
-  ).run(characterId, now);
+    `INSERT INTO relationships (character_id, met_at, stage_no, stage_since) VALUES (?, ?, 1, ?)`,
+  ).run(characterId, now, now.slice(0, 10));
   return characterId;
 };
+
+/** 캐릭터를 끝낸다. 끝냈으면 true, 이미 끝나 있었으면 false. 되돌리는 함수는 두지 않는다 —
+ * 이별은 비가역이고, 다시 시작하는 길은 새 캐릭터를 만드는 것뿐이다. 걸려 있는 발송을 거두는
+ * 일은 부르는 쪽(tools/end-character.ts)이 이 함수를 부르기 전에 한다. */
+export const endCharacter = (characterId: number): boolean =>
+  db
+    .prepare(`UPDATE characters SET status = 'ended' WHERE id = ? AND status = 'active'`)
+    .run(characterId).changes > 0;
 
 export const getMetAt = (characterId: number): string | undefined => {
   const row = db
@@ -129,6 +147,36 @@ export const getRelationship = (
          FROM relationships WHERE character_id = ?`,
     )
     .get(characterId) as RelationshipRow | undefined;
+
+/** 지금 관계 단계와 그 단계가 시작된 날. */
+export interface StageRow {
+  stage_no: RelationshipStage;
+  stage_since: string;
+}
+
+export const getStage = (characterId: number): StageRow | undefined =>
+  db
+    .prepare(
+      `SELECT stage_no, stage_since FROM relationships WHERE character_id = ?`,
+    )
+    .get(characterId) as StageRow | undefined;
+
+/** 단계를 올린다. 올렸으면 true, 이미 그 단계거나 더 높으면 false. since는 논리일이다.
+ *
+ * 낮추는 값을 여기서 거부한다 — 관계는 쌓은 만큼 남고 다툰 하루에 되돌아가지 않는다는 것이
+ * 값의 성질이라, 부르는 쪽마다 지키게 두면 한 곳만 빠뜨려도 값이 내려간다. 어느 문턱에서
+ * 올릴지는 새벽 정리가 정하고, 여기는 넣는 자리다. */
+export const raiseStage = (
+  characterId: number,
+  stageNo: RelationshipStage,
+  since: string,
+): boolean =>
+  db
+    .prepare(
+      `UPDATE relationships SET stage_no = ?, stage_since = ?
+        WHERE character_id = ? AND stage_no < ?`,
+    )
+    .run(stageNo, since, characterId, stageNo).changes > 0;
 
 /** 상대의 지금 상태 한 건 — 무엇인지, 무엇 때문인지, 결이 어떤지, 언제부터인지. */
 export interface UserStateValue {

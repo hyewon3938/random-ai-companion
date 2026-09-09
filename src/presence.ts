@@ -181,9 +181,9 @@ const presenceTickBody = async (): Promise<void> => {
     // 유저가 방금까지 대화 중이었을 때만 — 하루 종일 조용한 상대에게 뜬금없이 알리지 않는다.
     // 캐릭터 자기 발화까지 세면 아침 선톡이 '최근 대화'가 되어 예고가 예고를 부르는 체인이 생겼다
     // (실측: 침묵일에도 하루 최대 5통). 유저 기준 네 시간은 침묵 백오프(3일)를 자연히 포함한다.
-    const lu = lastUserTs(c.chat_id);
+    const lu = lastUserTs(c.chat_id, c.id);
     if (!lu || ageMin(lu) > RECENT_USER_MS / 60_000) continue;
-    const last = lastMessage(c.chat_id);
+    const last = lastMessage(c.chat_id, c.id);
     if (!last) continue;
     // 유저가 붙잡아 지금 일정을 접고 곁에 있는 중이면 자리 비움 예고를 하지 않는다.
     if (isHeldNow(c.id)) continue;
@@ -196,7 +196,7 @@ const presenceTickBody = async (): Promise<void> => {
     // 하루 각본을 만들 때부터 같은 상한을 지키므로 여기서 걸리는 날은 드물다.
     // dayStart는 논리일(새벽 5시 컷오프) 기준 — 달력일 기준이면 자정~새벽에 카운트가 리셋된다.
     const dayStart = logicalDayStartTs();
-    if (awayNoticeCountToday(c.chat_id, dayStart) >= AWAY_DAILY_MAX) continue;
+    if (awayNoticeCountToday(c.chat_id, c.id, dayStart) >= AWAY_DAILY_MAX) continue;
 
     // 예고할 불가 블록 찾기: 미리 아는 일정은 시작 직전, 닥친 일은 시작 시점,
     // 연속 불가 사이는 경계(직후)에 알린다.
@@ -222,7 +222,7 @@ const presenceTickBody = async (): Promise<void> => {
           ? rel <= AWAY_BEFORE_MIN && rel >= -AWAY_AFTER_MIN
           : rel <= 0 && rel >= -AWAY_SUDDEN_AFTER_MIN;
       if (!eligible) continue;
-      if (awayNoticeSent(c.chat_id, dayStart, b.start)) continue;
+      if (awayNoticeSent(c.chat_id, c.id, dayStart, b.start)) continue;
       target = b;
       between = prevAway;
       prevAct = prev?.activity ?? "";
@@ -234,7 +234,7 @@ const presenceTickBody = async (): Promise<void> => {
     // 기준은 최소 AWAY_QUIET_MIN분이되, 알릴 일정이 이미 시작했으면 그 시작 시각까지 넓힌다.
     // 불가 구간이 끝나는 자리에서 몰아 답장이 나가고 그 시각이 곧 다음 일정의 시작이라,
     // 시간만 재면 그 답장이 이미 말한 전환("방금 끝났고 이제 ~하러 간다")을 또 말하게 된다.
-    const lc = lastAssistantTs(c.chat_id);
+    const lc = lastAssistantTs(c.chat_id, c.id);
     const quietMin = Math.max(AWAY_QUIET_MIN, nowMin - toMin(target.start));
     if (lc && ageMin(lc) < quietMin) {
       const detail = `${Math.round(ageMin(lc))}분 전에 이미 말했다, 기준 ${Math.round(quietMin)}분`;

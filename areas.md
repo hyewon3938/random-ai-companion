@@ -26,7 +26,7 @@
 
 > 이 색인은 `node scripts/gen-modules.mjs`가 위 영역 표와 각 파일 맨 위 주석의 첫 줄에서 만든다. 손으로 고치지 않는다. 줄 수는 영역에 든 파일의 합이다.
 
-### 1. 기반과 저장 · 4,209줄
+### 1. 기반과 저장 · 4,916줄
 
 - `src/config.ts` — 환경변수를 한 번 읽어 두는 자리.
 - `src/kst.ts` — 시각을 다루는 자리 — 한국 시간과 논리일 경계.
@@ -41,6 +41,7 @@
 - `src/db/llm-calls.ts` — 모델 호출 기록·사용량·본문 보관 표의 저장 함수와 보관 기간.
 - `src/db/memory-items.ts` — 기억·태그·영역·오늘 메모·오늘 실제 표의 저장 함수.
 - `src/db/messages.ts` — 대화 기록 표의 저장·조회 함수와 답장 복구 표시.
+- `src/db/relationship.ts` — 관계가 쌓이면서 늘어나는 표 넷의 저장 함수.
 - `src/db/sends.ts` — 예약 발송과 대기 중인 답장 표의 저장 함수.
 - `src/db/trace-events.ts` — 게시함 표의 저장 함수와 보관 기간.
 
@@ -51,7 +52,7 @@
 - `src/tag-pick.ts` — 이번 발화로 무엇을 검색할지 주제 태그를 고르는 자리.
 - `src/user-profile.ts` — 유저 프로필을 프롬프트 한 덩이로 만드는 자리.
 
-### 3. 캐릭터의 삶 · 1,390줄
+### 3. 캐릭터의 삶 · 1,391줄
 
 - `src/character.ts` — 캐릭터를 만드는 자리.
 - `src/arcs.ts` — 아크 — 캐릭터 삶의 큰 흐름(올해·계절·이달·이번 주)을 만들고 달력 경계에서 이어 쓴다.
@@ -59,7 +60,7 @@
 - `src/day-plan.ts` — 하루 각본 — 캐릭터가 그날 무엇을 하는지 블록으로 만든다.
 - `src/schedule-dedupe.ts` — 같은 일정인지 가리는 자리 — 공백·기호를 지운 내용으로 견준다.
 
-### 4. 대화 생성 · 2,974줄
+### 4. 대화 생성 · 3,010줄
 
 - `src/context.ts` — 프롬프트를 조립하는 자리 — 읽기와 조립을 잇는 앞문.
 - `src/prompts/reply.ts` — 답장 프롬프트의 고정 문안 — 캐릭터를 가리지 않고 매번 같은 글자가 들어가는 층이다.
@@ -77,7 +78,7 @@
 - `src/context/day-progress.ts` — 각본 위의 지금 — 지금 시각이 각본의 어느 블록인지, 지나온 블록, 빈자리를 메우는 잠.
 - `src/context/input.ts` — 프롬프트 재료 읽기 — 조립에 필요한 것을 DB와 시계에서 한 번에 읽어 값 묶음으로 만든다.
 
-### 5. 실행과 발송 · 2,851줄
+### 5. 실행과 발송 · 2,861줄
 
 - `src/index.ts` — 봇 프로세스의 시작점.
 - `src/bot.ts` — 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
@@ -87,7 +88,7 @@
 - `src/dispatch.ts` — 아침·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 - `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
-### 6. 새벽 정리 · 2,096줄
+### 6. 새벽 정리 · 2,097줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 - `src/prompts/nightly.ts` — 새벽 정리가 모델에 넘기는 문안 — 일기·기억 정리·진행 반영 프롬프트와 선톡 상황 문단을 한 파일에 둔다.
@@ -96,7 +97,7 @@
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
-### 7. 관측과 운영 · 6,930줄
+### 7. 관측과 운영 · 7,035줄
 
 - `src/trace.ts` — 슬랙 트레이스 게시함 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
 - `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고, 연락 약속의 단계를 게시함에 쌓는다.
@@ -118,6 +119,7 @@
 - `src/tools/db-tag-search.ts` — 관리 대시보드의 태그 검색 — 답장을 만들 때 도는 검색을 그대로 한 번 돌려 결과를 보여준다.
 - `src/tools/db-view.ts` — 관리 대시보드 화면을 만드는 곳 — DB에 저장된 데이터를 표 단위로 보는 화면.
 - `src/tools/dedupe-schedules.ts` — 정리 도구: 같은 일정이 여러 줄로 쌓인 것을 한 줄로 줄인다 (이슈 #267).
+- `src/tools/end-character.ts` — 캐릭터를 끝내는 도구 — 활성 캐릭터를 ended로 바꾸고 걸린 발송을 거두고 종료 게시를 쌓는다.
 - `src/tools/gen-day-plan.ts` — 운영 도구: 활성 캐릭터의 오늘 하루 각본을 생성(없을 때)하고 출력한다.
 - `src/tools/gen-rhythm.ts` — 월 리듬(이벤트 + 매일 컨디션 시드) 생성·확인 도구.
 - `src/tools/measure-prompt.ts` — 운영 도구: 시스템 프롬프트 3층(불변/일간/실시간) 크기를 측정하고, --live를 주면 같은 프롬프트로 2회 실호출해 캐시 히트(cr>0)를 검증한다.
@@ -262,12 +264,12 @@ V3(관계를 쌓는 캐릭터, 이슈 #326)의 새 파일과 고치는 파일이
 
 | 영역 | 새 파일 | 고치는 파일 |
 | --- | --- | --- |
-| 1. 기반과 저장 | db/relationship.ts (표 4개와 컬럼 2개의 읽기와 쓰기, 단계 줄이기 거부) | db/connection.ts 스키마 9, labels.ts에 처음·수·결·결점·수 반응 코드, thresholds.ts에 자리 비움 하루 2 |
+| 1. 기반과 저장 | | thresholds.ts에 자리 비움 하루 2 |
 | 2. 기억 | reaction-score.ts (표본 계산, 갱신, 추천 목록, 잘 통하는 수 목록) | |
 | 3. 캐릭터의 삶 | | character.ts 생성 V3(온보딩 8칸, 원하는 방식과 결점) |
 | 4. 대화 생성 | context/relationship.ts (단계 블록 고르기와 「지금 관계」 채우기), prompts/relationship.ts (공통 틀과 단계 블록 4개) | prompts/reply.ts 규칙층 문장, reply-signal.ts 항목 3개, user-state.ts 열림 4항목, proactive-policy.ts 근거 종류와 단계별 상한, context.ts 조립 순서 |
 | 5. 실행과 발송 | | followup.ts 의도 선톡과 틈새 한 줄, presence.ts 복귀 문안, bot.ts 온보딩 8칸 |
 | 6. 새벽 정리 | | nightly.ts 관계 수집과 저장, prompts/nightly.ts 관계 절, nightly-trace.ts 관계 절 게시, tools/nightly-read.ts와 tools/nightly-write.ts 입출력 |
-| 7. 관측과 운영 | tools/end-character.ts (캐릭터 종료), tools/relationship-view.ts (단계·처음·점수 확인) | trace.ts 게시 종류 4개, reply-trace.ts 관계 줄과 열림 줄 |
+| 7. 관측과 운영 | tools/relationship-view.ts (단계·처음·점수 확인) | reply-trace.ts 관계 줄과 열림 줄 |
 
 db/relationship.ts는 저장 함수만 갖고 정책은 갖지 않는다. 단계를 줄이는 저장을 거부하는 검사는 origin=creation 행의 수정 거부와 같은 자리이므로 저장 함수 안에 둔다. 반응 점수의 계산은 2번 영역이 맡고, 6번의 새벽 정리가 그 함수를 불러 쓴다.

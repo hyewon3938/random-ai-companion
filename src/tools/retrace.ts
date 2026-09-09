@@ -10,6 +10,7 @@
 import { db } from "../db.js";
 import { config } from "../config.js";
 import { kstLogicalDate } from "../kst.js";
+import { RELATIONSHIP_TRACE_KINDS } from "../trace.js";
 
 const argv = process.argv.slice(2);
 const apply = argv.includes("--yes");
@@ -41,7 +42,7 @@ const REGENERATED = [
   ...(withDayPlan ? ["day_plan", "day_plan_prompt", "day_plan_quiet", "day_plan_missing"] : []),
 ];
 // 그때 한 번 쌓고 마는 것 — 지우면 영영 사라지므로 다시 보낼 준비만 시킨다.
-const RECORDED = ["reply_%", "proactive_send"];
+const RECORDED = ["reply_%", "proactive_send", ...RELATIONSHIP_TRACE_KINDS];
 
 const like = (pats: string[]): string =>
   pats.map(() => "kind LIKE ?").join(" OR ");

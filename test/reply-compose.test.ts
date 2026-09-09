@@ -79,7 +79,7 @@ describe("pendingUserTurn", () => {
     logMessage(CHAT, characterId, "assistant", "응 방금", "2026-09-06 19:01:00");
     logMessage(CHAT, characterId, "user", "뭐 먹었어", "2026-09-06 19:02:00");
     logMessage(CHAT, characterId, "user", "나도 배고픈데", "2026-09-06 19:02:30");
-    assert.deepEqual(pendingUserTurn(CHAT), {
+    assert.deepEqual(pendingUserTurn(CHAT, characterId), {
       at: "2026-09-06 19:02:30",
       text: "뭐 먹었어\n나도 배고픈데",
       n: 2,
@@ -90,7 +90,7 @@ describe("pendingUserTurn", () => {
     clearMessages();
     logMessage(CHAT, characterId, "user", "안녕", "2026-09-06 19:00:00");
     logMessage(CHAT, characterId, "assistant", "안녕", "2026-09-06 19:01:00");
-    assert.equal(pendingUserTurn(CHAT), null);
+    assert.equal(pendingUserTurn(CHAT, characterId), null);
   });
 });
 
@@ -98,7 +98,7 @@ describe("composeReply", () => {
   it("상황 문단을 프롬프트 끝에 넣고 유저 발화를 기록 마지막에 두고 말풍선을 돌려준다", async () => {
     clearMessages();
     logMessage(CHAT, characterId, "user", "오늘 뭐 했어", "2026-09-06 19:00:00");
-    const turn = pendingUserTurn(CHAT);
+    const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const ask = canned([reply(["집에 있었어", "너는?"], { note: "상대가 하루를 물었다" })]);
     const out = await composeReply({
@@ -126,7 +126,7 @@ describe("composeReply", () => {
   it("붙잡기 판정이 있으면 그 결과를 상황 문단으로 프롬프트 끝에 넣는다", async () => {
     clearMessages();
     logMessage(CHAT, characterId, "user", "가지 마", "2026-09-06 13:05:00");
-    const turn = pendingUserTurn(CHAT);
+    const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const ask = canned([reply(["알았어 안 갈게"])]);
     await composeReply({
@@ -156,7 +156,7 @@ describe("composeReply", () => {
     clearMessages();
     logMessage(CHAT, characterId, "assistant", "잠깐 씻고 올게", "2026-09-06 21:00:00");
     logMessage(CHAT, characterId, "user", "응 다녀와", "2026-09-06 21:10:00");
-    const turn = pendingUserTurn(CHAT);
+    const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const plain = canned([reply(["나 왔어"])]);
     await composeReply({
@@ -179,7 +179,7 @@ describe("composeReply", () => {
   it("두 번 불러도 비어 있으면 null", async () => {
     clearMessages();
     logMessage(CHAT, characterId, "user", "야", "2026-09-06 19:00:00");
-    const turn = pendingUserTurn(CHAT);
+    const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const ask = canned([reply([]), reply([])]);
     const out = await composeReply({
@@ -193,7 +193,7 @@ describe("composeReply", () => {
   it("만드는 동안 새 유저 메시지가 오면 null", async () => {
     clearMessages();
     logMessage(CHAT, characterId, "user", "야", "2026-09-06 19:00:00");
-    const turn = pendingUserTurn(CHAT);
+    const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const ask = canned([reply(["응"])], () => {
       logMessage(CHAT, characterId, "user", "아 잠깐", "2026-09-06 19:00:20");
@@ -209,7 +209,7 @@ describe("composeReply", () => {
     clearMessages();
     logMessage(CHAT, characterId, "user", "잘 잤어?", "2026-09-06 08:00:00");
     logMessage(CHAT, characterId, "user", "나 오늘 쉬는 날", "2026-09-06 08:00:10");
-    const turn = pendingUserTurn(CHAT);
+    const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const ask = canned([reply(["응 푹 잤어", "좋겠다"])], (meta) => {
       meta.callId = recordLlmCall({
@@ -246,7 +246,7 @@ describe("composeReply", () => {
   it("상대 상태 판정이 바뀌면 저장하고 그 줄을 캐시 밖 블록에 넣고 관계 변경으로 남긴다", async () => {
     clearMessages();
     logMessage(CHAT, characterId, "user", "왜 연락 안 했어", "2026-09-06 21:30:00");
-    const turn = pendingUserTurn(CHAT);
+    const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const record = (meta: { callId?: number }): void => {
       meta.callId = recordLlmCall({
@@ -312,7 +312,7 @@ describe("composeReply", () => {
     // 같은 값이 다시 오면 저장도 관계 변경 기록도 없다
     clearMessages();
     logMessage(CHAT, characterId, "user", "응", "2026-09-06 21:40:00");
-    const turn2 = pendingUserTurn(CHAT);
+    const turn2 = pendingUserTurn(CHAT, characterId);
     assert.ok(turn2);
     const out2 = await composeReply({
       judge, characterId, chatId: CHAT, turn: turn2, context: {}, logTag: "[test]",

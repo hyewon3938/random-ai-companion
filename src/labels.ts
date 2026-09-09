@@ -134,6 +134,138 @@ export const USER_STATE_TONE_NAME: Record<UserStateTone, string> = {
   bad: "안 좋음",
 };
 
+// ── 관계를 쌓는 값 ─────────────────────────────────────────────────────────
+// 단계·결·결점·수·처음은 relationship.md가 값을 정하는 자리이고, 여기는 그 코드와 한글
+// 이름만 갖는다. 어느 단계가 어느 수를 여는지 같은 규칙은 프롬프트와 새벽 정리가 갖는다.
+
+/** 관계 단계 — 캐릭터가 마음을 얼마나 드러내는지의 수위. 내려가지 않는다. */
+export type RelationshipStage = 1 | 2 | 3 | 4;
+
+export const RELATIONSHIP_STAGE_NAME: Record<RelationshipStage, string> = {
+  1: "몇 번 본 사이",
+  2: "편해진 사이",
+  3: "마음을 드러내는 사이",
+  4: "서로의 사람",
+};
+
+export const isRelationshipStage = (v: number): v is RelationshipStage =>
+  v === 1 || v === 2 || v === 3 || v === 4;
+
+/** 원하는 방식의 결 — 캐릭터가 마음을 드러내는 방식. 주 결 하나에 섞는 결을 더해 쓴다. */
+export type LeadTone =
+  "direct" | "leaky" | "tease_sincere" | "possessive" | "silent_care";
+
+export const LEAD_TONE_NAME: Record<LeadTone, string> = {
+  direct: "대놓고 직진",
+  leaky: "티 안 내려고 하지만 자꾸 티 나는 사람",
+  tease_sincere: "장난 속에 진심",
+  possessive: "은근히 독점",
+  silent_care: "말없이 챙김",
+};
+
+/** 결점 — 캐릭터마다 하나. 4단계에서 어느 결이 어디까지 세지는지를 정한다. */
+export type Flaw = "jealousy" | "lingering_hurt" | "clumsy";
+
+export const FLAW_NAME: Record<Flaw, string> = {
+  jealousy: "질투",
+  lingering_hurt: "서운함이 오래 감",
+  clumsy: "표현이 서툶",
+};
+
+/** 설렘의 수 — 캐릭터가 유저를 설레게 하려고 쓰는 행동. 반응 점수가 이 코드 단위로 쌓인다. */
+export type Move =
+  | "remember"
+  | "laugh"
+  | "anticipate"
+  | "scene"
+  | "sudden_ping"
+  | "nickname"
+  | "weakness"
+  | "late_night_truth"
+  | "jealousy_light"
+  | "dodge_after_direct"
+  | "only_you"
+  | "ask_help";
+
+export const MOVE_NAME: Record<Move, string> = {
+  remember: "기억해서 챙기기",
+  laugh: "웃기기",
+  anticipate: "다음 기대 만들기",
+  scene: "지금 보고 있는 장면 묘사",
+  sudden_ping: "짧고 갑작스러운 톡",
+  nickname: "별명",
+  weakness: "약한 소리",
+  late_night_truth: "늦은 밤 진심",
+  jealousy_light: "살짝 질투",
+  dodge_after_direct: "직진 뒤 딴청",
+  only_you: "너한테만",
+  ask_help: "도움 청하기",
+};
+
+/** 수에 대한 유저 반응 — 판정 호출이 직전 턴의 수를 보고 고른다. */
+export type MoveReaction = "accepted" | "ignored" | "rejected" | "none";
+
+export const MOVE_REACTION_NAME: Record<MoveReaction, string> = {
+  accepted: "받음",
+  ignored: "무시",
+  rejected: "거절",
+  none: "해당 없음",
+};
+
+/** 처음 있는 일 — 관계에서 한 번만 일어나는 사건 20가지. */
+export type FirstKind =
+  | "first_remember"
+  | "first_self_story"
+  | "first_laugh"
+  | "first_waited"
+  | "first_nickname"
+  | "first_tease"
+  | "first_miss_light"
+  | "first_weakness"
+  | "first_no_reason_ping"
+  | "first_miss_direct"
+  | "first_late_night_truth"
+  | "first_jealousy"
+  | "first_only_you"
+  | "first_ask_help"
+  | "first_confession"
+  | "first_sulk"
+  | "first_fight"
+  | "first_makeup"
+  | "first_anniversary"
+  | "first_future_talk";
+
+export const FIRST_KIND_NAME: Record<FirstKind, string> = {
+  first_remember: "기억해서 챙기기",
+  first_self_story: "자기 얘기",
+  first_laugh: "웃기기",
+  first_waited: "기다렸다는 말",
+  first_nickname: "별명",
+  first_tease: "장난",
+  first_miss_light: "보고 싶다 가볍게",
+  first_weakness: "약한 소리",
+  first_no_reason_ping: "이유 없는 연락",
+  first_miss_direct: "보고 싶다 직접",
+  first_late_night_truth: "늦은 밤 진심",
+  first_jealousy: "질투",
+  first_only_you: "너한테만",
+  first_ask_help: "도움 청하기",
+  first_confession: "마음 확인",
+  first_sulk: "삐침",
+  first_fight: "싸움",
+  first_makeup: "화해",
+  first_anniversary: "기념일",
+  first_future_talk: "미래 얘기",
+};
+
+/** 처음을 누가 먼저 했는가. */
+export type FirstBy = "character" | "user";
+
+export const FIRST_BY_NAME: Record<FirstBy, string> = {
+  character: "캐릭터",
+  user: "유저",
+};
+
 /** 모델을 부른 자리 — 호출 원본(llm_calls)에 무슨 일로 부른 것인지 적는다. */
 export type CallPurpose =
   | "reply"

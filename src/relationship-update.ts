@@ -53,7 +53,7 @@ export const speechRatchet = (
 ): RelChange[] => {
   const prev = getRelationship(characterId)?.speech_level ?? null;
   if (prev === "casual") return [];
-  if (currentSpeechLevel(chatId) !== "반말") return [];
+  if (currentSpeechLevel(chatId, characterId) !== "반말") return [];
   setSpeechLevel(characterId, "casual", now);
   return [{ field: "말투", from: prev, to: "casual" }];
 };

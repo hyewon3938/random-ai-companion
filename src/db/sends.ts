@@ -1,7 +1,8 @@
 // 예약 발송과 대기 중인 답장 표의 저장 함수.
 //
 // 예약 발송은 새벽 정리가 준비한 선톡 문안을 창 안에서 내보내는 행이고, 대기 중인 답장은
-// 답장을 만들어 두고 정한 시각까지 들고 있는 행이다. 발송 실패 기록도 여기다.
+// 답장을 만들어 두고 정한 시각까지 들고 있는 행이다. 발송 실패 기록도 여기다. 캐릭터를
+// 끝낼 때 두 표에 걸린 행을 함께 거두는 함수도 여기 둔다.
 
 import { db } from "./connection.js";
 import { getKstNow, kstDateString } from "../kst.js";
@@ -278,6 +279,49 @@ export const supersedePromiseRows = (
     ).run(chatId, exceptId);
   return rows;
 };
+
+// ── 캐릭터를 끝낼 때 거두는 행 ─────────────────────────────────────────
+//
+// 발송 틱은 대기 행을 캐릭터 상태와 무관하게 집는다. 캐릭터를 끝내면서 걸린 행을 남겨 두면
+// 끝난 캐릭터의 답장과 선톡이 그대로 나가므로, 종료 도구가 상태를 바꾸기 전에 먼저 거둔다.
+// 세는 함수는 그 도구가 무엇이 거둬질지 먼저 보여주는 데 쓴다.
+
+export const waitingPendingReplyCount = (characterId: number): number =>
+  (
+    db
+      .prepare(
+        `SELECT count(*) c FROM pending_replies WHERE character_id = ? AND status = 'waiting'`,
+      )
+      .get(characterId) as { c: number }
+  ).c;
+
+/** 이 캐릭터로 걸려 있던 대기 행을 종류를 가리지 않고 전부 거둔다. 거둔 행 수를 돌려준다. */
+export const supersedeCharacterPendingReplies = (characterId: number): number =>
+  db
+    .prepare(
+      `UPDATE pending_replies SET status = 'superseded' WHERE character_id = ? AND status = 'waiting'`,
+    )
+    .run(characterId).changes;
+
+export const pendingScheduledSendCount = (characterId: number): number =>
+  (
+    db
+      .prepare(
+        `SELECT count(*) c FROM scheduled_messages WHERE character_id = ? AND status = 'pending'`,
+      )
+      .get(characterId) as { c: number }
+  ).c;
+
+/** 아직 안 나간 예약 선톡을 폐기한다. 왜 폐기했는지는 행에 남긴다. */
+export const skipCharacterScheduledSends = (
+  characterId: number,
+  reason: string,
+): number =>
+  db
+    .prepare(
+      `UPDATE scheduled_messages SET status = 'skipped', skip_reason = ? WHERE character_id = ? AND status = 'pending'`,
+    )
+    .run(reason, characterId).changes;
 
 export const markPendingReply = (
   id: number,

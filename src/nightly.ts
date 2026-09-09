@@ -484,6 +484,7 @@ export const gatherNightlyInput = (
   const diaryNext = nextDate(diaryDate);
   const msgs = getMessagesBetween(
     character.chat_id,
+    character.id,
     `${diaryDate} 05:00:00`,
     `${diaryNext} 05:00:00`,
   );
@@ -879,7 +880,7 @@ export const missingDiaryDates = (
       new Date(shifted.getTime() - (i - 1) * 24 * 3600_000),
     );
     if (hasDiaryOn(characterId, d)) continue;
-    if (hasMessageBetween(chatId, `${d} 05:00:00`, `${next} 05:00:00`))
+    if (hasMessageBetween(chatId, characterId, `${d} 05:00:00`, `${next} 05:00:00`))
       out.push(d);
   }
   return out;

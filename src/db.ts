@@ -6,6 +6,7 @@
 
 export * from "./db/connection.js";
 export * from "./db/characters.js";
+export * from "./db/relationship.js";
 export * from "./db/messages.js";
 export * from "./db/life.js";
 export * from "./db/sends.js";

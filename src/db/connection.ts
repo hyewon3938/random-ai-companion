@@ -2,9 +2,9 @@
 //
 // 표 정의는 이 파일의 TABLES 한곳이고, 스키마를 바꾸면 SCHEMA_VERSION을 올려 마이그레이션을
 // 붙인다. 표·컬럼의 뜻과 관계는 erd.md가 갖는다. 표마다 행을 넣고 빼는 함수는 같은 폴더의
-// 묶음 파일(characters·messages·life·sends·llm-calls·trace-events·memory-items)에 있고,
-// 부르는 쪽은 src/db.ts 하나로 전부 받는다. 묶음 파일끼리는 이 파일과 형제 파일만 부른다 —
-// src/db.ts를 부르면 순환이 된다.
+// 묶음 파일(characters·relationship·messages·life·sends·llm-calls·trace-events·
+// memory-items)에 있고, 부르는 쪽은 src/db.ts 하나로 전부 받는다. 묶음 파일끼리는 이 파일과
+// 형제 파일만 부른다 — src/db.ts를 부르면 순환이 된다.
 //
 // 이 모듈을 부르면 DB를 쓰기로 열고 마이그레이션까지 돌린다. 값을 보기만 하는 도구
 // (관리 대시보드)는 그래서 이쪽을 쓰지 않고 읽기 전용으로 따로 연다.
@@ -13,7 +13,14 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "../config.js";
-import { toResponsiveness, toActivityCategory } from "../labels.js";
+import {
+  toResponsiveness,
+  toActivityCategory,
+  FIRST_KIND_NAME,
+  LEAD_TONE_NAME,
+  MOVE_NAME,
+  MOVE_REACTION_NAME,
+} from "../labels.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
@@ -25,6 +32,13 @@ db.pragma("journal_mode = WAL");
 // 마이그레이션이 같은 정의로 테이블을 다시 만들어 값을 옮긴다.
 // 값이 정해진 컬럼은 영어 식별자로 저장하고 CHECK로 막는다. 모델이 짓는 값(무엇·태그·
 // 저장하는 내용·영역 이름)은 한국어 그대로 들어간다.
+// 닫힌 목록의 CHECK는 labels.ts의 이름표에서 뽑아 쓴다. 값을 두 곳에 적으면 한쪽만 고쳐도
+// 타입 검사가 잡지 못한다. 이미 만들어진 DB의 CHECK는 표를 다시 만들 때까지 그대로다.
+const inList = (names: Record<string, string>): string =>
+  Object.keys(names)
+    .map((k) => `'${k}'`)
+    .join(",");
+
 const TABLES: Record<string, string> = {
   characters: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,6 +55,8 @@ const TABLES: Record<string, string> = {
   character_id INTEGER PRIMARY KEY REFERENCES characters(id),
   met_at TEXT NOT NULL,
   stage TEXT,
+  stage_no INTEGER NOT NULL DEFAULT 1 CHECK (stage_no BETWEEN 1 AND 4),
+  stage_since TEXT NOT NULL,
   speech_level TEXT CHECK (speech_level IN ('polite','casual')),
   speech_note TEXT,
   address_terms TEXT,
@@ -53,6 +69,65 @@ const TABLES: Record<string, string> = {
   user_state_tone TEXT CHECK (user_state_tone IN ('good','neutral','bad')),
   user_state_since TEXT,
   updated_at TEXT`,
+
+  // 관계에서 한 번만 일어나는 일. 캐릭터마다 종류당 한 행이고, 답장 경로가 미확정으로 넣으면
+  // 새벽 정리가 어제 대화를 읽고 확정하거나 지운다. 종류 20개는 relationship.md가 정한다.
+  //
+  // 메시지 번호와 호출 번호에 외래 키를 걸지 않는다 — 호출 기록은 90일 뒤 지우는 자리라,
+  // 참조를 걸면 그 정리가 처음 기록에 막힌다.
+  firsts: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  chat_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN (${inList(FIRST_KIND_NAME)})),
+  by TEXT NOT NULL CHECK (by IN ('character','user')),
+  happened_at TEXT NOT NULL,
+  message_id INTEGER,
+  call_id INTEGER,
+  confirmed INTEGER NOT NULL DEFAULT 0 CHECK (confirmed IN (0,1)),
+  UNIQUE (character_id, kind)`,
+
+  // 수마다 유저가 얼마나 반응했는지의 점수. 키가 채팅과 수라서 캐릭터를 바꿔도 남는다 —
+  // 무엇에 반응하는지는 캐릭터가 아니라 유저의 성질이다. 점수는 -1~1이고 새벽 정리가 갱신한다.
+  reaction_scores: `
+  chat_id TEXT NOT NULL,
+  move TEXT NOT NULL CHECK (move IN (${inList(MOVE_NAME)})),
+  score REAL NOT NULL DEFAULT 0 CHECK (score BETWEEN -1 AND 1),
+  sample_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (chat_id, move)`,
+
+  // 오늘 캐릭터가 관계에서 하려는 것. 새벽 정리가 하루 1행을 쓰고 답장 프롬프트와 선톡이 읽는다.
+  // 네 줄(무엇을 더 알아볼지·무엇을 나눌지·어떤 수를 쓸지·어떤 결을 앞세울지)과 이어 갈 이야기,
+  // 그리고 줄마다 무엇을 보고 정했는지가 basis_json에 들어간다.
+  relationship_intents: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  date TEXT NOT NULL,
+  dig TEXT,
+  share TEXT,
+  move TEXT CHECK (move IN (${inList(MOVE_NAME)})),
+  move_note TEXT,
+  lead_tone TEXT CHECK (lead_tone IN (${inList(LEAD_TONE_NAME)})),
+  thread TEXT,
+  basis_json TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (character_id, date)`,
+
+  // 유저가 얼마나 열렸는지의 판정 결과. 답장마다 도는 판정 호출이 턴 하나에 1행을 적고,
+  // 새벽 정리가 단계 문턱과 반응 점수를 셀 때 읽는다. 판정이 실패한 턴은 행이 없다.
+  relationship_signals: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  chat_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  message_id INTEGER,
+  opened_self INTEGER NOT NULL CHECK (opened_self IN (0,1)),
+  asked_about_char INTEGER NOT NULL CHECK (asked_about_char IN (0,1)),
+  said_affection INTEGER NOT NULL CHECK (said_affection IN (0,1)),
+  prev_move TEXT CHECK (prev_move IN (${inList(MOVE_NAME)})),
+  move_reaction TEXT CHECK (move_reaction IN (${inList(MOVE_REACTION_NAME)})),
+  call_id INTEGER`,
 
   // 기억 한 건 = 저장 항목(item_type) + 누구 쪽(owner) + 영역(area) + 무엇(subject) + 출처(origin)가 키.
   // 같은 키로 다시 들어오면 값을 덮어쓴다. 저장 항목 셋과 주인 둘이 만드는 여섯 조합이 전부 유효하다.
@@ -358,6 +433,8 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_llm_calls_purpose ON llm_calls (character_id, purpose, id)`,
   `CREATE INDEX IF NOT EXISTS idx_call_feedback_call ON call_feedback (call_id)`,
   `CREATE INDEX IF NOT EXISTS idx_call_feedback_ts ON call_feedback (slack_ts, source)`,
+  `CREATE INDEX IF NOT EXISTS idx_firsts_character ON firsts (character_id, confirmed)`,
+  `CREATE INDEX IF NOT EXISTS idx_relationship_signals_at ON relationship_signals (character_id, at)`,
 ];
 
 const createSchema = (): void => {
@@ -366,7 +443,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -805,11 +882,52 @@ const migrateToV8 = (): void => {
   console.log(`[db] 스키마를 v8로 옮겼다`);
 };
 
+// v9: 관계에 단계 번호와 단계 시작일을 더한다(#331).
+//
+// 관계를 쌓는 표 넷(firsts·reaction_scores·relationship_intents·relationship_signals)은
+// 위의 createSchema가 이미 만들었다 — 여기서는 relationships만 다시 만든다. 두 컬럼 다
+// 값이 있어야 하고 단계 시작일에는 채워 넣을 상수가 없어서 ALTER로는 붙일 수 없다.
+//
+// 이미 있는 캐릭터는 단계 1에서 시작하고, 시작일은 캐릭터를 만든 날에서 시각을 뗀 논리일로
+// 둔다. 지금까지 쌓은 대화가 어느 단계였는지 뒤늦게 매길 방법이 없으니, 다음 새벽 정리가
+// 문턱을 보고 올린다.
+const migrateToV9 = (): void => {
+  db.pragma("foreign_keys = OFF");
+  db.pragma("legacy_alter_table = ON");
+  db.transaction(() => {
+    db.exec(`ALTER TABLE relationships RENAME TO relationships__old`);
+    db.exec(`CREATE TABLE relationships (${TABLES.relationships}\n)`);
+    db.exec(`
+      INSERT INTO relationships
+        (character_id, met_at, stage, stage_no, stage_since, speech_level, speech_note,
+         address_terms, rapport, cautions, history, feelings, user_state, user_state_cause,
+         user_state_tone, user_state_since, updated_at)
+      SELECT r.character_id, r.met_at, r.stage, 1,
+             substr(COALESCE(c.created_at, r.met_at), 1, 10),
+             r.speech_level, r.speech_note, r.address_terms, r.rapport, r.cautions,
+             r.history, r.feelings, r.user_state, r.user_state_cause, r.user_state_tone,
+             r.user_state_since, r.updated_at
+        FROM relationships__old r LEFT JOIN characters c ON c.id = r.character_id`);
+    db.exec(`DROP TABLE relationships__old`);
+
+    const broken = db.pragma("foreign_key_check") as unknown[];
+    if (broken.length)
+      throw new Error(
+        `[db] 마이그레이션 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
+      );
+    db.pragma(`user_version = 9`);
+  })();
+  db.pragma("legacy_alter_table = OFF");
+
+  console.log(`[db] 스키마를 v9로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < 5) migrateToV5();
 if (schemaVersion() < 6) migrateToV6();
 if (schemaVersion() < 7) migrateToV7();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV8();
+if (schemaVersion() < 8) migrateToV8();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV9();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를
