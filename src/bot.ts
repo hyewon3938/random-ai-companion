@@ -909,7 +909,9 @@ const respond = async (
             gather: null,
             trace: { path: "recover", block: null, asked: false },
           }
-        : await decideReplyTiming(character.id, turn.text);
+        : await decideReplyTiming(character.id, turn.text, {
+            burst: { n: turn.n, firstAt: turn.firstAt },
+          });
     if (timing.held)
       console.log(
         `[hold] ${chatId} ${timing.held.activity} → ${timing.held.outcome}`,

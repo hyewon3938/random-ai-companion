@@ -9,7 +9,8 @@
 //
 // 불가면 지금 답장을 만들지 않고 TimingDecision.gather로 넘겨 구간 끝 몰아 답장에 맡긴다.
 // 개인·사회 불가에 온 메시지는 붙잡기 판정 한 콜(16토큰)로 갈라, 붙잡혔으면 개인은 취소·
-// 사회는 미룸을 day_actuals에 적는다. 공적은 못 접는다. 상한은 없다.
+// 사회는 미룸을 day_actuals에 적는다. 공적은 못 접는다. 상한은 없다. 판정에는 지금 하는 일,
+// 상대가 그 일정을 아는지, 내 답이 없는 채로 이어 보낸 말과 그 수·기다린 시간을 넣는다.
 //
 // 텀이 나온 경위는 TimingTrace로 남겨 판단 근거에 적는다.
 
@@ -22,7 +23,7 @@ import {
   getScheduleById,
   recentMessageTimes,
 } from "./db.js";
-import { chat, type CallMeta } from "./llm.js";
+import { chat, type CallMeta, type ChatTurn } from "./llm.js";
 import { config } from "./config.js";
 import {
   toResponsiveness,
@@ -116,11 +117,105 @@ const tableDelay = (resp: Responsiveness, cat: ActivityCategory): number => {
   return skewLow(INTERMITTENT_OFFICIAL_MIN_MS, INTERMITTENT_OFFICIAL_MAX_MS);
 };
 
-// 붙잡는 말인지만 가른다. 지금 하는 일 한 줄과 유저의 마지막 말만 주고 한 낱말을 받는다 —
-// 답장을 만들기 전에 먼저 도는 판정이라 짧아야 한다.
+// 상대가 지금 대화를 요청하는 말인지만 가른다. 지금 하는 일 한 줄, 상대가 그 일정을 아는지, 내 답이
+// 없는 채로 이어 보낸 말과 그 수·기다린 시간을 주고 한 낱말을 받는다 — 답장을 만들기 전에 먼저
+// 도는 판정이라 답은 짧아야 한다. 물음표가 있다고 다 요청은 아니다. 가지 말라는 말, 곁에 있어
+// 달라는 뜻이 담긴 말, 재촉, 답 없이 몇 분에 걸쳐 이어 보낸 짧은 말이 요청이고, 가벼운 질문과
+// 한 번 물은 안부는 아님이다. 답장 규칙층(prompts/reply.ts의 CATEGORY_RULE)이 붙잡는 말을
+// 정의한 것과 같은 결이다(#336).
 const HOLD_SYSTEM = `너는 메신저 대화를 읽고 한 가지만 판정한다.
-상대가 지금 하던 일을 멈추고 대화에 붙어 있어 주길 바라는 말이면 "붙잡음",
-답을 나중에 받아도 되는 평범한 말이면 "아님"이라고만 답한다. 다른 말은 하지 않는다.`;
+상대가 지금 나에게 대화를 요청하는 말이면 "요청", 아니면 "아님"이라고만 답한다. 다른 말은 하지 않는다.
+
+이 판정으로 내가 하던 일을 그만두고 대화에 올지 정한다. 물음표가 있다고 요청이 되지는 않는다. 상대가 지금 나와 이야기하고 싶어 하는지를 앞뒤 맥락으로 본다.
+
+요청으로 보는 말
+- 가지 말라거나 남아 달라는 말, 계속 연락해 달라는 말
+- 심심하다, 힘들다, 우울하다처럼 곁에 있어 달라는 뜻이 담긴 말
+- 지금 빨리 답해 달라고 재촉하는 말
+- 있는지, 자는지, 뭐 하는지 물은 뒤 내 답이 없는 채로 시간을 두고 짧은 말을 이어 보내는 것. 3분이든 10분이든 같다
+
+아님으로 보는 말
+- 읽기만 하면 되는 전달, 알려 두는 말, 반응 한 마디
+- 내 답이 늦어도 곤란하지 않은 물음. 무엇을 살지 고르는 것 같은 가벼운 질문은 나중에 답해도 된다
+- 있는지, 뭐 하는지 한 번 물은 말. 내 일정을 아는 상대가 건넨 안부도 같다
+- 한 번에 몰아 보낸 여러 통. 내용으로만 본다
+
+예시. 이어 보낸 말은 /로 나눠 적었고 실제로는 줄마다 온다.
+안 가면 안 돼? → 요청
+나 너무 심심해.. → 요청
+이거 지금 말해줘 빨리 → 요청
+오늘 진짜 힘들었어.. → 요청
+3분 동안 이어 보낸 말 3통: 자? / 뭐해 / 자나 보네 → 요청
+10분 동안 이어 보낸 말 2통: 있어? / 바빠? → 요청
+지금 뭐해? → 아님
+나 이거 살까 저거 살까? → 아님
+나 이제 집 가는 중, 도착하면 연락할게 → 아님
+오늘 발표 잘 끝났어 → 아님
+1분 안에 이어 보낸 말 3통: 오늘 회식 있었어 / 늦게 들어감 / 먼저 자 → 아님
+ㅋㅋㅋ 그렇구나 → 아님`;
+
+/** 판정에 넘기는 이어 보내기 — 내 답이 없는 채로 상대가 보낸 메시지 수와 그 첫 통의 시각. */
+export interface HoldBurst {
+  n: number;
+  firstAt: string;
+}
+
+/** 판정 모델을 부르는 자리. 검사에서 정해 둔 답을 돌려주는 함수로 바꿔 끼운다. */
+export type HoldJudge = (
+  system: string,
+  turns: ChatTurn[],
+  meta: CallMeta,
+) => Promise<string>;
+
+const judgeWithModel: HoldJudge = (system, turns, meta) =>
+  chat(
+    system,
+    turns,
+    16,
+    config.model,
+    meta,
+    // 생각 과정을 켜면 상한 16토큰을 거기서 다 쓰고 답이 비어 돌아온다.
+    { think: false },
+  );
+
+const parseKst = (s: string): number =>
+  new Date(s.replace(" ", "T") + "+09:00").getTime();
+
+// 첫 통부터 지금까지 — 상대가 답 없이 기다린 시간을 말로 적는다. 1분이 안 되면 한 번에 보낸 것이다.
+const waitedText = (ms: number): string => {
+  const min = Math.floor(Math.max(0, ms) / 60_000);
+  if (min < 1) return "1분 안에";
+  if (min < 60) return `${min}분 동안`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h}시간 ${m}분 동안` : `${h}시간 동안`;
+};
+
+/**
+ * 판정에 주는 글. 지금 하는 일, 상대가 그 일정을 아는지, 상대가 보낸 말 순서다. 내 답이 없는 채로
+ * 여러 통을 이어 보냈으면 통 수와 첫 통부터 지금까지의 시간을 앞에 적는다 — 몇 분에 걸쳐 온 짧은
+ * 말은 답을 기다린다는 뜻이고, 한 번에 몰아 보낸 여러 통은 내용으로만 볼 수 있게.
+ */
+export const buildHoldPrompt = (input: {
+  activity: string;
+  knows: string | null;
+  userText: string;
+  burst?: HoldBurst;
+  now?: number;
+}): string => {
+  const { burst } = input;
+  const waited = burst
+    ? (input.now ?? Date.now()) - parseKst(burst.firstAt)
+    : NaN;
+  // 첫 통 시각을 못 읽으면 한 통일 때와 같은 글로 간다 — 잘못 센 시간을 적는 것보다 낫다.
+  const said =
+    burst && burst.n >= 2 && Number.isFinite(waited)
+      ? `상대가 내 답을 못 받은 채로 ${waitedText(waited)} 이어 보낸 말 ${burst.n}통:\n${input.userText}`
+      : `상대가 방금 보낸 말: ${input.userText}`;
+  return [`내가 지금 하는 일: ${input.activity}`, input.knows, said]
+    .filter(Boolean)
+    .join("\n");
+};
 
 // 판정에 얹을 한 줄 — 상대가 이 일정을 아는가. 알고 보낸 말과 모르고 보낸 말은 무게가 다르다.
 // 각본에는 이 값이 없으므로 블록의 출처를 따라 원본 일정을 읽는다. 출처가 없는 블록(잠·식사·
@@ -148,31 +243,28 @@ const askHold = async (
   characterId: number,
   block: TimingTrace["block"],
   userText: string,
+  burst: HoldBurst | undefined,
+  judge: HoldJudge,
 ): Promise<{ held: boolean; failed: boolean; callId: number | null }> => {
-  const activity = block?.activity ?? "하던 일";
-  const prompt = [
-    `내가 지금 하는 일: ${activity}`,
-    knowsLine(characterId, block),
-    `상대가 방금 보낸 말: ${userText}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const prompt = buildHoldPrompt({
+    activity: block?.activity ?? "하던 일",
+    knows: knowsLine(characterId, block),
+    userText,
+    burst,
+  });
   const meta: CallMeta = { purpose: "hold", characterId };
   try {
-    const out = await chat(
+    const out = await judge(
       HOLD_SYSTEM,
       [{ role: "user", content: prompt }],
-      16,
-      config.model,
       meta,
-      // 생각 과정을 켜면 상한 16토큰을 거기서 다 쓰고 답이 비어 돌아온다.
-      { think: false },
     );
-    // 빈 답은 "안 붙잡음"이 아니라 판정을 못 받은 것이다. 일정을 그대로 두는 결과는 같아도
+    // 빈 답은 "아님"이 아니라 판정을 못 받은 것이다. 일정을 그대로 두는 결과는 같아도
     // 갈라 적어야 판정이 조용히 한쪽으로 기우는 것을 트레이스에서 볼 수 있다.
     const failed = !out.trim();
     if (failed) console.warn("[timing] 붙잡기 판정 빈 답 — 일정을 그대로 둔다");
-    const held = out.includes("붙잡");
+    // 따옴표를 붙여 답해도 읽고, "요청 아님"처럼 두 낱말이 같이 오면 요청으로 세지 않는다.
+    const held = /요청/.test(out) && !/아님/.test(out);
     // 이 판정이 어떤 일정을 두고 나온 것인지 판정 호출 기록에도 남긴다 — 트레이스가
     // 판정만 따로 올릴 때 무엇을 보고 판정했는지 알 수 있게. 기록 실패는 판정을 막지 않는다.
     if (meta.callId)
@@ -238,6 +330,13 @@ export interface TimingDecision {
   trace: TimingTrace;
 }
 
+export interface HoldOptions {
+  /** 내 답이 없는 채로 상대가 이어 보낸 메시지 수와 첫 통의 시각. 한 통이면 없어도 된다. */
+  burst?: HoldBurst;
+  /** 판정 모델을 부르는 함수. 검사에서 정해 둔 답을 돌려주는 함수로 바꿔 끼운다. */
+  judge?: HoldJudge;
+}
+
 /**
  * 이 답장이 언제쯤 나갈지 정한다.
  * 개인·사회의 답장 불가 시간에 온 메시지일 때만 판정 모델을 한 번 부른다. 공적은 못 미루므로
@@ -246,6 +345,7 @@ export interface TimingDecision {
 export const decideReplyTiming = async (
   characterId: number,
   userText: string,
+  opts: HoldOptions = {},
 ): Promise<TimingDecision> => {
   const b = currentBlock(characterId);
   if (!b)
@@ -330,7 +430,13 @@ export const decideReplyTiming = async (
       gather,
       trace: { path: "until_end", block: seen, asked: false },
     };
-  const judged = await askHold(characterId, seen, userText);
+  const judged = await askHold(
+    characterId,
+    seen,
+    userText,
+    opts.burst,
+    opts.judge ?? judgeWithModel,
+  );
   if (!judged.held)
     return {
       waitMs: untilBlockEndMs(b),
