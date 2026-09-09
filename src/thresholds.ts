@@ -88,8 +88,9 @@ export const USER_STATE_TURNS = 24;
  * 최소 길이는 아래 하루 상한과 짝이다. 이 값이 낮으면 각본이 알릴 만한 구간을 상한보다 많이
  * 만들고, 넘친 구간은 예고 없이 지나가 유저가 이유를 모른 채 오래 기다리게 된다. 30분으로
  * 두면 운동·운전처럼 진짜 긴 것만 세게 되어 상한에 닿지 않는다. 이 값보다 짧은 불가 구간은
- * 예고도 복귀 인사도 없이 조용히 지나가므로, 각본이 그런 구간을 연달아 붙이지 않도록
- * day-plan.ts의 생성 프롬프트가 사이에 답할 수 있는 구간을 넣게 한다. */
+ * 예고도 복귀 인사도 없이 조용히 지나가므로, 각본은 그 개수와 합에 아래 상한을 두고 불가
+ * 구간 사이에 답할 수 있는 시간을 AWAY_GAP_MIN 이상 넣는다. 생성 프롬프트가 이 값들을
+ * 말하고, 만든 각본을 day-plan.ts의 awayStats가 다시 센다(이슈 #335). */
 export const AWAY_MIN_BLOCK_MIN = 30;
 export const AWAY_BEFORE_MIN = 10;
 export const AWAY_AFTER_MIN = 3;
@@ -104,8 +105,32 @@ export const AWAY_BACK_TO_BACK_AFTER_MIN = 12;
 export const AWAY_QUIET_MIN = 5;
 
 /** 자리비움 선톡의 하루 상한. 나갈 때 알리는 것만 세고, 돌아와서 하는 인사는 빼고 센다.
- * 하루 각본을 만들 때도 이 값을 넘기지 않도록 알리고 나갈 만한 일정 수를 제한한다. */
-export const AWAY_DAILY_MAX = 3;
+ * 하루 각본도 알리고 나갈 만한 긴 불가 구간(AWAY_MIN_BLOCK_MIN 이상, 잠 제외)을 이 수까지만
+ * 둔다. 예고와 각본이 같은 값을 봐야 예고 없이 지나가는 긴 구간이 생기지 않는다. */
+export const AWAY_DAILY_MAX = 2;
+
+/** 관계 초반의 자리 비움. 관계 단계가 1이거나 만난 지 AWAY_EARLY_DAYS일이 안 됐으면 초반이다.
+ * 이때 자리를 자주 오래 비우면 유저가 캐릭터에게 마음을 붙일 틈이 자꾸 끊겨서, 긴 불가 구간을
+ * 하루 AWAY_EARLY_DAILY_MAX개까지로 줄인다. 두 상한 모두 최대치라 없는 날이 기본이고, 단계가
+ * 오르고 날이 쌓이면 AWAY_DAILY_MAX로 풀어 가끔 비는 자리가 유저가 그리워할 틈이 되게 한다(이슈 #335). */
+export const AWAY_EARLY_DAYS = 30;
+export const AWAY_EARLY_DAILY_MAX = 1;
+
+/** 긴 불가 구간 하나의 길이 상한(분). 국면과 상관없이 같다. 1시간짜리 운동처럼 더 길게 손이
+ * 묶이는 일은 중간에 폰을 보는 틈을 넣어 나눈다. 시험·면접·발표처럼 자리를 뜰 수 없는 공적
+ * 일은 언제나 실제 길이대로 두고, 영화관·공연처럼 확정 일정에서 나온 구간은 관계가 쌓인
+ * 뒤에만 실제 길이대로 둔다(day-plan.ts의 awayLengthExempt). */
+export const AWAY_BLOCK_MAX_MIN = 40;
+
+/** 알리지 않고 다녀오는 짧은 불가 구간(AWAY_MIN_BLOCK_MIN 미만, 잠 제외)의 하루 개수와 합(분).
+ * 하나하나는 예고할 만큼 길지 않지만, 많으면 유저가 이유를 모른 채 기다리는 시간만 쌓인다.
+ * 긴 운동을 둘로 나눈 조각이 여기 들어오므로 씻기·통화까지 더해 4개·90분이다. */
+export const AWAY_SHORT_DAILY_MAX = 4;
+export const AWAY_SHORT_TOTAL_MAX_MIN = 90;
+
+/** 불가 구간 둘 사이에 두는, 답할 수 있는 시간의 최소(분). 운동 뒤에 귀가 운전과 씻기를 바로
+ * 붙이면 예고한 시간보다 훨씬 오래 답이 끊긴다. 짧은 구간끼리 붙어도 마찬가지다. */
+export const AWAY_GAP_MIN = 5;
 
 /** 선톡 전체의 하루 상한. 자리비움은 이 상한에서 빼고 위 상한으로만 관리한다. */
 export const PROACTIVE_DAILY_MAX = 6;
