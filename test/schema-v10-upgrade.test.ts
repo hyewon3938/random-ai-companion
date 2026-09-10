@@ -1,6 +1,6 @@
-// 수 코드 목록에 notice가 없던 v9 DB가 v10으로 올라가면서 세 표의 CHECK가 새 목록을 받는지 검사한다.
+// 플러팅 코드 목록에 notice가 없던 v9 DB가 v10으로 올라가면서 세 표의 CHECK가 새 목록을 받는지 검사한다.
 //
-// 수 코드는 reaction_scores·relationship_intents·relationship_signals의 CHECK에 박혀 있어
+// 플러팅 코드는 reaction_scores·relationship_intents·relationship_signals의 CHECK에 박혀 있어
 // 표를 다시 만들어야 하고, 세 표는 v9 배포 뒤 비어 있어서 행을 옮기지 않고 지우고 다시 만든다.
 // 배포 전에 v9 모양을 손으로 만들어 왕복을 확인한다 — 버전이 10인지, 세 표가 비었는지, 새
 // 코드가 들어가는지, 손대지 않는 firsts와 관계 행이 그대로인지.
@@ -19,7 +19,7 @@ process.env.DB_PATH = DB_PATH;
 process.env.TELEGRAM_BOT_TOKEN ??= "test-token";
 process.env.ANTHROPIC_API_KEY ??= "test-key";
 
-// v9 시절의 수 코드 목록 — notice가 없다.
+// v9 시절의 플러팅 코드 목록 — notice가 없다.
 const OLD_MOVES =
   "'remember','laugh','anticipate','scene','sudden_ping','nickname','weakness','late_night_truth','jealousy_light','dodge_after_direct','only_you','ask_help'";
 
@@ -132,7 +132,7 @@ test("v9 DB가 지금 스키마 버전까지 올라간다", () => {
   assert.equal(db.pragma("user_version", { simple: true }), 11);
 });
 
-test("수 코드가 든 세 표는 비어 있고 새 코드 notice를 받는다", () => {
+test("플러팅 코드가 든 세 표는 비어 있고 새 코드 notice를 받는다", () => {
   for (const t of ["reaction_scores", "relationship_intents", "relationship_signals"])
     assert.equal(rowCount(t), 0, `${t}가 비어 있지 않다`);
 

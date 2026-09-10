@@ -50,7 +50,7 @@ before(() => {
   say("2026-09-06 11:30:00", { kind: "glance", proactive: true, block: "11:00" });
   say("2026-09-06 16:00:00", { kind: "mend", proactive: true });
   say("2026-09-06 18:00:00", { kind: "promise", proactive: true, promise_row: 12 });
-  // 답장이 오늘 시도할 수를 이미 뒀다 — 의도 줄 셈은 이것도 쓴 것으로 본다.
+  // 답장이 오늘 시도할 플러팅을 이미 뒀다 — 의도 줄 셈은 이것도 쓴 것으로 본다.
   say("2026-09-06 20:00:00", { kind: "reply", move: "같이 볼 것 하나 고르기" });
 });
 after(() => {
@@ -104,7 +104,7 @@ test("의도 상한은 합계와 따로 찬다", () => {
   assert.equal(budgetAllows(used, "catchup"), true);
 });
 
-test("오늘 쓴 의도 줄은 선톡의 줄 코드와 답장의 수를 함께 센다", () => {
+test("오늘 쓴 의도 줄은 선톡의 줄 코드와 답장의 플러팅을 함께 센다", () => {
   assert.deepEqual(usedIntentLines(FULL, fullId, SINCE).sort(), ["dig", "move"]);
   assert.deepEqual(usedIntentLines(OPEN, openId, SINCE), []);
 });
@@ -153,7 +153,7 @@ test("의도 줄은 단계가 여는 줄 가운데 값이 있고 아직 안 쓴 
   assert.equal(pickIntentLine(intent, 1, ["dig", "thread"]), null);
   // 2단계부터 네 줄 전부 열린다.
   assert.equal(pickIntentLine(intent, 2, ["dig"]), "share");
-  // 값이 빈 줄은 건너뛴다. 고백 차례는 수 없이 자리만 적혀도 시도할 수 줄이 산다.
+  // 값이 빈 줄은 건너뛴다. 고백 차례는 플러팅 없이 자리만 적혀도 시도할 플러팅 줄이 산다.
   assert.equal(pickIntentLine({ thread: "다음 주 발표 준비" }, 2, []), "thread");
   assert.equal(pickIntentLine({ move_note: "저녁에 마음 확인" }, 2, []), "move");
   assert.equal(pickIntentLine(null, 2, []), null);

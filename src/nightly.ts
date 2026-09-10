@@ -315,7 +315,7 @@ export interface NightlyGathered {
   touchedUserFacts: string[];
   relationship: string; // 관계 일곱 항목의 지금 값
   // 관계 단계 — 코드가 센 문턱 값과 조건별 충족, 이미 한 처음과 아직 안 한 처음, 어제 처음
-  // 후보, 시도할 수 추천, 어제 의도. 저장 자리가 같은 값으로 출력을 검사한다(relationship-stage.ts).
+  // 후보, 시도할 플러팅 추천, 어제 의도. 저장 자리가 같은 값으로 출력을 검사한다(relationship-stage.ts).
   relation: NightlyRelation;
   userState: string; // 상대의 오늘 상태 — 답장이 판정해 둔 마지막 값(없으면 빈 문자열)
   userProfile: string; // 대화로 채우는 상대 프로필 두 값(하는 일·사는 지역)의 지금 상태

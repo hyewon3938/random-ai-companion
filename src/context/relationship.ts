@@ -1,13 +1,13 @@
-// 「지금 관계」 채우기 — 단계와 처음, 오늘 쓴 수, 오늘 말한 일정, 오늘의 관계 의도를 읽어 답장 프롬프트의 관계 절을 만든다.
+// 「지금 관계」 채우기 — 단계와 처음, 오늘 쓴 플러팅, 오늘 말한 일정, 오늘의 관계 의도를 읽어 답장 프롬프트의 관계 절을 만든다.
 //
 // 불변층의 공통 틀과 단계 블록(prompts/relationship.ts)은 고정 문안이고, 이 파일은 실시간 꼬리에서
 // 코드가 채우는 줄을 만든다. 읽기(readRelationshipInput)와 문자열 만들기(relationshipNowSection)를
 // 갈라 두어 조립 검사가 값을 지어 넣을 수 있다. 값이 없는 줄은 뺀다 — 처음이 하나도 없으면 이미 한
-// 처음 줄이 없고, 오늘 의도 행이 없으면 의도 4줄이 없다. 의도의 시도할 수는 수 코드 없이 자리만
+// 처음 줄이 없고, 오늘 의도 행이 없으면 의도 4줄이 없다. 의도의 시도할 플러팅은 플러팅 코드 없이 자리만
 // 적힌 날(고백 차례)도 그 줄을 그대로 낸다. 미확정 처음도 이미 한 처음에 넣는다 —
 // 그날 답장이 같은 처음을 두 번 내지 않으려면 새벽 정리의 확정을 기다리면 안 된다.
 //
-// 오늘 쓴 수와 오늘 일정을 말했는지는 캐릭터 답장 행의 meta_json(move·told_plan)에서 읽는다. 답장
+// 오늘 쓴 플러팅과 오늘 일정을 말했는지는 캐릭터 답장 행의 meta_json(move·told_plan)에서 읽는다. 답장
 // 신호가 그 값을 적는 자리는 reply-compose.ts와 pending.ts다.
 
 import type {
@@ -48,7 +48,7 @@ export interface DoneFirst {
   confirmed: boolean;
 }
 
-/** 오늘 답장이 쓴 수 하나. at은 시계 표기(HH:MM)다. */
+/** 오늘 답장이 쓴 플러팅 하나. at은 시계 표기(HH:MM)다. */
 export interface TodayMove {
   move: Move;
   at: string;
@@ -204,8 +204,8 @@ export const intentLineText = (
   if (line === "dig") return i.dig || null;
   if (line === "share") return i.share || null;
   if (line === "thread") return i.thread || null;
-  // 수 코드 없이 move_note만 있는 날은 고백 차례다 — 마음 확인은 수 코드가 아니라 자리를 적은
-  // 줄로 온다(relationship-stage.ts). 그 줄을 그대로 시도할 수로 낸다.
+  // 플러팅 코드 없이 move_note만 있는 날은 고백 차례다 — 마음 확인은 플러팅 코드가 아니라 자리를 적은
+  // 줄로 온다(relationship-stage.ts). 그 줄을 그대로 시도할 플러팅으로 낸다.
   if (!i.move && !i.move_note) return null;
   const bits = [i.move ? MOVE_NAME[i.move] : null, i.move_note].filter(Boolean);
   let s = bits.join(" ");
@@ -222,7 +222,7 @@ const intentLines = (i: RelationshipIntentRow | null): string[] => {
   for (const line of INTENT_ORDER) {
     const text = intentLineText(i, line);
     if (text) out.push(`  · ${INTENT_LINE_NAME[line]}: ${text}`);
-    // 수 코드도 자리도 없이 앞세울 결만 적힌 날은 그 결만 낸다.
+    // 플러팅 코드도 자리도 없이 앞세울 결만 적힌 날은 그 결만 낸다.
     else if (line === "move" && i.lead_tone)
       out.push(`  · 앞세울 결: ${LEAD_TONE_NAME[i.lead_tone]}`);
   }
@@ -244,7 +244,7 @@ export const relationshipNowSection = (r: RelationshipInput): string => {
     lines.push(`- 아직 안 한 처음: ${open.map((k) => FIRST_KIND_NAME[k]).join(" · ")}`);
   if (r.todayMoves.length)
     lines.push(
-      `- 오늘 이미 쓴 수: ${r.todayMoves.map((m) => `${MOVE_NAME[m.move]}(${m.at})`).join(" · ")}`,
+      `- 오늘 이미 쓴 플러팅: ${r.todayMoves.map((m) => `${MOVE_NAME[m.move]}(${m.at})`).join(" · ")}`,
     );
   if (r.toldPlanAt)
     lines.push(

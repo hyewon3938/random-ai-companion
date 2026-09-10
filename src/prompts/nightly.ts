@@ -4,7 +4,7 @@
 // NightlyGathered를 받아 글자만 만든다. 4번 영역의 prompts/reply.ts와 같은 꼴로 나눠 둬서,
 // 문안만 고친 커밋의 diff가 순서 코드와 섞이지 않는다(#298).
 //
-// 관계 절(relationSection)은 수집이 센 단계·문턱 조건·처음 후보·시도할 수 후보를 기억 정리
+// 관계 절(relationSection)은 수집이 센 단계·문턱 조건·처음 후보·시도할 플러팅 후보를 기억 정리
 // 프롬프트에 적어 모델이 다시 세지 않게 하고, 아침 선톡 상황 문단은 그날의 관계 의도
 // (MorningIntent)를 받아 intentSummary가 만든 한 줄을 엮을 후보에 넣는다(#355).
 //
@@ -15,7 +15,6 @@ import { DIARY_TAG_MAX } from "../thresholds.js";
 import {
   FIRST_BY_NAME,
   FIRST_KIND_NAME,
-  INTENT_LINE_NAME,
   LEAD_TONE_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
@@ -125,12 +124,8 @@ const LEAD_TONE_CODES = (Object.keys(LEAD_TONE_NAME) as LeadTone[])
   .map((k) => `${k}=${LEAD_TONE_NAME[k]}`)
   .join(" · ");
 
-/** 오늘의 의도 4줄을 한 줄로. 없는 줄은 뺀다. 선톡 상황 문단과 어제 의도 줄이 같이 쓴다.
- * moveLabel은 시도할 것 한 줄의 이름이다 — 슬랙 게시가 사람이 읽는 말을 넣어 부른다. */
-export const intentSummary = (
-  i: MorningIntent | null | undefined,
-  moveLabel: string = INTENT_LINE_NAME.move,
-): string => {
+/** 오늘의 의도 4줄을 한 줄로. 없는 줄은 뺀다. 선톡 상황 문단과 어제 의도 줄이 같이 쓴다. */
+export const intentSummary = (i: MorningIntent | null | undefined): string => {
   if (!i) return "";
   const parts: string[] = [];
   if (i.dig) parts.push(`파고들 것: ${i.dig}`);
@@ -145,7 +140,7 @@ export const intentSummary = (
       : null;
   if (move || i.move_note)
     parts.push(
-      `${moveLabel}: ${[move, i.move_note].filter(Boolean).join(" ")}${tone ? `, 앞세울 결은 ${tone}` : ""}`,
+      `시도할 플러팅: ${[move, i.move_note].filter(Boolean).join(" ")}${tone ? `, 앞세울 결은 ${tone}` : ""}`,
     );
   if (i.thread) parts.push(`이어갈 자리: ${i.thread}`);
   return parts.join(" / ");
@@ -188,12 +183,12 @@ export const relationSection = (r: NightlyRelation): string => {
         )
         .join(" · ") || "(없음)"
     }`,
-    `- move_candidates(시도할 수 추천, 앞이 우선, 코드=이름): ${
+    `- move_candidates(시도할 플러팅 추천, 앞이 우선, 코드=이름): ${
       r.moveCandidates.map((m) => `${m}=${MOVE_NAME[m]}`).join(" · ") ||
       "(없음)"
     }`,
-    `- rapport_moves(잘 통하는 수): ${r.rapportMoves.map((m) => MOVE_NAME[m]).join(" · ") || "(아직 없음)"}`,
-    `- yesterday_moves(어제 쓴 수 → 상대 반응): ${
+    `- rapport_moves(잘 통하는 플러팅): ${r.rapportMoves.map((m) => MOVE_NAME[m]).join(" · ") || "(아직 없음)"}`,
+    `- yesterday_moves(어제 쓴 플러팅 → 상대 반응): ${
       r.yesterdayMoves
         .map(
           (m) =>
@@ -260,7 +255,7 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"],"user_knows":"known|unknown — 내(char) 일정만"}],"schedule_updates":[{"id":0,"time_hint":"14:30","user_knows":"known"}],"relation":{"advance":{"go":true,"basis":"근거 한 줄"}|null,"firsts":[{"kind":"처음 코드","keep":true},{"kind":"처음 코드","by":"user","keep":true}],"intent":{"dig":"파고들 것","share":"흘릴 내 얘기","move":"수 코드","move_note":"어떤 자리에서 어떻게","lead_tone":"결 코드","thread":"이어갈 자리","basis":{"dig":"출처"}}}}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"],"user_knows":"known|unknown — 내(char) 일정만"}],"schedule_updates":[{"id":0,"time_hint":"14:30","user_knows":"known"}],"relation":{"advance":{"go":true,"basis":"근거 한 줄"}|null,"firsts":[{"kind":"처음 코드","keep":true},{"kind":"처음 코드","by":"user","keep":true}],"intent":{"dig":"파고들 것","share":"흘릴 내 얘기","move":"플러팅 코드","move_note":"어떤 자리에서 어떻게","lead_tone":"결 코드","thread":"이어갈 자리","basis":{"dig":"출처"}}}}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.
@@ -303,7 +298,7 @@ relation 규칙 — [관계 단계]를 읽고 적는다. 값은 코드가 센 �
 - intent: 오늘 하루 상대와의 관계에서 하려는 것. 줄마다 60자 안 한 문장이고 없으면 null이다. 4줄이 다 없으면 intent는 null.
   · dig: 오늘의 대화에서 더 물어볼 만한 상대 얘기 하나. 상대가 스스로 연 얘기를 고른다.
   · share: 오늘 흘릴 내 얘기 하나 — 정체성·진행 중인 일·주변 인물에서 상대가 아직 모르는 것.
-  · move: move_candidates에서 고르되 앞을 우선하고, 오늘의 대화 흐름에 맞지 않으면 다음 것. 코드로 적는다. move_note는 그 수를 어떤 자리에서 어떻게 쓸지 한 마디.
+  · move: move_candidates에서 고르되 앞을 우선하고, 오늘의 대화 흐름에 맞지 않으면 다음 것. 코드로 적는다. move_note는 그 플러팅을 어떤 자리에서 어떻게 쓸지 한 마디.
   · confession_due가 예면 move는 null로 두고 move_note에 마음을 확인하는 말을 어떤 자리에서 꺼낼지 적는다.
   · lead_tone: [나의 정체성]의 원하는 방식에 적힌 결 가운데 하나를 결 코드로. 오늘의 대화에서 상대가 다른 사람 얘기를 했으면 은근히 독점, 힘든 일을 말했으면 말없이 챙김, 둘 다 없으면 주 결이다. 정체성에 없는 결은 고르지 않는다.
   · thread: 오늘의 대화에서 끝나지 않은 이야기 가운데 내일 이어갈 자리 하나.
@@ -355,7 +350,7 @@ export const morningSituation = (
         ]
       : []),
     `- 이어갈 것, 상대의 일정, 관계 의도의 이어갈 자리나 파고들 것 가운데 하나만 자연스럽게 엮는다. 특히 상대의 일정이 오늘이면 그걸 챙기는 게 우선이다.`,
-    `- 관계 의도의 흘릴 내 얘기와 시도할 수는 낮 대화의 몫이라 이 한 통에서 하지 않는다. 앞세울 결이 있으면 이 한 통의 결도 그쪽이다.`,
+    `- 관계 의도의 흘릴 내 얘기와 시도할 플러팅은 낮 대화의 몫이라 이 한 통에서 하지 않는다. 앞세울 결이 있으면 이 한 통의 결도 그쪽이다.`,
     `- 한 통에 하나만. 캐묻지 않는다. 1~3개 말풍선(줄바꿈 구분).`,
     `- 상대 일정이 점심·저녁에 있으면 window를 "점심"/"저녁"으로 바꿔도 된다(그 외엔 "아침").`,
     `- 아주 가끔은(그날 각본이 유난히 정신없으면) 건너뛰어도 사람답다 → send=false.`,

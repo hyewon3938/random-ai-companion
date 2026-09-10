@@ -12,7 +12,7 @@
 // 나란히 돌려 답장이 늦어지지 않게 한다.
 //
 // 같은 호출이 상대가 얼마나 열렸는지도 판정한다(관계 설계 §6, #353) — 자기 얘기를 꺼냈는지,
-// 캐릭터의 근황을 물었는지, 호감을 말했는지, 직전에 캐릭터가 쓴 수를 어떻게 받았는지. 이 넷은
+// 캐릭터의 근황을 물었는지, 호감을 말했는지, 직전에 캐릭터가 쓴 플러팅을 어떻게 받았는지. 이 넷은
 // 상태와 달리 바뀌었는지와 상관없이 턴마다 나오고, reply-compose가 relationship_signals에
 // 1행으로 적는다. 읽는 자리(readOpenSignals)를 상태 판정과 갈라 둔 것은 상태 쪽 검사와 호출부가
 // 그대로 남게 하려는 것이다 — 열림 칸이 빠진 답도 상태 판정은 그대로 쓴다.
@@ -60,7 +60,7 @@ export interface OpenSignals {
   openedSelf: boolean;
   askedAboutChar: boolean;
   saidAffection: boolean;
-  /** 직전에 캐릭터가 쓴 수. 없으면 null이고 그때 반응은 none이다. */
+  /** 직전에 캐릭터가 쓴 플러팅. 없으면 null이고 그때 반응은 none이다. */
   prevMove: Move | null;
   moveReaction: MoveReaction;
 }
@@ -80,7 +80,7 @@ const SYSTEM = `너는 두 사람의 메시지 대화를 옆에서 읽는 관찰
 - opened_self: 상대가 묻지 않았는데 자기 얘기(자기 하루·기분·과거·고민)를 꺼냈으면 true.
 - asked_about_char: 상대가 캐릭터의 근황이나 상태를 물었으면 true. 뭐 해?처럼 지금 하는 일을 묻는 것도 포함한다.
 - said_affection: 상대가 캐릭터에게 호감을 말로 드러냈으면 true(좋다·보고 싶다·기다렸다·생각났다 같은 말).
-- move_reaction: [직전에 캐릭터가 쓴 수]가 있을 때, 상대가 그 수를 받아 반응했으면 accepted, 답하지 않고 다른 얘기로 넘어갔으면 ignored, 밀어내거나 싫다고 했으면 rejected. 수가 없었으면 none.
+- move_reaction: [직전에 캐릭터가 쓴 플러팅]이 있을 때, 상대가 그 플러팅을 받아 반응했으면 accepted, 답하지 않고 다른 얘기로 넘어갔으면 ignored, 밀어내거나 싫다고 했으면 rejected. 플러팅이 없었으면 none.
 
 JSON 한 줄로만 답한다. 열림 4항목은 두 모양 모두에 넣는다:
 {"changed":true,"state":"...","cause":"char|other","tone":"good|neutral|bad","since":"HH:MM","opened_self":true,"asked_about_char":false,"said_affection":false,"move_reaction":"none"}
@@ -194,7 +194,7 @@ const asFlag = (x: unknown): boolean | null =>
 
 /**
  * 같은 답에서 열림 4항목을 읽는다. 세 예/아니오 가운데 하나라도 없으면 null — 그 턴은 행을 안 적는다.
- * 직전에 쓴 수가 없으면 반응은 늘 none이고, 수가 있었는데 반응 칸이 목록 밖이면 null이다.
+ * 직전에 쓴 플러팅이 없으면 반응은 늘 none이고, 플러팅이 있었는데 반응 칸이 목록 밖이면 null이다.
  */
 export const readOpenSignals = (
   raw: string,
@@ -216,7 +216,7 @@ export const readOpenSignals = (
   return { openedSelf, askedAboutChar, saidAffection, prevMove, moveReaction };
 };
 
-/** 캐릭터의 마지막 말이 판정이 보는 대화 안에 있고 수를 썼으면 그 코드. */
+/** 캐릭터의 마지막 말이 판정이 보는 대화 안에 있고 플러팅을 썼으면 그 코드. */
 const lastMoveIn = (
   chatId: string,
   characterId: number,
@@ -261,7 +261,7 @@ export const judgeUserState = async (
   const prevMove = lastMoveIn(chatId, characterId, rows[0]!.sent_at);
   const content = [
     `[지난 판정]\n${prev ?? "(없음)"}`,
-    `[직전에 캐릭터가 쓴 수]\n${prevMove ? MOVE_NAME[prevMove] : "(없음)"}`,
+    `[직전에 캐릭터가 쓴 플러팅]\n${prevMove ? MOVE_NAME[prevMove] : "(없음)"}`,
     `[최근 대화]\n${userStateTranscript(rows)}`,
   ].join("\n\n");
   const meta: CallMeta = { purpose: "user_state", characterId, chatId };

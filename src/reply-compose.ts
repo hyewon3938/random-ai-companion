@@ -12,7 +12,7 @@
 // 관계 신호(#353)도 여기서 적는다 — 답장 신호의 first는 firsts에 미확정 행으로, told_plan은
 // 오늘 캐릭터 일정이 하나뿐일 때 그 일정의 상대가 안다는 표시로, 판정 호출이 돌려준 열림
 // 4항목은 relationship_signals에 턴마다 1행으로. 만들어 둔 답장이 폐기되고 다시 만들어지면
-// 마지막으로 나간 답장 뒤의 열림 행을 걷어 내고 적어 한 턴에 1행을 지킨다. 쓴 수(move)와
+// 마지막으로 나간 답장 뒤의 열림 행을 걷어 내고 적어 한 턴에 1행을 지킨다. 쓴 플러팅(move)과
 // told_plan은 replyMeta로 돌려줘 호출부가 대화 기록의 답장 행 meta_json에 싣는다 — 다음 판정
 // 호출과 [지금 관계] 절이 그 행을 읽는다.
 //
@@ -362,7 +362,7 @@ export const composeReply = async (
   attach({
     stay: signals.stay,
     note: signals.note,
-    // 관계 — 지금 단계와 며칠째인지, 이 답장이 쓴 수, 처음으로 적은 일. 슬랙 답장 게시의 관계 줄.
+    // 관계 — 지금 단계와 며칠째인지, 이 답장이 쓴 플러팅, 처음으로 적은 일. 슬랙 답장 게시의 관계 줄.
     relationship: {
       stage: stage?.stage_no ?? 1,
       days: stageDays(stage?.stage_since ?? kstLogicalDate(), kstLogicalDate()),

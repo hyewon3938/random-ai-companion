@@ -1,7 +1,7 @@
 // 관계 단계 전이 — 어제까지의 값을 세어 문턱을 재고, 모델의 결정을 받아 단계·처음·의도를 저장한다.
 //
 // relationship.md 「단계 전이 절차」가 원본이다. 코드가 세는 값(대화한 날, 유저가 먼저 건 날,
-// 열림 신호가 켜진 날, 반응 점수 평균, 체류 일수)과 문턱 판정, 시도할 수 추천 목록은 이 파일의
+// 열림 신호가 켜진 날, 반응 점수 평균, 체류 일수)과 문턱 판정, 시도할 플러팅 추천 목록은 이 파일의
 // 순수 함수가 만들고, 새벽 정리 수집(gatherRelation)이 DB에서 읽어 그 함수들에 넣는다. 넘길지는
 // 모델이 정한다 — 조건이 다 찬 날에만 묻고, 조건이 찼다고 코드가 자동으로 올리지 않는다.
 //
@@ -10,9 +10,9 @@
 // 모델이 넘기자고 했고 지금 단계가 수집 때와 같을 때만 한 단계 올린다. 두 단계 올리거나
 // 내리는 출력은 여기서 버린다(raiseStage가 한 번 더 막는다).
 //
-// 의도의 시도할 수는 relationship_intents.move가 수 코드만 받아서(DB 검사 제약), 고백 차례의
+// 의도의 시도할 플러팅은 relationship_intents.move가 플러팅 코드만 받아서(DB 검사 제약), 고백 차례의
 // "마음 확인"은 move를 비우고 move_note에 어떤 자리에서 말할지를 적는다. 답장 프롬프트의
-// 관계 절(context/relationship.ts)이 move 없는 move_note를 그대로 시도할 수 줄로 낸다.
+// 관계 절(context/relationship.ts)이 move 없는 move_note를 그대로 시도할 플러팅 줄로 낸다.
 //
 // 반응 점수 표본 계산은 아직 없다 — 구현 6이 reaction-score.ts를 만들면 gatherRelation이
 // 표본을 세고 applyRelationOutput의 점수 자리에서 저장한다. 지금은 저장된 점수 행만 읽는다.
@@ -63,8 +63,8 @@ import {
   STAGE_3_TO_4,
 } from "./thresholds.js";
 
-// ── 단계마다 열리는 수 — relationship.md 「수」가 원본 ─────────────────────────
-// 한 번 열린 수는 그 뒤 단계에서도 쓴다. 4단계는 새 수가 없다.
+// ── 단계마다 열리는 플러팅 — relationship.md 「플러팅」이 원본 ─────────────────
+// 한 번 열린 플러팅은 그 뒤 단계에서도 쓴다. 4단계는 새 플러팅이 없다.
 
 export const STAGE_MOVES: Record<RelationshipStage, Move[]> = {
   1: ["remember", "laugh", "anticipate", "scene", "notice"],
@@ -79,7 +79,7 @@ export const STAGE_MOVES: Record<RelationshipStage, Move[]> = {
   4: [],
 };
 
-/** 지금 단계까지 열린 수 전부. 단계 순서대로, 같은 단계 안에서는 위 표의 순서다. */
+/** 지금 단계까지 열린 플러팅 전부. 단계 순서대로, 같은 단계 안에서는 위 표의 순서다. */
 export const openMoves = (stage: RelationshipStage): Move[] => {
   const out: Move[] = [];
   for (const s of [1, 2, 3, 4] as RelationshipStage[]) {
@@ -111,9 +111,9 @@ export interface StageCounts {
   askedCharDays: number;
   /** 호감을 말로 한 판정 행 수. */
   affectionCount: number;
-  /** 이 단계에서 열린 수의 반응 점수 평균. 표본이 있는 수만 넣고, 하나도 없으면 null. */
+  /** 이 단계에서 열린 플러팅의 반응 점수 평균. 표본이 있는 플러팅만 넣고, 하나도 없으면 null. */
   stageMoveAvg: number | null;
-  /** 이 단계에서 쓴 수 전체의 반응 점수 평균이 0보다 큰지. 표본이 없으면 null. */
+  /** 이 단계에서 쓴 플러팅 전체의 반응 점수 평균이 0보다 큰지. 표본이 없으면 null. */
   stageScorePositive: boolean | null;
   /** 마음 확인 사건이 있었는지 — 한쪽이 마음을 말하고 다른 쪽이 같은 날 받은 것. */
   confessionExchange: boolean;
@@ -130,7 +130,7 @@ export interface StageCountInput {
   /** 확정·미확정을 다 넣는다 — 어제의 마음 확인이 아직 미확정이어도 그날 문턱을 재야 한다.
    * 저장 자리가 확정된 행만으로 다시 확인한다. */
   firsts: FirstRow[];
-  /** 이 단계에서 캐릭터 답장이 쓴 수(중복 없이). */
+  /** 이 단계에서 캐릭터 답장이 쓴 플러팅(중복 없이). */
   usedMoves: Move[];
 }
 
@@ -289,7 +289,7 @@ export const evaluateThreshold = (
         ),
         atLeast(
           "stage_move_avg",
-          "2단계에서 열린 수의 반응 점수 평균",
+          "2단계에서 열린 플러팅의 반응 점수 평균",
           round2(c.stageMoveAvg),
           STAGE_2_TO_3.moveAvgMin,
         ),
@@ -335,14 +335,14 @@ export const confessionDueOf = (
     c.stageScorePositive === true) ||
     c.stayDays >= STAGE_3_TO_4.confessionDueDaysAnyScore);
 
-// ── 시도할 수 추천 목록 — relationship.md §6 ─────────────────────────────────
+// ── 시도할 플러팅 추천 목록 — relationship.md §6 ────────────────────────────
 
 /** 기준 날짜의 일련번호가 탐색 주기로 나누어떨어지는 날. 다시 돌려도 같은 답이 나온다. */
 export const isExploreDay = (date: string): boolean =>
   Math.round(utcDay(date) / 86_400_000) % MOVE_EXPLORE_EVERY === 0;
 
-/** 순수 계산. 열린 수를 점수 내림차순으로 두되 어제 쓴 수는 뒤로 보내고, 점수가 낮고 표본이
- * 찬 수는 뺀다. 탐색일에는 표본이 가장 적은 수를 맨 앞에 둔다. 코드 목록이고 숫자는 없다. */
+/** 순수 계산. 열린 플러팅을 점수 내림차순으로 두되 어제 쓴 플러팅은 뒤로 보내고, 점수가 낮고 표본이
+ * 찬 플러팅은 뺀다. 탐색일에는 표본이 가장 적은 플러팅을 맨 앞에 둔다. 코드 목록이고 숫자는 없다. */
 export const moveCandidates = (
   stage: RelationshipStage,
   scores: ReactionScoreRow[],
@@ -369,7 +369,7 @@ export const moveCandidates = (
   return out;
 };
 
-/** 관계 표의 잘 통하는 것에 말로 옮길 수 — 점수와 표본이 둘 다 찬 것. */
+/** 관계 표의 잘 통하는 것에 말로 옮길 플러팅 — 점수와 표본이 둘 다 찬 것. */
 export const rapportMoves = (scores: ReactionScoreRow[]): Move[] =>
   scores
     .filter(
@@ -428,7 +428,7 @@ const parseMeta = (json: string | null): Record<string, unknown> => {
 
 const dayStart = (date: string): string => `${date} 05:00:00`;
 
-/** 어제 답장이 쓴 수와 그 뒤 유저 턴의 판정. 판정 행의 prev_move가 같은 수를 가리키므로 답장
+/** 어제 답장이 쓴 플러팅과 그 뒤 유저 턴의 판정. 판정 행의 prev_move가 같은 플러팅을 가리키므로 답장
  * 시각 뒤 첫 신호 행을 붙인다. */
 const yesterdayMovesOf = (
   chatId: string,
@@ -680,14 +680,14 @@ export const applyRelationOutput = (
   // 의도 — 오늘 것만 적는다. 며칠 지난 새벽 정리를 다시 돌린 경우면 그날 의도는 이미 지났다.
   const it = out?.intent;
   if (it && shiftDate(g.diaryDate, 1) === g.today) {
-    // 수는 코드가 고른 후보 안에서만 받는다 — 점수가 낮아 뺀 수나 이 단계에 아직 안 연 수를
+    // 플러팅은 코드가 고른 후보 안에서만 받는다 — 점수가 낮아 뺀 플러팅이나 이 단계에 아직 안 연 플러팅을
     // 모델이 고르면 버린다.
     const move =
       isMove(it.move) && rel.moveCandidates.includes(it.move)
         ? it.move
         : undefined;
     let moveNote = cleanLine(it.move_note);
-    // 고백 차례의 "마음 확인"은 수 코드가 아니라 move를 비우고 자리를 적는 줄로 남긴다. 고백
+    // 고백 차례의 "마음 확인"은 플러팅 코드가 아니라 move를 비우고 자리를 적는 줄로 남긴다. 고백
     // 차례가 아닌 날의 코드 아닌 move는 버린다.
     if (rel.confessionDue && !moveNote && !isMove(it.move))
       moveNote = cleanLine(it.move);
