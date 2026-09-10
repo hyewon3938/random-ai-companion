@@ -3,7 +3,8 @@
 // 불변층의 공통 틀과 단계 블록(prompts/relationship.ts)은 고정 문안이고, 이 파일은 실시간 꼬리에서
 // 코드가 채우는 줄을 만든다. 읽기(readRelationshipInput)와 문자열 만들기(relationshipNowSection)를
 // 갈라 두어 조립 검사가 값을 지어 넣을 수 있다. 값이 없는 줄은 뺀다 — 처음이 하나도 없으면 이미 한
-// 처음 줄이 없고, 오늘 의도 행이 없으면 의도 4줄이 없다. 미확정 처음도 이미 한 처음에 넣는다 —
+// 처음 줄이 없고, 오늘 의도 행이 없으면 의도 4줄이 없다. 의도의 시도할 수는 수 코드 없이 자리만
+// 적힌 날(고백 차례)도 그 줄을 그대로 낸다. 미확정 처음도 이미 한 처음에 넣는다 —
 // 그날 답장이 같은 처음을 두 번 내지 않으려면 새벽 정리의 확정을 기다리면 안 된다.
 //
 // 오늘 쓴 수와 오늘 일정을 말했는지는 캐릭터 답장 행의 meta_json(move·told_plan)에서 읽는다. 답장
@@ -183,12 +184,15 @@ const intentLines = (i: RelationshipIntentRow | null): string[] => {
   const out: string[] = [];
   if (i.dig) out.push(`  · 파고들 것: ${i.dig}`);
   if (i.share) out.push(`  · 흘릴 내 얘기: ${i.share}`);
-  if (i.move) {
-    let s = MOVE_NAME[i.move];
-    if (i.move_note) s += ` ${i.move_note}`;
+  // 수 코드 없이 move_note만 있는 날은 고백 차례다 — 마음 확인은 수 코드가 아니라 자리를 적은
+  // 줄로 온다(relationship-stage.ts). 그 줄을 그대로 시도할 수로 낸다.
+  if (i.move || i.move_note) {
+    const bits = [i.move ? MOVE_NAME[i.move] : null, i.move_note].filter(Boolean);
+    let s = bits.join(" ");
     if (i.lead_tone) s += `. 앞세울 결은 ${LEAD_TONE_NAME[i.lead_tone]}`;
     out.push(`  · 시도할 수: ${s}`);
-  }
+  } else if (i.lead_tone)
+    out.push(`  · 앞세울 결: ${LEAD_TONE_NAME[i.lead_tone]}`);
   if (i.thread) out.push(`  · 이어갈 자리: ${i.thread}`);
   return out;
 };

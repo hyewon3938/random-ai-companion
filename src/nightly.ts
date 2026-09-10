@@ -67,7 +67,14 @@ import {
   type DaySeed,
   type MemoryRow,
   type RelationshipRow,
+  getRelationshipIntent,
 } from "./db.js";
+import {
+  applyRelationOutput,
+  gatherRelation,
+  type NightlyRelation,
+  type RelationOutput,
+} from "./relationship-stage.js";
 import { buildSystemBlocks } from "./context.js";
 import { userStateLabel } from "./user-state.js";
 import { isSameScheduleContent } from "./schedule-dedupe.js";
@@ -123,6 +130,7 @@ import {
   morningSituation,
   progressPrompt,
   quietDayPrompt,
+  type MorningIntent,
   reconnectSituation,
 } from "./prompts/nightly.js";
 import {
@@ -219,6 +227,9 @@ export interface ExtractOutput {
   // user_knows는 그날 대화에서 상대에게 말한 일정에만 known으로 온다 — 시각과 달리 되돌리는
   // 값은 받지 않아서, 이 자리에 known 말고 다른 값이 와도 반영하지 않는다(이슈 #345).
   schedule_updates?: { id: number; time_hint?: string; user_knows?: UserKnows }[];
+  // 관계 절 — 넘길지와 근거, 처음 확정, 오늘의 관계 의도. 아직 이 절을 안 만드는 생성 경로가
+  // 있어 옵셔널이고, 없으면 처음 후보만 확정하고 단계와 의도는 건드리지 않는다.
+  relation?: RelationOutput | null;
 }
 
 export interface SendDraft {
@@ -282,6 +293,9 @@ export interface NightlyGathered {
   // 그날 들은 것만 적었다(이슈 #264). 전부 싣지 않고 겹치는 것만 EXTRACT_USER_FACT_MAX까지.
   touchedUserFacts: string[];
   relationship: string; // 관계 일곱 항목의 지금 값
+  // 관계 단계 — 코드가 센 문턱 값과 조건별 충족, 이미 한 처음과 아직 안 한 처음, 어제 처음
+  // 후보, 시도할 수 추천, 어제 의도. 저장 자리가 같은 값으로 출력을 검사한다(relationship-stage.ts).
+  relation: NightlyRelation;
   userState: string; // 상대의 오늘 상태 — 답장이 판정해 둔 마지막 값(없으면 빈 문자열)
   userProfile: string; // 대화로 채우는 상대 프로필 두 값(하는 일·사는 지역)의 지금 상태
   todayNotes: string[]; // 그 하루 동안 대화하며 적어 둔 오늘 메모
@@ -550,6 +564,12 @@ export const gatherNightlyInput = (
       [convo, ...todayNotes].join("\n"),
     ),
     relationship: relationshipLines(getRelationship(character.id)),
+    relation: gatherRelation(
+      character.id,
+      character.chat_id,
+      diaryDate,
+      today,
+    ),
     userState: userStateLine(getRelationship(character.id), diaryDate),
     userProfile: userProfileLines(character.chat_id),
     todayNotes,
@@ -848,6 +868,13 @@ const applyNightlyTxn = db.transaction(
       for (const r of out.rhythm)
         if (r.ym) applyMonthPlan(g.characterId, r.ym, r);
 
+    // 관계 — 처음 확정과 취소, 단계 전이, 오늘의 관계 의도. 관계 절이 없는 회차에도 부른다:
+    // 어제 답장이 표시한 처음 후보는 모델이 안 봤어도 확정으로 둔다. 순서와 검사는
+    // relationship-stage.ts에 있다.
+    const rel = applyRelationOutput(g, ex?.relation ?? null, ts);
+    if (rel.advanceRejected)
+      console.warn(`[nightly] 단계 전이 건너뜀: ${rel.advanceRejected}`);
+
     // 선톡 문안 — 관제탑(dailySendPlan) 게이트를 지나야 저장된다. 외부 생성 경로가 그날의
     // 판정을 모르고 문안을 보내와도 여기서 걸러진다. 창은 생성 쪽이 정한 값을 그대로 쓴다.
     let sendStored = false;
@@ -888,7 +915,7 @@ const applyNightlyTxn = db.transaction(
       (relNow.user_state_since ?? "") < `${nextDate(g.diaryDate)} 05:00:00`;
     if (stateCleared) setUserState(g.characterId, null);
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
@@ -1038,6 +1065,7 @@ const draftPrepared = async (
   g: NightlyGathered,
   tomorrow: string[],
   style: MorningStyle | null,
+  intent: MorningIntent | null,
 ): Promise<SendDraft | null> => {
   // 오래 답이 없는 중에 나가는 아침 한 통은 상대 일정을 챙기는 자리라 결이 다르다.
   const care = g.silenceTier !== "normal";
@@ -1047,6 +1075,7 @@ const draftPrepared = async (
         g,
         style ? style.moment : "아침 (여유로운 시간대)",
         tomorrow,
+        intent,
       );
   const draft = await chatJson<{
     send: boolean;
@@ -1088,7 +1117,12 @@ const ensurePreparedSend = async (
   const send =
     plan.kind === "checkin"
       ? await draftReconnect(g)
-      : await draftPrepared(g, [], style);
+      : await draftPrepared(
+          g,
+          [],
+          style,
+          getRelationshipIntent(g.characterId, g.today) ?? null,
+        );
   if (send)
     insertScheduledSend(
       g.characterId,
@@ -1140,7 +1174,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
       const extract = await chatJson<ExtractOutput>(
         EXTRACT_SYSTEM,
         extractPrompt(bg),
-        1500,
+        2000,
         config.modelDeep,
         { purpose: "extract", characterId: bg.characterId, chatId: bg.chatId },
       );
@@ -1182,7 +1216,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
     extract = await chatJson<ExtractOutput>(
       EXTRACT_SYSTEM,
       extractPrompt(g),
-      1500,
+      2000,
       config.modelDeep,
       { purpose: "extract", characterId: g.characterId, chatId: g.chatId },
     );
@@ -1224,7 +1258,12 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   // 다만 그날 상대에게 일정이 있으면 그것만 챙기는 아침 한 통은 준비한다.
   if (g.silenceTier === "quiet" || g.silenceTier === "dormant") {
     if (plan.kind === "morning")
-      send = await draftPrepared(g, entry.tomorrow ?? [], null);
+      send = await draftPrepared(
+        g,
+        entry.tomorrow ?? [],
+        null,
+        extract?.relation?.intent ?? null,
+      );
     return `${applyNightlyOutput(g, { entry, extract, progress, send })} (침묵 ${g.silenceDays}일 — ${plan.reason})`;
   }
   // 재연결 단계: 아침 인사 대신 저녁 안부 1통만 준비한다
@@ -1244,7 +1283,12 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   // 선톡 문안: 아침의 자기 삶 공유가 기본이다. 대화와 같은 3층 프롬프트를 쓰므로 어제에서
   // 이어갈 것(entry.tomorrow — 아직 DB에 없는 방금 쓴 일기의 것)만 상황 문단으로 넘긴다.
   if (plan.kind === "morning")
-    send = await draftPrepared(g, entry.tomorrow ?? [], style);
+    send = await draftPrepared(
+      g,
+      entry.tomorrow ?? [],
+      style,
+      extract?.relation?.intent ?? null,
+    );
 
   const result = applyNightlyOutput(g, { entry, extract, progress, send });
   return result;

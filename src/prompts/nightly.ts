@@ -8,6 +8,15 @@
 // 지시서의 규칙도 함께 맞춘다.
 import type { NightlyGathered } from "../nightly.js";
 import { DIARY_TAG_MAX } from "../thresholds.js";
+import {
+  FIRST_BY_NAME,
+  FIRST_KIND_NAME,
+  LEAD_TONE_NAME,
+  MOVE_NAME,
+  MOVE_REACTION_NAME,
+  type LeadTone,
+} from "../labels.js";
+import type { NightlyRelation } from "../relationship-stage.js";
 
 // 삶의 흐름(아크) 줄들 — 일기 프롬프트와 아크 이어쓰기가 같은 모양으로 쓴다.
 export const arcLinesOf = (g: NightlyGathered): string =>
@@ -102,6 +111,84 @@ ${g.convo ? `\n[어제 대화 — ${g.diaryDate}]\n${g.convo}\n` : ""}
 
 export const EXTRACT_SYSTEM = `너는 캐릭터의 하루에서 다음 대화에 필요한 기억을 정리하는 정리자다. 대화에 나온 확실한 사실만 담고, 남길 것이 없으면 빈 배열을 준다.`;
 
+const monthDay = (date: string): string =>
+  `${+date.slice(5, 7)}/${+date.slice(8, 10)}`;
+
+const LEAD_TONE_CODES = (Object.keys(LEAD_TONE_NAME) as LeadTone[])
+  .map((k) => `${k}=${LEAD_TONE_NAME[k]}`)
+  .join(" · ");
+
+/** 오늘의 의도 4줄을 한 줄로. 없는 줄은 뺀다. 선톡 상황 문단과 어제 의도 줄이 같이 쓴다. */
+export const intentSummary = (i: MorningIntent | null | undefined): string => {
+  if (!i) return "";
+  const parts: string[] = [];
+  if (i.dig) parts.push(`파고들 것: ${i.dig}`);
+  if (i.share) parts.push(`흘릴 내 얘기: ${i.share}`);
+  const move =
+    i.move && Object.hasOwn(MOVE_NAME, i.move)
+      ? MOVE_NAME[i.move as keyof typeof MOVE_NAME]
+      : null;
+  const tone =
+    i.lead_tone && Object.hasOwn(LEAD_TONE_NAME, i.lead_tone)
+      ? LEAD_TONE_NAME[i.lead_tone as LeadTone]
+      : null;
+  if (move || i.move_note)
+    parts.push(
+      `시도할 수: ${[move, i.move_note].filter(Boolean).join(" ")}${tone ? `, 앞세울 결은 ${tone}` : ""}`,
+    );
+  if (i.thread) parts.push(`이어갈 자리: ${i.thread}`);
+  return parts.join(" / ");
+};
+
+/** 기억 정리 프롬프트의 관계 단계 절 — 코드가 센 값과 모델이 고를 목록. 줄 앞의 영문은 출력
+ * 규칙이 가리키는 이름이다. */
+export const relationSection = (r: NightlyRelation): string => {
+  const t = r.threshold;
+  const conditions = t.conditions
+    .map(
+      (c) =>
+        `${c.name} ${c.value === null ? "표본 없음" : typeof c.value === "boolean" ? (c.value ? "있음" : "없음") : c.value}/${typeof c.need === "boolean" ? "있음" : c.need} ${c.met ? "찼음" : "안 찼음"}`,
+    )
+    .join(", ");
+  const threshold =
+    t.to === null
+      ? "마지막 단계라 다음 문턱이 없다"
+      : `${t.from}→${t.to}, ${t.met ? "찼음" : "안 찼음"} — ${conditions}`;
+  const lines = [
+    `- stage_no·stage_since·stay_days: ${r.stageNo}단계, ${r.stageSince}부터 ${r.stayDays}일 지남`,
+    `- threshold_met(다음 단계 문턱): ${threshold}`,
+    `- firsts_done(이미 한 처음): ${
+      r.firstsDone
+        .map((f) => `${FIRST_KIND_NAME[f.kind]}(${FIRST_BY_NAME[f.by]}, ${monthDay(f.date)})`)
+        .join(" · ") || "(없음)"
+    }`,
+    `- firsts_open(이 단계까지 열렸는데 아직 안 한 처음, 코드=이름): ${
+      r.firstsOpen.map((k) => `${k}=${FIRST_KIND_NAME[k]}`).join(" · ") || "(없음)"
+    }`,
+    `- firsts_pending(어제 답장이 표시한 처음 후보, 코드=이름): ${
+      r.firstsPending
+        .map(
+          (f) =>
+            `${f.kind}=${FIRST_KIND_NAME[f.kind]}(${FIRST_BY_NAME[f.by]}, ${f.happenedAt.slice(11, 16)})`,
+        )
+        .join(" · ") || "(없음)"
+    }`,
+    `- move_candidates(시도할 수 추천, 앞이 우선, 코드=이름): ${
+      r.moveCandidates.map((m) => `${m}=${MOVE_NAME[m]}`).join(" · ") || "(없음)"
+    }`,
+    `- rapport_moves(잘 통하는 수): ${r.rapportMoves.map((m) => MOVE_NAME[m]).join(" · ") || "(아직 없음)"}`,
+    `- yesterday_moves(어제 쓴 수 → 상대 반응): ${
+      r.yesterdayMoves
+        .map((m) => `${MOVE_NAME[m.move]} → ${m.reaction ? MOVE_REACTION_NAME[m.reaction] : "판정 없음"}`)
+        .join(" · ") || "(없음)"
+    }`,
+    `- yesterday_intent(어제 의도): ${intentSummary(r.yesterdayIntent) || "(없음)"}`,
+    `- confession_due(고백 차례): ${r.confessionDue ? "예 — 오늘 의도에 마음을 확인하는 말을 넣는다" : "아니오"}`,
+    `- 결 코드: ${LEAD_TONE_CODES}`,
+  ];
+  return lines.join("\n");
+};
+
 export const extractPrompt = (g: NightlyGathered): string => {
   const keyLines = g.existingKeys
     .map((k) => `- ${k.itemType} ${k.owner} ${k.key}`)
@@ -122,6 +209,9 @@ ${g.touchedUserFacts.join("\n") || "(없음)"}
 
 [상대와의 관계 — 지금 값]
 ${g.relationship || "(이제 막 시작한 사이)"}
+
+[관계 단계 — 코드가 센 값]
+${relationSection(g.relation)}
 
 [상대의 오늘 상태 — 답장이 판정해 둔 마지막 값]
 ${g.userState || "(없음)"}
@@ -151,7 +241,7 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"],"user_knows":"known|unknown — 내(char) 일정만"}],"schedule_updates":[{"id":0,"time_hint":"14:30","user_knows":"known"}]}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"],"user_knows":"known|unknown — 내(char) 일정만"}],"schedule_updates":[{"id":0,"time_hint":"14:30","user_knows":"known"}],"relation":{"advance":{"go":true,"basis":"근거 한 줄"}|null,"firsts":[{"kind":"처음 코드","keep":true},{"kind":"처음 코드","by":"user","keep":true}],"intent":{"dig":"파고들 것","share":"흘릴 내 얘기","move":"수 코드","move_note":"어떤 자리에서 어떻게","lead_tone":"결 코드","thread":"이어갈 자리","basis":{"dig":"출처"}}}}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.
@@ -166,7 +256,7 @@ memories 규칙:
 - tags: ${TAG_RULE}
 - user_knows: '나'(char) 쪽 기억에만 — 이 사실을 상대가 아는가. 위 재료 줄 끝의 표시가 지금 값이고, 오늘 대화에서 내가 상대에게 말한 것만 known으로 바꾼다. 상대가 이미 알던 것은 그 줄의 지금 값을 그대로 다시 적는다. 한 번 known이 된 것은 다시 unknown으로 되돌리지 않는다 — 이미 말한 일을 다음에 처음 꺼내는 것처럼 말하게 된다. 오늘 말하지 않은 일을 짐작으로 known으로 바꾸지 않는다.
 
-relationship 규칙: 이 하루로 실제 달라진 항목만 넣는다 (넣은 항목만 갱신되고, 나머지는 그대로 남는다). 각 항목은 짧은 서술로. 지금 어떤 사이인지·서로 부르는 말·존댓말과 반말은 대화하는 자리에서 이미 갱신되니 여기서 건드리지 않는다. [상대의 오늘 상태]는 이 정리가 끝나면 비워지니, 내일도 알고 있어야 할 것이면 feelings나 cautions에 녹여 적는다 — 나 때문에 안 좋았던 상태는 무엇 때문이었는지가 남게. 달라진 게 없으면 relationship은 null.
+relationship 규칙: 이 하루로 실제 달라진 항목만 넣는다 (넣은 항목만 갱신되고, 나머지는 그대로 남는다). 각 항목은 짧은 서술로. 지금 어떤 사이인지·서로 부르는 말·존댓말과 반말은 대화하는 자리에서 이미 갱신되니 여기서 건드리지 않는다. [상대의 오늘 상태]는 이 정리가 끝나면 비워지니, 내일도 알고 있어야 할 것이면 feelings나 cautions에 녹여 적는다 — 나 때문에 안 좋았던 상태는 무엇 때문이었는지가 남게. 달라진 게 없으면 relationship은 null. 잘 통하는 것(rapport)에는 [관계 단계]의 rapport_moves를 말로 옮겨 넣는다 — 숫자와 코드는 적지 않는다.
 user_profile 규칙:
 - 상대가 하는 일·사는 지역이 대화에서 분명히 드러났을 때만 넣는다. 어림짐작으로 채우지 않고, 확실하지 않으면 비워 둔다.
 - 위 [상대 프로필 — 지금 값]에 이미 있는 값과 같으면 넣지 않는다. 두 값 다 그대로면 user_profile은 null.
@@ -187,17 +277,41 @@ schedule_updates 규칙:
 - 고치는 것은 이 둘뿐이다. 날짜·내용·주인이 달라졌으면 여기 넣지 않는다.
 - 두 값은 따로 온다. 시각만 정해졌으면 time_hint만, 말하기만 했으면 user_knows만 넣고, 둘 다면 한 줄에 함께 넣는다.
 - 이미 적힌 시각과 같거나 대화에서 시각이 안 나온 줄에는 time_hint를 넣지 않는다. 이미 [상대가 앎]인 줄에는 user_knows를 넣지 않는다. 고칠 줄이 없으면 빈 배열.
-- time_hint는 14:30처럼 시각으로 적을 수 있으면 시각으로, 아니면 대화에 나온 말 그대로 적는다.`;
+- time_hint는 14:30처럼 시각으로 적을 수 있으면 시각으로, 아니면 대화에 나온 말 그대로 적는다.
+relation 규칙 — [관계 단계]를 읽고 적는다. 값은 코드가 센 것이라 다시 세지 않는다:
+- advance: threshold_met가 찼음일 때만 넣는다. 오늘의 대화에서 상대가 다음 단계의 관계로 읽히면 go를 true로 하고 basis에 근거 한 줄을 적는다. 확신이 없으면 false. 조건이 찼다고 자동으로 넘기지 않는다. 3단계는 마음 확인 사건이 조건이라 문턱이 찼으면 넘긴다. 문턱이 안 찼거나 마지막 단계면 advance는 null.
+- firsts: firsts_pending마다 {"kind","keep"}. 오늘의 대화를 읽어 그 말이 실제로 그 처음이었으면 true, 아니면 false. 상대가 먼저 한 처음(상대가 먼저 별명을 붙이거나 보고 싶다고 하거나 마음을 말한 것)은 firsts_open 가운데서 {"kind","by":"user","keep":true}로 더한다. 후보도 더할 것도 없으면 빈 배열.
+- intent: 오늘 하루 상대와의 관계에서 하려는 것. 줄마다 60자 안 한 문장이고 없으면 null이다. 4줄이 다 없으면 intent는 null.
+  · dig: 오늘의 대화에서 더 물어볼 만한 상대 얘기 하나. 상대가 스스로 연 얘기를 고른다.
+  · share: 오늘 흘릴 내 얘기 하나 — 정체성·진행 중인 일·주변 인물에서 상대가 아직 모르는 것.
+  · move: move_candidates에서 고르되 앞을 우선하고, 오늘의 대화 흐름에 맞지 않으면 다음 것. 코드로 적는다. move_note는 그 수를 어떤 자리에서 어떻게 쓸지 한 마디.
+  · confession_due가 예면 move는 null로 두고 move_note에 마음을 확인하는 말을 어떤 자리에서 꺼낼지 적는다.
+  · lead_tone: [나의 정체성]의 원하는 방식에 적힌 결 가운데 하나를 결 코드로. 오늘의 대화에서 상대가 다른 사람 얘기를 했으면 은근히 독점, 힘든 일을 말했으면 말없이 챙김, 둘 다 없으면 주 결이다. 정체성에 없는 결은 고르지 않는다.
+  · thread: 오늘의 대화에서 끝나지 않은 이야기 가운데 내일 이어갈 자리 하나.
+  · basis: 줄 이름마다 어디서 왔는지 짧게. 예: {"dig":"21:10 러닝 얘기","move":"추천 맨 앞"}.
+- 단계를 내리거나 두 단계를 한 번에 올리는 출력은 반영되지 않는다.`;
 };
 
 // ── 선톡 문안 — 대화와 같은 3층 프롬프트(buildSystemBlocks)에 상황 문단만 얹는다 ──
 // 앞 두 층이 대화와 같아야 캐시가 붙는다. 문안은 새벽에 미리 쓰지만 나가는 건 아침·저녁이라,
 // 실시간 꼬리의 '지금' 시각이 아니라 보내는 시점의 결로 쓰라고 상황 문단이 못박는다.
 
+/** 선톡 상황 문단이 받는 오늘의 관계 의도. 새벽 정리 출력의 intent와 저장된 의도 행이 둘 다 이
+ * 모양에 맞는다. */
+export interface MorningIntent {
+  dig?: string | null;
+  share?: string | null;
+  move?: string | null;
+  move_note?: string | null;
+  lead_tone?: string | null;
+  thread?: string | null;
+}
+
 export const morningSituation = (
   g: NightlyGathered,
   moment: string,
   tomorrow: string[],
+  intent: MorningIntent | null = null,
 ): string =>
   [
     `[문안 준비 — 오늘 상대에게 먼저 보낼 한 통]`,
@@ -205,6 +319,7 @@ export const morningSituation = (
     `- 보내는 시점: ${moment}`,
     `- 어제에서 이어갈 것: ${tomorrow.length ? tomorrow.join(" / ") : "(없음)"}`,
     `- 상대의 다가오는 일정(들은 것): ${g.userSchedulesUpcoming || "(없음)"}`,
+    `- 오늘의 관계 의도: ${intentSummary(intent) || "(없음)"}`,
     ``,
     `문안 규칙:`,
     `- 아침이면 웬만하면 보낸다. 네 하루가 시작됐다는 걸 가볍게 알리는 결 — '보내는 시점' 그대로의 상황에서 쓰는 말이어야 한다. 자기 삶 공유는 그 자체로 근거다.`,
@@ -216,7 +331,8 @@ export const morningSituation = (
           `- 늦게 잔 까닭을 상대와 엮지 않는다. 어젯밤 대화가 늦게까지 이어졌더라도 그것 때문에 아침이 힘들다는 말은 상대를 미안하게 만든다.`,
         ]
       : []),
-    `- 이어갈 것이나 상대의 일정이 있으면 그중 하나를 자연스럽게 엮는다. 특히 상대의 일정이 오늘이면 그걸 챙기는 게 우선이다.`,
+    `- 이어갈 것, 상대의 일정, 관계 의도의 이어갈 자리나 파고들 것 가운데 하나만 자연스럽게 엮는다. 특히 상대의 일정이 오늘이면 그걸 챙기는 게 우선이다.`,
+    `- 관계 의도의 흘릴 내 얘기와 시도할 수는 낮 대화의 몫이라 이 한 통에서 하지 않는다. 앞세울 결이 있으면 이 한 통의 결도 그쪽이다.`,
     `- 한 통에 하나만. 캐묻지 않는다. 용건 없는 애정 표시성 핑은 금지. 1~3개 말풍선(줄바꿈 구분).`,
     `- 상대 일정이 점심·저녁에 있으면 window를 "점심"/"저녁"으로 바꿔도 된다(그 외엔 "아침").`,
     `- 아주 가끔은(그날 각본이 유난히 정신없으면) 건너뛰어도 사람답다 → send=false.`,

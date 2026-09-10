@@ -262,3 +262,43 @@ export const TAG_PICK_MAX = 8;
 
 // 기억 응축을 시작하는 캐릭터당 항목 수는 아직 정하지 않았다. 지금 규모에서는 필요 없어
 // 항목 수가 실제로 커질 때 정한다.
+
+// ── 관계 단계 문턱 — relationship.md 「단계 전이 절차」가 원본 ─────────────────
+// 코드가 어제까지의 값을 세어 문턱을 재고, 넘길지는 모델이 정한다. 세는 자리와 판정 함수는
+// relationship-stage.ts에 있다. 여기는 값만 둔다.
+
+/** 1→2. 최소 체류와 대화한 날, 유저가 먼저 건 날, 캐릭터가 자기 얘기를 연 날. */
+export const STAGE_1_TO_2 = {
+  stayDays: 5,
+  talkedDays: 5,
+  userFirstDays: 2,
+  selfStoryDays: 2,
+} as const;
+
+/** 2→3. 최소 체류와 상대가 캐릭터 근황을 먼저 물은 날, 2단계에서 열린 수의 반응 점수 평균
+ * 하한, 호감 표현 횟수. 점수 표본이 하나도 없으면 평균 조건은 미충족이다. */
+export const STAGE_2_TO_3 = {
+  stayDays: 7,
+  askedCharDays: 3,
+  moveAvgMin: 0,
+  affectionCount: 1,
+} as const;
+
+/** 3→4는 마음 확인 사건 하나가 조건이다. 사건이 없으면 3단계에서 이만큼 지나고 점수가
+ * 양수일 때, 또는 점수와 무관하게 이만큼 지났을 때 고백 차례 표시를 새벽 정리 입력에 넣는다. */
+export const STAGE_3_TO_4 = {
+  confessionDueDays: 10,
+  confessionDueDaysAnyScore: 20,
+} as const;
+
+/** 시도할 수 추천에서 빼는 점수 하한과 그 판단에 필요한 표본 수. 표본이 이만큼 모이기 전에는
+ * 점수가 낮아도 추천에서 빼지 않는다. */
+export const MOVE_DROP_SCORE = -0.3;
+export const MOVE_SAMPLE_MIN = 3;
+
+/** 잘 통하는 수로 관계 표에 옮기는 점수 하한. 표본 수 조건은 MOVE_SAMPLE_MIN과 같다. */
+export const RAPPORT_MOVE_SCORE = 0.3;
+
+/** 탐색일 주기. 날짜 일련번호가 이 값으로 나누어떨어지는 날은 표본이 가장 적은 수를 추천
+ * 맨 앞에 둔다 — 점수가 좋은 수만 되풀이해 나머지 수의 표본이 영영 안 모이는 것을 막는다. */
+export const MOVE_EXPLORE_EVERY = 5;
