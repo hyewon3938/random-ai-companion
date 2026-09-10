@@ -4,7 +4,11 @@
 // 여기는 문자열만 만드는 순수 함수와 이름표를 두고, DB나 게시함은 부르지 않는다 —
 // trace.ts가 이 파일을 쓰므로 거꾸로 trace.ts를 들여오면 순환이 된다.
 
-import { CALL_PURPOSE_NAME, type CallPurpose } from "../labels.js";
+import {
+  CALL_PURPOSE_NAME,
+  PROACTIVE_KIND_NAME,
+  type CallPurpose,
+} from "../labels.js";
 import { getKstNow } from "../kst.js";
 
 // 슬랙 표기 규칙 — &·<·>는 링크·멘션 문법과 겹쳐 그대로 보내면 깨진다.
@@ -46,15 +50,10 @@ export const clock = (): string => getKstNow().toISOString().slice(11, 19);
 /** llm_calls 행 하나를 가리키는 게시함 키. 답장 게시가 스레드 부모로 쓴다. */
 export const callKey = (id: number): string => `call:${id}`;
 
+/** 발송 종류의 이름. 먼저 거는 연락은 labels.ts의 목록을 그대로 쓰고, 답장·복구처럼
+ *  선톡이 아닌 종류만 여기서 더한다 — 두 곳에 적어 두면 종류가 늘 때 한쪽만 빠진다. */
 export const SEND_KIND_NAME: Record<string, string> = {
-  morning: "아침 선톡",
-  checkin: "안부 선톡",
-  catchup: "근황 선톡",
-  goodnight: "밤 인사 선톡",
-  mend: "달래기 선톡",
-  away: "자리비움 선톡",
-  glance: "틈새 한 줄",
-  promise: "약속 연락",
+  ...PROACTIVE_KIND_NAME,
 };
 
 /** 토큰 네 칸만 있으면 어느 호출 행이든 받는다 — 전체 행과 요약 행이 같은 줄을 쓴다. */

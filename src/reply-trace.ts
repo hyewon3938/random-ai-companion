@@ -52,6 +52,8 @@ export const traceReplyOutcome = (p: {
  * 선톡이 실제로 나간 자리(bot.ts sendProactive).
  * 아침·안부는 전날 밤에 만든 문안이라 문안 호출과 발송이 몇 시간 떨어져 있다 —
  * 스레드로 잇지 않고 독립 행으로 둔다.
+ * 근거 줄은 부르는 쪽이 발송 기록의 meta_json으로 만들어 넘긴다(proactive-policy의
+ * basisLineFromMeta) — 선톡은 근거 종류 넷 가운데 하나를 반드시 갖는다(설계 원본 §9).
  */
 export const traceProactiveSend = (p: {
   characterId: number;
@@ -59,15 +61,18 @@ export const traceProactiveSend = (p: {
   text: string;
   delivered: number;
   total: number;
+  /** 무슨 근거로 나간 한 통인지 — 의도(이어갈 자리)·일정(12:00 블록)·달래기·약속(행 12). */
+  basis?: string | null;
 }): void => {
   if (!traceEnabled()) return;
   const name = SEND_KIND_NAME[p.kind] ?? `${p.kind} 선톡`;
   const partial =
     p.delivered < p.total ? ` (${p.delivered}/${p.total}만 나감)` : "";
+  const basis = p.basis ? `*근거* ${esc(p.basis)}\n` : "";
   recordTraceEvent({
     characterId: p.characterId,
     kind: "proactive_send",
-    text: `:calling: *${name} 발송* · ${clock()}${partial}\n${quote(clip(p.text, 500))}`,
+    text: `:calling: *${name} 발송* · ${clock()}${partial}\n${basis}${quote(clip(p.text, 500))}`,
   });
 };
 
