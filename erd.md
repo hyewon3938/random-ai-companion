@@ -164,19 +164,19 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 
 유저는 캐릭터가 처음 하는 일로 관계가 나아간 것을 느낀다. 답장 경로가 답장 신호에서 처음 종류를 받으면 확정하지 않은 행으로 바로 넣고, 그날 답장 프롬프트가 이미 한 처음으로 읽어 같은 처음이 두 번 나오지 않게 한다. 다음 새벽 정리가 어제 대화와 견줘 맞으면 확정하고 아니면 지운다. 종류마다 한 행이라 이미 있는 종류가 다시 들어오면 저장 함수가 조용히 버린다.
 
-**reaction_scores** — 캐릭터가 쓴 수마다 유저가 어떻게 반응했는지의 점수
+**reaction_scores** — 캐릭터가 쓴 플러팅마다 유저가 어떻게 반응했는지의 점수
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | chat_id | TEXT | O | PK |
-| move | TEXT | O | PK, 수 12가지 중 하나 |
+| move | TEXT | O | PK, 플러팅 13가지 중 하나 |
 | score | REAL | O | −1에서 1 사이. 초기값 0 |
 | sample_count | INTEGER | O | 점수를 만든 표본 수. 초기값 0 |
 | updated_at | TEXT | O | |
 
 키·인덱스: PK `(chat_id, move)`
 
-수는 캐릭터가 유저를 설레게 하려고 쓰는 행동이고, 별명·장난·약한 소리처럼 12가지가 있다. 새벽 정리가 수를 쓴 답장과 그 뒤 유저의 첫 턴을 표본 하나로 세어 점수를 갱신한다. 키가 캐릭터가 아니라 대화방이라 캐릭터를 바꿔도 점수가 이어진다. 무엇에 반응하는지는 캐릭터마다 달라지는 값이 아니라 유저 쪽 성질이라 그렇게 정했다. 점수 숫자는 어느 프롬프트에도 넣지 않고, 새벽 정리가 시도할 수의 순서를 정할 때만 읽는다.
+플러팅은 캐릭터가 유저를 설레게 하려고 쓰는 행동이고, 별명·장난·약한 소리처럼 13가지가 있다. 새벽 정리가 플러팅을 쓴 답장과 그 뒤 유저의 첫 턴을 표본 하나로 세어 점수를 갱신한다. 키가 캐릭터가 아니라 대화방이라 캐릭터를 바꿔도 점수가 이어진다. 무엇에 반응하는지는 캐릭터마다 달라지는 값이 아니라 유저 쪽 성질이라 그렇게 정했다. 점수 숫자는 어느 프롬프트에도 넣지 않고, 새벽 정리가 시도할 플러팅의 순서를 정할 때만 읽는다.
 
 **relationship_intents** — 오늘 관계에서 하려는 것. 새벽 정리가 하루 한 행을 만든다
 
@@ -187,7 +187,7 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 | date | TEXT | O | 논리일 |
 | dig | TEXT | | 파고들 것 |
 | share | TEXT | | 흘릴 내 얘기 |
-| move | TEXT | | 오늘 시도할 수 |
+| move | TEXT | | 오늘 시도할 플러팅 |
 | move_note | TEXT | | 언제 시도할지 한 문장 |
 | lead_tone | TEXT | | 오늘 앞세울 결 |
 | thread | TEXT | | 이어 갈 이야기 |
@@ -210,13 +210,13 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 | opened_self | INTEGER | O | 유저가 자기 얘기를 열었는가 — 0 아님 · 1 그렇다 |
 | asked_about_char | INTEGER | O | 캐릭터 근황을 먼저 물었는가 — 0 아님 · 1 그렇다 |
 | said_affection | INTEGER | O | 호감을 말로 했는가 — 0 아님 · 1 그렇다 |
-| prev_move | TEXT | | 직전 캐릭터 답장이 쓴 수 |
-| move_reaction | TEXT | | 그 수를 어떻게 받았는가 |
+| prev_move | TEXT | | 직전 캐릭터 답장이 쓴 플러팅 |
+| move_reaction | TEXT | | 그 플러팅을 어떻게 받았는가 |
 | call_id | INTEGER | | 판정 호출 |
 
 키·인덱스: PK `id`, 인덱스 `(character_id, at)`
 
-상대의 지금 상태를 정하는 판정 호출이 같은 자리에서 열림 신호 넷을 함께 표시하고, 코드가 그 결과를 한 행으로 적는다. 판정이 실패한 턴은 행이 없다. 새벽 정리는 이 행을 날짜별로 세어 단계를 올릴지 정하고, 수 반응은 반응 점수의 표본이 된다.
+상대의 지금 상태를 정하는 판정 호출이 같은 자리에서 열림 신호 넷을 함께 표시하고, 코드가 그 결과를 한 행으로 적는다. 판정이 실패한 턴은 행이 없다. 새벽 정리는 이 행을 날짜별로 세어 단계를 올릴지 정하고, 플러팅 반응은 반응 점수의 표본이 된다.
 
 유저 메시지 행의 meta_json에 붙이지 않고 표를 따로 둔 이유는 셋이다. 몰아 답장에서는 턴 하나가 유저 메시지 여러 건이라 어느 행에 붙일지 애매하고, 날짜별 집계와 수별 집계가 표에서는 SQL 한 줄이며, 판정이 실패한 턴을 행 없음으로 구분할 수 있다.
 
@@ -538,7 +538,7 @@ erDiagram
 | sent_at | TEXT | O | 주고받은 시각 |
 | role | TEXT | O | 누가 한 말인가 — `user` 유저 · `assistant` 캐릭터 |
 | text | TEXT | O | 말 내용 |
-| meta_json | TEXT | | 발송 종류 `kind`, 이번 답장이 쓴 수 `move`, 처음 코드 `first`, 오늘 자기 일정을 말했는지 `told_plan`, 선톡이나 답장이 쓴 의도 줄 코드 `intent_line` |
+| meta_json | TEXT | | 발송 종류 `kind`, 이번 답장이 쓴 플러팅 `move`, 처음 코드 `first`, 오늘 자기 일정을 말했는지 `told_plan`, 선톡이나 답장이 쓴 의도 줄 코드 `intent_line` |
 
 키·인덱스: PK `id`, 인덱스 `(chat_id, sent_at)`
 
@@ -720,7 +720,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | characters | 생성 배치 | 모든 모듈 (id 연결) |
 | relationships | 생성 배치(초기값), 답장 파이프라인(말투 값 · 사이 정의 · 서로 부르는 말), 새벽 정리(나머지 다섯 · 관계 단계) | 프롬프트 조립(관계 항목 항상, 만난 날수 계산, 관계 단계), 선톡 모듈, 새벽 정리 |
 | firsts | 답장 파이프라인(확정 전 행), 새벽 정리(확정 · 폐기) | 프롬프트 조립, 새벽 정리, 슬랙 게시 문안 |
-| reaction_scores | 새벽 정리 | 새벽 정리(시도할 수 고르기) |
+| reaction_scores | 새벽 정리 | 새벽 정리(시도할 플러팅 고르기) |
 | relationship_intents | 새벽 정리 | 프롬프트 조립, 선톡 모듈, 슬랙 게시 문안 |
 | relationship_signals | 답장 파이프라인(상태 판정 호출) | 새벽 정리(단계 문턱 · 반응 점수) |
 | memory_items | 생성 배치(origin=creation), 새벽 정리 | 프롬프트 조립, 새벽 정리, 각본 생성, 월 리듬(주변 인물) |
@@ -762,9 +762,9 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | relationships.stage_no 관계 단계 | `1` 몇 번 본 사이 · `2` 편해진 사이 · `3` 마음을 드러내는 사이 · `4` 서로의 사람 |
 | firsts.kind 처음 종류 | `first_remember` 기억해서 챙기기 · `first_self_story` 자기 얘기 · `first_laugh` 웃기기 · `first_waited` 기다렸다는 말 · `first_nickname` 별명 · `first_tease` 장난 · `first_miss_light` 보고 싶다 가볍게 · `first_weakness` 약한 소리 · `first_no_reason_ping` 이유 없는 연락 · `first_miss_direct` 보고 싶다 직접 · `first_late_night_truth` 늦은 밤 진심 · `first_jealousy` 질투 · `first_only_you` 너한테만 · `first_ask_help` 도움 청하기 · `first_confession` 마음 확인 · `first_sulk` 삐침 · `first_fight` 싸움 · `first_makeup` 화해 · `first_anniversary` 기념일 · `first_future_talk` 미래 얘기 |
 | firsts.by 누가 먼저 했는가 | `character` 캐릭터 · `user` 유저 |
-| reaction_scores.move, relationship_intents.move, relationship_signals.prev_move 수 | `remember` 기억해서 챙기기 · `laugh` 웃기기 · `anticipate` 다음 기대 만들기 · `scene` 지금 보고 있는 장면 묘사 · `sudden_ping` 짧고 갑작스러운 톡 · `nickname` 별명 · `weakness` 약한 소리 · `late_night_truth` 늦은 밤 진심 · `jealousy_light` 살짝 질투 · `dodge_after_direct` 직진 뒤 딴청 · `only_you` 너한테만 · `ask_help` 도움 청하기 |
+| reaction_scores.move, relationship_intents.move, relationship_signals.prev_move 플러팅 | `remember` 기억해서 챙기기 · `laugh` 웃기기 · `anticipate` 다음 기대 만들기 · `scene` 지금 보고 있는 장면 묘사 · `sudden_ping` 짧고 갑작스러운 톡 · `nickname` 별명 · `weakness` 약한 소리 · `late_night_truth` 늦은 밤 진심 · `jealousy_light` 살짝 질투 · `dodge_after_direct` 직진 뒤 딴청 · `only_you` 너한테만 · `ask_help` 도움 청하기 · `notice` 어떤 사람인지 말해 주기 |
 | relationship_intents.lead_tone 앞세울 결 | `direct` 대놓고 직진 · `leaky` 티 안 내려고 하지만 자꾸 티 나는 사람 · `tease_sincere` 장난 속에 진심 · `possessive` 은근히 독점 · `silent_care` 말없이 챙김 |
-| relationship_signals.move_reaction 수를 어떻게 받았는가 | `accepted` 받음 · `ignored` 무시 · `rejected` 거절 · `none` 해당 없음 |
+| relationship_signals.move_reaction 플러팅을 어떻게 받았는가 | `accepted` 받음 · `ignored` 무시 · `rejected` 거절 · `none` 해당 없음 |
 | memory_items · schedules의 user_knows 유저가 아는가 | `unknown` 모름 · `known` 앎 · `waiting` 기다림, 유저가 결과를 기다리고 있어 캐릭터가 결과를 먼저 알린다 |
 | schedules.origin 출처 | `conversation` 대화 · `rhythm` 월 리듬 · `ongoing` 진행 중인 일 |
 | schedules.parent_kind 이 일정을 만든 항목 | `memory` 기억 데이터(진행 중인 일 · 의향) · `schedule` 앞선 일정 |
