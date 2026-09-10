@@ -106,6 +106,11 @@ export interface PlanBlock {
   // 필드가 없는 구 각본·외부 생성분과도 호환된다(없으면 무시).
   source?: BlockSource;
   source_id?: number; // source="schedule"인 블록에만. schedules.id
+  // 이 블록에서 보거나 읽는 실제 작품의 제목(#287). 영화·드라마·책처럼 이름이 있는 작품을
+  // 다루는 블록에만 붙고, activity 텍스트에서 제목을 다시 뽑지 않아도 되게 따로 적는다.
+  // 새벽 정리가 이 제목으로 작품마다 한 번 사실 카드를 만들고, 답장 프롬프트는 오늘 각본에
+  // 이 값이 있는 작품의 카드만 싣는다. 옵셔널 — 작품이 없는 블록과 구 각본에는 없다.
+  work?: string;
   // 각본에 이 시각을 덮는 블록이 없어 코드가 메운 자리(context.ts의 dayProgress). 저장된
   // 각본에는 들어가지 않고 읽는 자리에서만 붙어서, 트레이스가 각본에 있던 일과 갈라 볼 수 있다.
   fallback?: boolean;
@@ -471,9 +476,14 @@ ${awayRuleLines(phase)}
   - 위 [진행 중인 일]의 한 줄에서 오늘 몫을 펼친 블록이면 "ongoing", source_id에 그 줄 앞 [번호]를 그대로 적는다. 이 번호로 그 일이 오늘 어디까지 갔는지 되짚는다.
   - 어느 쪽도 아닌 블록(잠·식사·이동·그날 갑자기 생긴 일)에는 두 값을 적지 않는다.
 
+- 각 블록의 work = 그 시간에 보거나 읽는 실제 작품의 제목. 이름이 있는 영화·드라마·애니메이션·책을 다루는 블록에만 적는다.
+  - 실제로 있는 작품의 제목만 적는다. 제목을 지어내지 않는다. 어떤 작품인지 정하지 않았으면 활동을 "영화 보기"로 두고 work는 비운다.
+  - activity에 제목이 들어가도 work를 따로 적는다. 시리즈물은 회차를 빼고 작품 이름만 적는다.
+  - 위 [어제의 일기]에서 이미 본 작품은 오늘 또 넣지 않는다.
+
 [JSON 형식 — 이 구조 그대로]
-{"date":"${date}","blocks":[{"start":"05:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"08:40","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"intermittent","advance_known":false,"category":"official"},{"start":"19:00","end":"19:40","activity":"저녁 산책","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"routine"},{"start":"20:00","end":"20:20","activity":"씻기","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"22:00","end":"23:00","activity":"책 이어 읽기","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"ongoing","source_id":61},{"start":"24:10","end":"29:00","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"}]}
-위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다. source_id의 12와 61도 예시이니, 실제 번호는 위 [이 날의 확정 일정]과 [진행 중인 일]에 적힌 것을 쓴다.`;
+{"date":"${date}","blocks":[{"start":"05:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"08:40","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"intermittent","advance_known":false,"category":"official"},{"start":"19:00","end":"19:40","activity":"저녁 산책","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"routine"},{"start":"20:00","end":"20:20","activity":"씻기","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"22:00","end":"23:00","activity":"책 이어 읽기","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"ongoing","source_id":61,"work":"책 제목"},{"start":"24:10","end":"29:00","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"}]}
+위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다. source_id의 12와 61도 예시이니, 실제 번호는 위 [이 날의 확정 일정]과 [진행 중인 일]에 적힌 것을 쓴다. work의 "책 제목"도 자리를 보여주는 예시이고, 실제로 있는 작품의 제목을 적는다.`;
 
 // 행 번호로 쓸 수 있는 값인가. 생성이 숫자를 따옴표에 넣어 답하는 일이 있어 문자열도 받는다.
 const toSourceId = (v: unknown): number | null => {
@@ -494,6 +504,15 @@ const normalizeSource = (
   }
   if (source === "routine") return { source };
   return {};
+};
+
+// 작품 제목 칸(#287). 새벽 정리가 이 값으로 사실 카드를 찾고 답장이 제목으로 카드를 고르므로,
+// 앞뒤 공백과 길이만 손보고 내용은 그대로 둔다. 빈 문자열·문자열이 아닌 값은 없는 것으로 본다.
+const WORK_TITLE_MAX = 60;
+const normalizeWork = (v: unknown): Pick<PlanBlock, "work"> => {
+  if (typeof v !== "string") return {};
+  const title = v.trim().slice(0, WORK_TITLE_MAX);
+  return title ? { work: title } : {};
 };
 
 // 세 값(답장 여건·활동 성격·출처)은 plan_json 안에 있어 DB가 값을 검사해 주지 않는다. 생성이
@@ -530,12 +549,13 @@ export const normalizePlan = (plan: DayPlan): DayPlan => ({
   blocks: shiftPastMidnight(plan.blocks ?? []).map((b) => {
     // 출처 두 칸은 스프레드로 딸려 오면 모르는 값이 그대로 살아남는다 —
     // 빼 두고 판정 결과만 얹는다.
-    const { source: _source, source_id: _sourceId, ...rest } = b;
+    const { source: _source, source_id: _sourceId, work: _work, ...rest } = b;
     return {
       ...rest,
       responsiveness: toResponsiveness(b.responsiveness) ?? "intermittent",
       category: blockCategory(b),
       ...normalizeSource(b),
+      ...normalizeWork(b.work),
     };
   }),
 });

@@ -119,7 +119,7 @@ const columnNames = (table: string): string[] =>
 // v5에서 열면 그 뒤에 붙은 마이그레이션까지 이어서 돈다. 이 파일이 보는 것은 v6이 지우는
 // 자리지만, 멈추는 버전은 언제나 지금 스키마 버전이다.
 test("v5 DB가 지금 스키마 버전까지 올라간다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 10);
+  assert.equal(db.pragma("user_version", { simple: true }), 11);
 });
 
 test("옛 표 다섯이 사라진다", () => {

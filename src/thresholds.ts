@@ -282,6 +282,16 @@ export const EXTRACT_SCHEDULE_MAX = 40;
 export const EXTRACT_USER_FACT_MAX = 20;
 
 /**
+ * 새벽 정리 한 회차가 새로 만들 수 있는 작품 사실 카드 수와 카드 하나의 장면 수 상한(#287).
+ *
+ * 카드는 작품마다 한 번만 만들면 되고 새벽마다 웹 검색이 붙으므로, 하루에 여러 편을 몰아
+ * 찾지 않게 회차당 수를 묶는다. 각본에 작품이 더 있으면 다음 새벽이 이어 만든다. 장면은
+ * 답장 프롬프트의 일간층에 매일 실리는 값이라 카드 하나가 길어지지 않게 함께 묶는다.
+ */
+export const WORK_FACT_MAX_PER_NIGHT = 3;
+export const WORK_FACT_SCENE_MAX = 5;
+
+/**
  * 모델이 한 번에 고를 수 있는 주제 태그 수.
  *
  * 초기값이다. 저장 항목별 상한(SEARCH_LIMIT)이 뒤에서 한 번 더 줄이므로 이 값은 검색을

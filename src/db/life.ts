@@ -1,8 +1,8 @@
-// 아크·월 리듬·일정·하루 각본·일기 표의 저장 함수.
+// 아크·월 리듬·일정·하루 각본·일기·작품 사실 카드 표의 저장 함수.
 //
 // 캐릭터의 삶을 이루는 표들이다. 아크와 월 리듬은 미리 만들어 두고, 일정은 대화와 새벽
 // 정리가 넣고 시각과 상대가 아는지를 고치며, 각본은 하루에 하나, 일기는 새벽 정리가
-// 하루에 하나 쓴다.
+// 하루에 하나 쓴다. 작품 사실 카드는 각본에 실제 작품이 들어갈 때 작품마다 한 번 쌓인다.
 
 import { db } from "./connection.js";
 import type { UserKnows, ScheduleOrigin, ScheduleStatus } from "../labels.js";
@@ -314,6 +314,82 @@ export const getDayPlanMadeBy = (
       )
       .get(characterId, date) as { made_by: string } | undefined
   )?.made_by;
+
+/**
+ * 캐릭터가 본 작품의 사실 카드(#287). 각본에 실제 작품이 들어가면 새벽 정리가 그 작품을 한 번
+ * 찾아보고 여기에 적는다. 답장 경로는 오늘 각본이나 진행 중인 일에 제목이 있을 때만 읽는다.
+ * 장면은 여러 줄이라 JSON 배열로 넣고 꺼낼 때 되돌린다.
+ */
+export interface WorkFact {
+  title: string;
+  summary: string;
+  scenes: string[];
+  differences: string | null;
+}
+
+/** 이미 카드가 있는 제목. 새벽 정리가 같은 작품을 두 번 찾지 않으려고 본다. */
+export const listWorkFactTitles = (characterId: number): string[] =>
+  (
+    db
+      .prepare(
+        `SELECT title FROM work_facts WHERE character_id = ? ORDER BY title`,
+      )
+      .all(characterId) as { title: string }[]
+  ).map((r) => r.title);
+
+const parseScenes = (raw: string): string[] => {
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
+  } catch {
+    /* 옛 행이나 깨진 값은 통째로 한 장면으로 본다 */
+  }
+  return raw.trim() ? [raw.trim()] : [];
+};
+
+export const getWorkFactsByTitles = (
+  characterId: number,
+  titles: string[],
+): WorkFact[] => {
+  if (!titles.length) return [];
+  const holes = titles.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT title, summary, scenes, differences FROM work_facts
+       WHERE character_id = ? AND title IN (${holes}) ORDER BY title`,
+    )
+    .all(characterId, ...titles) as {
+    title: string;
+    summary: string;
+    scenes: string;
+    differences: string | null;
+  }[];
+  return rows.map((r) => ({
+    title: r.title,
+    summary: r.summary,
+    scenes: parseScenes(r.scenes),
+    differences: r.differences,
+  }));
+};
+
+export const saveWorkFact = (
+  characterId: number,
+  fact: WorkFact,
+  now: string,
+): void => {
+  db.prepare(
+    `INSERT OR REPLACE INTO work_facts
+       (character_id, title, summary, scenes, differences, made_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    characterId,
+    fact.title,
+    fact.summary,
+    JSON.stringify(fact.scenes),
+    fact.differences,
+    now,
+  );
+};
 
 export const hasDiaryOn = (characterId: number, date: string): boolean =>
   !!db
