@@ -63,6 +63,8 @@ import {
   hasDiaryOn,
   insertDiary,
   hasScheduledSendOn,
+  listWorkFactTitles,
+  saveWorkFact,
   type CharacterRow,
   type DaySeed,
   type MemoryRow,
@@ -139,6 +141,8 @@ import {
   EXTRACT_USER_FACT_MAX,
   LUNCH_WINDOW,
   RECONNECT_WINDOW,
+  WORK_FACT_MAX_PER_NIGHT,
+  WORK_FACT_SCENE_MAX,
 } from "./thresholds.js";
 import {
   SPEECH_LEVEL_NAME,
@@ -270,6 +274,19 @@ export interface NightlyOutput {
     week?: string;
   } | null; // 흐름 갱신이 필요할 때만
   rhythm?: ({ ym: string } & MonthPlan)[] | null; // 월 리듬(이벤트+시드) 생성이 필요했을 때
+  work_facts?: WorkFactDraft[] | null; // 오늘 각본에 든 작품을 찾아본 결과(#287)
+}
+
+/**
+ * 작품 사실 카드 초안(#287). 오늘 각본에 실제 작품이 들어갔는데 아직 카드가 없을 때, 외부
+ * 경로가 그 작품을 한 번 찾아보고 여기에 담는다. 도구가 없는 봇 안 폴백 경로는 이 칸을
+ * 비운 채로 돌아온다 — 카드가 없는 날의 말하기 규칙은 규칙층(FACT_CARE)이 갖는다.
+ */
+export interface WorkFactDraft {
+  title: string;
+  summary: string;
+  scenes: string[];
+  differences?: string | null;
 }
 
 export interface NightlyGathered {
@@ -314,6 +331,12 @@ export interface NightlyGathered {
   arcs: Record<string, string>;
   todaySeed: DaySeed | null; // 오늘의 컨디션 시드(있으면)
   lastNight: NightSleep | null; // 어젯밤 잠든 시각과 충분히 잔 기준 시각 — 오늘 피곤한지는 이 값으로(이슈 #289)
+  // 오늘 각본에 든 작품 가운데 카드를 만들어야 하는 제목과 이미 카드가 있는 제목(#287).
+  // 앞은 찾아볼 목록이고 뒤는 같은 작품을 두 번 찾지 않게 보여 주는 목록이다. 오늘 각본이
+  // 아직 없는 회차(외부 경로가 이번에 각본을 만드는 날)에는 앞이 비고, 그 경우 외부 경로는
+  // 자기가 만든 각본의 work 값을 보고 채운다.
+  workFactsNeeded: string[];
+  workFactsKnown: string[];
   awayRule: string; // 오늘 각본의 자리 비움 규칙. 관계 국면으로 상한이 달라져서 외부 생성 경로가 이 줄을 그대로 각본 규칙에 넣는다(이슈 #335)
   rhythmNeeded: { ym: string; days: { date: string; label: string }[] }[]; // 이번 새벽에 생성해야 할 월 리듬
   // 침묵 백오프 상태 — 외부 생성 경로가 이를 보고 산출물을 조절한다
@@ -510,6 +533,40 @@ const arcMaterialOf = (g: NightlyGathered): string =>
     g.relationship || "(이제 막 시작한 사이)",
   ].join("\n");
 
+// 오늘 각본이 다루는 작품 가운데 무엇을 찾아봐야 하는지(#287). 각본 블록의 work 값에서 제목을
+// 모으고, 이미 카드가 있는 제목은 빼서 찾을 목록을 만든다. 회차당 상한을 두어 하루에 여러 편을
+// 몰아 찾지 않는다 — 남은 것은 다음 새벽이 이어 만든다.
+//
+// 보통 회차에서 찾을 목록은 비어 있다 — 오늘 각본은 이 수집 뒤에 생성이 만들기 때문이다. 그때는
+// 방금 만든 각본의 work 값 가운데 known에 없는 것을 생성이 스스로 고르고, 저장 쪽(applyNightlyTxn)이
+// 저장된 각본으로 다시 검사한다. 목록이 차는 것은 각본이 이미 있는 회차(봇 안 폴백이 먼저 만들었거나
+// 같은 날 다시 도는 경우)뿐이다. known은 어느 회차에서나 같은 작품을 두 번 찾지 않게 한다.
+const planWorkTitles = (characterId: number, date: string): string[] => {
+  const raw = getDayPlan(characterId, date);
+  if (!raw) return [];
+  try {
+    const titles = ((JSON.parse(raw) as DayPlan).blocks ?? [])
+      .map((b) => b.work)
+      .filter((t): t is string => !!t);
+    return [...new Set(titles)];
+  } catch {
+    return []; // 깨진 각본은 찾을 작품이 없는 것으로 본다
+  }
+};
+
+const workFactPlan = (
+  characterId: number,
+  today: string,
+): Pick<NightlyGathered, "workFactsNeeded" | "workFactsKnown"> => {
+  const known = listWorkFactTitles(characterId);
+  return {
+    workFactsNeeded: planWorkTitles(characterId, today)
+      .filter((t) => !known.includes(t))
+      .slice(0, WORK_FACT_MAX_PER_NIGHT),
+    workFactsKnown: known,
+  };
+};
+
 // targetDiaryDate를 주면 그 날짜의 하루(05:00~익일 05:00)를 응고 대상으로 잡는다 — 결번 백필용.
 // 생략하면 기본대로 '어제'.
 export const gatherNightlyInput = (
@@ -604,6 +661,7 @@ export const gatherNightlyInput = (
     arcs: getArcs(character.id),
     todaySeed: getDaySeed(character.id, today) ?? null,
     lastNight: lastNightSleep(character.id, today),
+    ...workFactPlan(character.id, today),
     awayRule: awayRuleLines(awayPhaseOf(character.id, today)),
     rhythmNeeded: monthsNeedingRhythm(character.id, today).map((ym) => ({
       ym,
@@ -819,6 +877,35 @@ const applyNightlyTxn = db.transaction(
       saveDayPlan(g.characterId, g.today, JSON.stringify(plan), "nightly");
     }
 
+    // 작품 사실 카드(#287). 오늘 각본에 실제로 그 제목이 있을 때만 받는다 — 답장 경로가
+    // 각본·진행 중인 일에 있는 작품만 읽으므로 그 밖의 카드는 쌓아 둘 자리가 없고, 생성이
+    // 엉뚱한 작품을 찾아와도 여기서 걸린다. 각본은 바로 위에서 저장했을 수도 있어 이 순서다.
+    let workFactCount = 0;
+    if (out.work_facts?.length) {
+      const planned = new Set(planWorkTitles(g.characterId, g.today));
+      for (const w of out.work_facts.slice(0, WORK_FACT_MAX_PER_NIGHT)) {
+        const title = typeof w?.title === "string" ? w.title.trim() : "";
+        const summary = typeof w?.summary === "string" ? w.summary.trim() : "";
+        if (!title || !summary || !planned.has(title)) continue;
+        const scenes = (Array.isArray(w.scenes) ? w.scenes : [])
+          .filter((x): x is string => typeof x === "string")
+          .map((x) => x.trim())
+          .filter(Boolean)
+          .slice(0, WORK_FACT_SCENE_MAX);
+        // 장면이 하나도 없는 카드는 저장하지 않는다 — 없는 장면을 말하지 않게 하려고 만드는
+        // 자리인데 줄거리만 있으면 그 일을 못 한다.
+        if (!scenes.length) continue;
+        const diff =
+          typeof w.differences === "string" ? w.differences.trim() : "";
+        saveWorkFact(
+          g.characterId,
+          { title, summary, scenes, differences: diff || null },
+          ts,
+        );
+        workFactCount += 1;
+      }
+    }
+
     if (out.arcs) {
       for (const h of ["year", "season", "month", "week"] as const)
         if (out.arcs[h]) saveArc(g.characterId, h, out.arcs[h]);
@@ -914,7 +1001,7 @@ const applyNightlyTxn = db.transaction(
       (relNow.user_state_since ?? "") < `${nextDate(g.diaryDate)} 05:00:00`;
     if (stateCleared) setUserState(g.characterId, null);
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.advanceRejected ? `, 단계 전이 건너뜀(${rel.advanceRejected})` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.advanceRejected ? `, 단계 전이 건너뜀(${rel.advanceRejected})` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${workFactCount ? ` + 작품 카드 ${workFactCount}건` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 

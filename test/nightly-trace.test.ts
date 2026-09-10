@@ -100,6 +100,8 @@ const gathered = (over: Partial<NightlyGathered>): NightlyGathered => ({
   arcs: {},
   todaySeed: null,
   lastNight: null,
+  workFactsNeeded: [],
+  workFactsKnown: [],
   awayRule: "",
   rhythmNeeded: [],
   silenceTier: "normal",

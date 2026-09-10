@@ -59,6 +59,8 @@ const gathered = (over: Partial<NightlyGathered> = {}): NightlyGathered => ({
   arcs: { 올해: "이직 준비", 이번주: "마감" },
   todaySeed: null,
   lastNight: { bedtime: "01:30", enoughSleepFrom: "07:30" },
+  workFactsNeeded: [],
+  workFactsKnown: [],
   awayRule: "- 자리 비움 규칙(시험용)",
   rhythmNeeded: [],
   silenceTier: "normal",
