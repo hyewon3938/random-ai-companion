@@ -135,8 +135,8 @@ export const USER_STATE_TONE_NAME: Record<UserStateTone, string> = {
 };
 
 // ── 관계를 쌓는 값 ─────────────────────────────────────────────────────────
-// 단계·결·결점·수·처음은 relationship.md가 값을 정하는 자리이고, 여기는 그 코드와 한글
-// 이름만 갖는다. 어느 단계가 어느 수를 여는지 같은 규칙은 프롬프트와 새벽 정리가 갖는다.
+// 단계·결·결점·플러팅·처음은 relationship.md가 값을 정하는 자리이고, 여기는 그 코드와 한글
+// 이름만 갖는다. 어느 단계가 어느 플러팅을 여는지 같은 규칙은 프롬프트와 새벽 정리가 갖는다.
 
 /** 관계 단계 — 캐릭터가 마음을 얼마나 드러내는지의 수위. 내려가지 않는다. */
 export type RelationshipStage = 1 | 2 | 3 | 4;
@@ -172,7 +172,7 @@ export const FLAW_NAME: Record<Flaw, string> = {
   clumsy: "표현이 서툶",
 };
 
-/** 설렘의 수 — 캐릭터가 유저를 설레게 하려고 쓰는 행동. 반응 점수가 이 코드 단위로 쌓인다. */
+/** 플러팅 — 캐릭터가 유저를 설레게 하려고 쓰는 행동. 반응 점수가 이 코드 단위로 쌓인다. */
 export type Move =
   | "remember"
   | "laugh"
@@ -194,21 +194,17 @@ export const MOVE_NAME: Record<Move, string> = {
   anticipate: "다음 기대 만들기",
   scene: "지금 보고 있는 장면 묘사",
   sudden_ping: "짧고 갑작스러운 톡",
-  nickname: "별명",
+  nickname: "별명 부르기",
   weakness: "약한 소리",
   late_night_truth: "늦은 밤 진심",
   jealousy_light: "살짝 질투",
   dodge_after_direct: "직진 뒤 딴청",
-  only_you: "너한테만",
+  only_you: "너한테만 하는 말",
   ask_help: "도움 청하기",
   notice: "어떤 사람인지 말해 주기",
 };
 
-/** 슬랙 게시에서 이 개념을 부르는 말. 코드와 프롬프트는 수(move)로 쓰고 사람이 읽는 게시만
- * 이 말로 바꿔 적는다 — 게시에서 '쓴 수 없음'이 '쓸 수 없음'으로 읽히던 것을 막는다. */
-export const MOVE_TERM = "플러팅";
-
-/** 수에 대한 유저 반응 — 판정 호출이 직전 턴의 수를 보고 고른다. */
+/** 플러팅에 대한 유저 반응 — 판정 호출이 직전 턴의 플러팅을 보고 고른다. */
 export type MoveReaction = "accepted" | "ignored" | "rejected" | "none";
 
 export const MOVE_REACTION_NAME: Record<MoveReaction, string> = {
@@ -279,14 +275,8 @@ export type IntentLine = "dig" | "share" | "move" | "thread";
 export const INTENT_LINE_NAME: Record<IntentLine, string> = {
   dig: "파고들 것",
   share: "흘릴 내 얘기",
-  move: "시도할 수",
+  move: "시도할 플러팅",
   thread: "이어갈 자리",
-};
-
-/** 슬랙 게시에서 쓰는 의도 줄 이름. 시도할 것 한 줄만 사람이 읽는 말로 바꾸고 나머지는 같다. */
-export const INTENT_LINE_POST_NAME: Record<IntentLine, string> = {
-  ...INTENT_LINE_NAME,
-  move: `시도할 ${MOVE_TERM}`,
 };
 
 /** 캐릭터가 먼저 거는 연락의 종류. 발송 쪽 이름표(bot.ts의 SendKind)는 여기에 답장과 복구를

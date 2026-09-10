@@ -57,11 +57,9 @@ import {
 import {
   FIRST_BY_NAME,
   FIRST_KIND_NAME,
-  INTENT_LINE_POST_NAME,
   INTEREST_NAME,
   MEMORY_ITEM_TYPE_NAME,
   MEMORY_OWNER_NAME,
-  MOVE_TERM,
   SPEECH_LEVEL_NAME,
   type FirstKind,
   type MemoryOrigin,
@@ -314,11 +312,6 @@ const firstLabel = (r: FirstRow): string =>
     r.message_id ? ` · 메시지 #${r.message_id}` : ""
   }`;
 
-/** 게시에서만 바꿔 적는 문턱 조건 이름. 프롬프트가 읽는 이름은 relationship-stage.ts에 있다. */
-const POST_CONDITION_NAME: Record<string, string> = {
-  stage_move_avg: `2단계에서 열린 ${MOVE_TERM}의 반응 점수 평균`,
-};
-
 const conditionLines = (g: NightlyGathered): string[] =>
   g.relation.threshold.conditions.map((c) => {
     const v =
@@ -330,8 +323,7 @@ const conditionLines = (g: NightlyGathered): string[] =>
             : "없음"
           : String(c.value);
     const need = typeof c.need === "boolean" ? "있음" : String(c.need);
-    const name = POST_CONDITION_NAME[c.key] ?? c.name;
-    return `${name} ${v}/${need} ${c.met ? "찼음" : "안 찼음"}`;
+    return `${c.name} ${v}/${need} ${c.met ? "찼음" : "안 찼음"}`;
   });
 
 /** 본문의 관계 단계 절. 단계와 문턱은 늘 적고, 넘김·처음·의도는 그 회차에 있을 때만 적는다. */
@@ -379,7 +371,7 @@ const relationStageBlock = (
   if (r.confessionDue)
     lines.push(`> 고백 차례 — 오늘 의도에 마음 확인을 넣는 날`);
   const intent = out.extract?.relation?.intent;
-  const summary = intentSummary(intent, INTENT_LINE_POST_NAME.move);
+  const summary = intentSummary(intent);
   if (summary) {
     lines.push(`> 오늘 의도: ${esc(summary)}`);
     if (intent?.basis && typeof intent.basis === "object") {

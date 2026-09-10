@@ -20,7 +20,6 @@ import {
   FIRST_KIND_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
-  MOVE_TERM,
   RESPONSIVENESS_NAME,
   SPEECH_LEVEL_NAME,
   toActivityCategory,
@@ -130,7 +129,7 @@ export interface CallContext {
     label?: string | null;
     prev?: string | null;
   };
-  /** 관계 — 지금 단계와 며칠째, 이 답장이 쓴 수, 처음으로 적은 일(#353). */
+  /** 관계 — 지금 단계와 며칠째, 이 답장이 쓴 플러팅, 처음으로 적은 일(#353). */
   relationship?: {
     stage?: number;
     days?: number;
@@ -453,7 +452,7 @@ const outcomeLines = (ctx: CallContext): string[] => {
     const r = ctx.relationship;
     const parts = [
       `${r.stage ?? 1}단계${r.days ? ` ${r.days}일째` : ""}`,
-      r.move ? `${MOVE_TERM} ${MOVE_NAME[r.move] ?? r.move}` : `${MOVE_TERM} 없음`,
+      r.move ? `플러팅 ${MOVE_NAME[r.move] ?? r.move}` : "플러팅 없음",
     ];
     if (r.first)
       parts.push(
@@ -465,11 +464,11 @@ const outcomeLines = (ctx: CallContext): string[] => {
   }
   if (ctx.opened) {
     const o = ctx.opened;
-    const yn = (v: boolean | undefined): string => (v ? "예" : "아니오");
+    const ox = (v: boolean | undefined): string => (v ? "O" : "X");
     out.push(
-      `*열림* 자기 얘기 ${yn(o.openedSelf)} · 근황 물음 ${yn(o.askedAboutChar)}` +
-        ` · 호감 ${yn(o.saidAffection)}` +
-        ` · ${MOVE_TERM} 반응 ${MOVE_REACTION_NAME[o.moveReaction ?? "none"]}`,
+      `*열림* 자기 얘기 ${ox(o.openedSelf)} · 근황 물음 ${ox(o.askedAboutChar)}` +
+        ` · 호감 ${ox(o.saidAffection)}` +
+        ` · 플러팅 반응 ${MOVE_REACTION_NAME[o.moveReaction ?? "none"]}`,
     );
   }
   // 메모는 붙었는지와 무엇을 적었는지를 같은 줄에서 본다 — 다른 신호와 묶어 두면

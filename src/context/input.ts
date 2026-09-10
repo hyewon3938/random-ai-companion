@@ -158,7 +158,7 @@ export interface ContextInput {
   recent: MessageRow[];
   /** 태그 없이 고른 상대 쪽 기억 — opts.userMemories를 켠 선톡 문안 경로에서만 채운다. */
   userMemories: MemoryRow[];
-  /** 지금 관계 — 단계·며칠째·처음·오늘 쓴 수·오늘의 의도(#353). */
+  /** 지금 관계 — 단계·며칠째·처음·오늘 쓴 플러팅·오늘의 의도(#353). */
   relationship: RelationshipInput;
   /** 오늘 다루는 작품의 사실 카드(#287). 오늘 각본·진행 중인 일에 없는 작품은 안 싣는다. */
   workFacts: WorkFact[];

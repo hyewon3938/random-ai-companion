@@ -1074,7 +1074,7 @@ const respond = async (
       kind,
       // 발송·폐기 결과를 이 답장을 만든 호출의 트레이스에 잇는다.
       callId: reply.callId,
-      // 쓴 수·오늘 일정 말함 — 발송할 때 대화 기록 행의 meta_json으로 옮겨 적는다.
+      // 쓴 플러팅·오늘 일정 말함 — 발송할 때 대화 기록 행의 meta_json으로 옮겨 적는다.
       replyMeta: reply.replyMeta,
     });
     reply.attach({ sendAt: scheduled.sendAt });
@@ -1124,7 +1124,7 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
     {
       kind,
       // 답장 행의 meta_json에 실어 온 관계 값(move·told_plan)을 기록 행으로 옮긴다. 복구 답장도
-      // 같은 길로 만든 것이라 같이 옮긴다 — 빠지면 다음 판정이 직전 수를 못 본다.
+      // 같은 길로 만든 것이라 같이 옮긴다 — 빠지면 다음 판정이 직전 플러팅을 못 본다.
       ...parseReplyMeta(row.meta_json),
       ...(sent.length < bubbles.length
         ? { partial: `${sent.length}/${bubbles.length}` }

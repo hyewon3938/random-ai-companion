@@ -1,11 +1,11 @@
 // 관계 단계의 문턱 계산과 전이 판정을 검사한다 — 모델은 부르지 않는다.
 //
 // 앞부분은 순수 계산이다. 05:00 경계로 날을 묶어 세는지, 최소 체류가 하한으로 남는지, 표본이
-// 없는 수는 미충족으로 두는지, 마음 확인 사건을 양쪽 방향으로 바로 다음 턴만 읽는지, 시도할 수
-// 추천이 점수와 어제 쓴 수와 탐색일을 규칙대로 섞는지를 본다. 뒷부분은 임시 DB 위에서 저장
+// 없는 플러팅은 미충족으로 두는지, 마음 확인 사건을 양쪽 방향으로 바로 다음 턴만 읽는지, 시도할 플러팅
+// 추천이 점수와 어제 쓴 플러팅과 탐색일을 규칙대로 섞는지를 본다. 뒷부분은 임시 DB 위에서 저장
 // 자리를 돌린다 — 문턱이 찼고 모델이 넘기자고 했을 때만 단계가 오르는지, 처음 후보를 by와
 // 무관하게 확정·취소하고 관계 절이 없으면 다 확정하는지, 상대가 먼저 한 처음을 더하는지, 3→4는
-// 마음 확인 처음이 확정돼야 하는지, 의도는 오늘 것만 후보 안의 수로 적고 고백 차례는 수 없이
+// 마음 확인 처음이 확정돼야 하는지, 의도는 오늘 것만 후보 안의 플러팅으로 적고 고백 차례는 플러팅 없이
 // 자리만 남기는지를 잡는다.
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -147,7 +147,7 @@ test("1→2 문턱은 네 조건이 다 차야 하고 최소 체류는 하한이
   );
 });
 
-test("2→3 문턱은 표본이 없는 수 평균을 미충족으로 두고 0이면 찬 것으로 본다", () => {
+test("2→3 문턱은 표본이 없는 플러팅 평균을 미충족으로 두고 0이면 찬 것으로 본다", () => {
   const base = counts({
     stayDays: STAGE_2_TO_3.stayDays,
     askedCharDays: 3,
@@ -223,12 +223,12 @@ test("셈은 05:00 경계로 날을 묶고 그날 첫 메시지가 유저 것인
   assert.equal(c.stageScorePositive, null);
 });
 
-test("수 평균은 이 단계에서 열린 수 가운데 표본이 있는 것만 넣고 쓴 수의 부호를 따로 본다", () => {
+test("플러팅 평균은 이 단계에서 열린 플러팅 가운데 표본이 있는 것만 넣고 쓴 플러팅의 부호를 따로 본다", () => {
   const scores = [
     score("remember", 0.5, 2),
     score("laugh", -0.1, 1),
     score("notice", 0.9, 0), // 표본 0은 빠진다
-    score("sudden_ping", 1, 3), // 2단계 수는 1단계 평균에 안 들어간다
+    score("sudden_ping", 1, 3), // 2단계 플러팅은 1단계 평균에 안 들어간다
   ];
   const c = countStageValues({
     stage: 1,
@@ -373,7 +373,7 @@ test("탐색일은 날짜 일련번호가 5로 나누어떨어지는 날이라 �
   assert.equal(isExploreDay("2026-09-14"), true);
 });
 
-test("시도할 수 추천은 점수순에 어제 쓴 수를 뒤로 보내고 낮은 점수에 표본이 찬 수를 뺀다", () => {
+test("시도할 플러팅 추천은 점수순에 어제 쓴 플러팅을 뒤로 보내고 낮은 점수에 표본이 찬 플러팅을 뺀다", () => {
   const scores = [
     score("remember", 0.5, 4),
     score("laugh", -0.5, 3), // 낮고 표본이 차서 뺀다
@@ -394,14 +394,14 @@ test("시도할 수 추천은 점수순에 어제 쓴 수를 뒤로 보내고 �
     "scene",
     "notice",
   ]);
-  // 탐색일에는 표본이 가장 적은 수가 맨 앞이다 — scene은 표본 0
+  // 탐색일에는 표본이 가장 적은 플러팅이 맨 앞이다 — scene은 표본 0
   assert.deepEqual(moveCandidates(1, scores, ["notice"], "2026-09-09"), [
     "scene",
     "remember",
     "anticipate",
     "notice",
   ]);
-  // 한 번 열린 수는 그 뒤 단계에서도 후보다 — 2단계 수가 1단계 수 뒤에 붙는다
+  // 한 번 열린 플러팅은 그 뒤 단계에서도 후보다 — 2단계 플러팅이 1단계 플러팅 뒤에 붙는다
   assert.deepEqual(moveCandidates(2, [], [], "2026-09-10"), [
     "remember",
     "laugh",
@@ -414,7 +414,7 @@ test("시도할 수 추천은 점수순에 어제 쓴 수를 뒤로 보내고 �
   ]);
 });
 
-test("잘 통하는 수는 점수와 표본이 둘 다 찬 것만이다", () => {
+test("잘 통하는 플러팅은 점수와 표본이 둘 다 찬 것만이다", () => {
   assert.deepEqual(
     rapportMoves([
       score("remember", 0.3, 3),
@@ -784,7 +784,7 @@ test("의도는 오늘 것만 적고 고백 차례의 마음 확인은 수 없�
   assert.equal(row.thread, "저녁에 이어서");
   assert.equal(row.basis_json, JSON.stringify({ dig: "21:10 러닝 얘기" }));
 
-  // 같은 날 다시 적으면 덮어쓰고 후보 안의 수 코드와 결 코드는 그대로 들어간다
+  // 같은 날 다시 적으면 덮어쓰고 후보 안의 플러팅 코드와 결 코드는 그대로 들어간다
   const r2 = applyRelationOutput(
     ctx(candidates),
     {
@@ -803,7 +803,7 @@ test("의도는 오늘 것만 적고 고백 차례의 마음 확인은 수 없�
   assert.equal(row2?.lead_tone, "tease_sincere");
   assert.equal(row2?.dig, null);
 
-  // 후보에 없는 수는 버리고, 고백 차례가 아닌 날의 코드 아닌 move도 버린다
+  // 후보에 없는 플러팅은 버리고, 고백 차례가 아닌 날의 코드 아닌 move도 버린다
   const outside = applyRelationOutput(
     ctx(relation({ stageNo: 2, moveCandidates: ["remember"] })),
     { intent: { dig: "러닝", move: "sudden_ping", move_note: "점심에" } },
@@ -839,7 +839,7 @@ test("의도는 오늘 것만 적고 고백 차례의 마음 확인은 수 없�
   assert.equal(empty.intentSaved, false);
 });
 
-test("수집은 단계 창의 값을 세고 어제 후보·어제 쓴 수·의도를 함께 돌려준다", () => {
+test("수집은 단계 창의 값을 세고 어제 후보·어제 쓴 플러팅·의도를 함께 돌려준다", () => {
   const CHATG = "chat-stage-gather";
   const idG = createFixtureCharacter(CHATG);
   db.prepare(
@@ -927,7 +927,7 @@ test("수집은 단계 창의 값을 세고 어제 후보·어제 쓴 수·의�
     { move: "notice", reaction: "ignored" },
     { move: "remember", reaction: "accepted" },
   ]);
-  // 어제 쓴 수 둘은 뒤로 간다. 9/9는 탐색일이라 표본이 가장 적은 laugh가 맨 앞이다
+  // 어제 쓴 플러팅 둘은 뒤로 간다. 9/9는 탐색일이라 표본이 가장 적은 laugh가 맨 앞이다
   assert.deepEqual(rel.moveCandidates, [
     "laugh",
     "anticipate",

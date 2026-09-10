@@ -1,7 +1,7 @@
 // 작품 사실 카드 표가 없던 v10 DB가 v11로 올라가는 자리를 검사한다(#287).
 //
 // 새 표는 createSchema가 만들고 v11 절차는 버전만 올린다. 여기서 봐야 할 것은 새 표가
-// 생겼는지보다 v10 절차가 다시 돌지 않는지다 — migrateToV10은 수 코드가 든 표 셋을 지우고
+// 생겼는지보다 v10 절차가 다시 돌지 않는지다 — migrateToV10은 플러팅 코드가 든 표 셋을 지우고
 // 다시 만드는데, 그 표들은 V3 배포 뒤로 행이 차 있다. 버전을 올릴 때 그 조건을 10에 못 박지
 // 않으면 올라가는 김에 쌓인 반응 점수·의도·신호가 통째로 사라진다.
 //
@@ -19,7 +19,7 @@ process.env.DB_PATH = DB_PATH;
 process.env.TELEGRAM_BOT_TOKEN ??= "test-token";
 process.env.ANTHROPIC_API_KEY ??= "test-key";
 
-// v10 시절의 수 코드 목록 — notice까지 들어 있다.
+// v10 시절의 플러팅 코드 목록 — notice까지 들어 있다.
 const MOVES =
   "'remember','laugh','anticipate','scene','sudden_ping','nickname','weakness','late_night_truth','jealousy_light','dodge_after_direct','only_you','ask_help','notice'";
 

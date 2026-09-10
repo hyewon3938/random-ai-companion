@@ -87,7 +87,7 @@ const TABLES: Record<string, string> = {
   confirmed INTEGER NOT NULL DEFAULT 0 CHECK (confirmed IN (0,1)),
   UNIQUE (character_id, kind)`,
 
-  // 수마다 유저가 얼마나 반응했는지의 점수. 키가 채팅과 수라서 캐릭터를 바꿔도 남는다 —
+  // 플러팅마다 유저가 얼마나 반응했는지의 점수. 키가 채팅과 플러팅이라서 캐릭터를 바꿔도 남는다 —
   // 무엇에 반응하는지는 캐릭터가 아니라 유저의 성질이다. 점수는 -1~1이고 새벽 정리가 갱신한다.
   reaction_scores: `
   chat_id TEXT NOT NULL,
@@ -98,7 +98,7 @@ const TABLES: Record<string, string> = {
   PRIMARY KEY (chat_id, move)`,
 
   // 오늘 캐릭터가 관계에서 하려는 것. 새벽 정리가 하루 1행을 쓰고 답장 프롬프트와 선톡이 읽는다.
-  // 네 줄(무엇을 더 알아볼지·무엇을 나눌지·어떤 수를 쓸지·어떤 결을 앞세울지)과 이어 갈 이야기,
+  // 네 줄(무엇을 더 알아볼지·무엇을 나눌지·어떤 플러팅을 쓸지·어떤 결을 앞세울지)과 이어 갈 이야기,
   // 그리고 줄마다 무엇을 보고 정했는지가 basis_json에 들어간다.
   relationship_intents: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -933,9 +933,9 @@ const migrateToV9 = (): void => {
   console.log(`[db] 스키마를 v9로 옮겼다`);
 };
 
-// v10: 수 코드에 '어떤 사람인지 말해 주기'(notice)를 더한다(#353).
+// v10: 플러팅 코드에 '어떤 사람인지 말해 주기'(notice)를 더한다(#353).
 //
-// 수 코드는 reaction_scores·relationship_intents·relationship_signals 세 표의 CHECK 목록에
+// 플러팅 코드는 reaction_scores·relationship_intents·relationship_signals 세 표의 CHECK 목록에
 // 박혀 있어서 표를 다시 만들어야 한다. 세 표는 v9 배포 뒤 아직 어느 코드도 쓰지 않아 비어
 // 있으므로 옮길 행 없이 지우고 다시 만든다. firsts는 처음 코드만 있어 손대지 않는다.
 const migrateToV10 = (): void => {

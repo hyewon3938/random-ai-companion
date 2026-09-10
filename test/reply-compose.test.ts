@@ -345,7 +345,7 @@ describe("composeReply", () => {
     ).run(characterId);
   });
 
-  it("관계 신호 — 처음은 미확정 행, 일정을 말했으면 안다는 표시, 열림은 턴마다 1행, 쓴 수는 replyMeta", async () => {
+  it("관계 신호 — 처음은 미확정 행, 일정을 말했으면 안다는 표시, 열림은 턴마다 1행, 쓴 플러팅은 replyMeta", async () => {
     clearMessages();
     const today = kstLogicalDate();
     const scheduleId = addSchedule(

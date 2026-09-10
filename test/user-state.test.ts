@@ -153,7 +153,7 @@ test("한 줄 표기는 상태 글에 시작 시각·원인·결을 괄호로 �
   );
 });
 
-test("열림 4항목은 예/아니오 셋이 다 있을 때만 읽고 직전 수가 없으면 반응은 늘 none이다", () => {
+test("열림 4항목은 예/아니오 셋이 다 있을 때만 읽고 직전 플러팅이 없으면 반응은 늘 none이다", () => {
   const full =
     '{"changed":false,"opened_self":true,"asked_about_char":false,"said_affection":"true","move_reaction":"ignored"}';
   assert.deepEqual(readOpenSignals(full, "nickname"), {
@@ -163,7 +163,7 @@ test("열림 4항목은 예/아니오 셋이 다 있을 때만 읽고 직전 수
     prevMove: "nickname",
     moveReaction: "ignored",
   });
-  // 직전 수가 없으면 모델이 뭐라고 적었든 none이다
+  // 직전 플러팅이 없으면 모델이 뭐라고 적었든 none이다
   assert.deepEqual(readOpenSignals(full, null), {
     openedSelf: true,
     askedAboutChar: false,
@@ -180,7 +180,7 @@ test("열림 4항목은 예/아니오 셋이 다 있을 때만 읽고 직전 수
     readOpenSignals('{"changed":false,"opened_self":true,"asked_about_char":false}', null),
     null,
   );
-  // 직전 수가 있는데 반응이 목록 밖이면 null
+  // 직전 플러팅이 있는데 반응이 목록 밖이면 null
   assert.equal(
     readOpenSignals(
       '{"changed":false,"opened_self":false,"asked_about_char":false,"said_affection":false,"move_reaction":"maybe"}',

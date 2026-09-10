@@ -28,7 +28,6 @@ import {
 import { kstLogicalDate, logicalDateOf } from "./kst.js";
 import {
   INTENT_LINE_NAME,
-  INTENT_LINE_POST_NAME,
   PROACTIVE_KIND_NAME,
   type IntentLine,
   type ProactiveKind,
@@ -464,9 +463,7 @@ export interface BasisDetail {
 export const basisLine = (d: BasisDetail): string => {
   const basis = PROACTIVE_BASIS[d.kind];
   if (basis === "intent")
-    return d.intentLine
-      ? `의도(${INTENT_LINE_POST_NAME[d.intentLine]})`
-      : "의도";
+    return d.intentLine ? `의도(${INTENT_LINE_NAME[d.intentLine]})` : "의도";
   if (basis === "schedule")
     return `일정(${d.block ? `${d.block} 블록` : PROACTIVE_KIND_NAME[d.kind]})`;
   if (basis === "promise")
@@ -501,7 +498,7 @@ export const basisLineFromMeta = (
 
 // ── 의도 선톡이 쓸 줄 고르기 ─────────────────────────────────────────────
 // 1단계는 파고들 것과 이어갈 자리 둘만 의도 선톡이 된다. 흘릴 내 얘기는 근황 선톡에 얹고,
-// 시도할 수는 아직 먼저 걸 자리가 아니다. 2단계부터 네 줄 전부 열린다.
+// 시도할 플러팅은 아직 먼저 걸 자리가 아니다. 2단계부터 네 줄 전부 열린다.
 export const STAGE_INTENT_LINES: Record<RelationshipStage, IntentLine[]> = {
   1: ["dig", "thread"],
   2: ["dig", "share", "move", "thread"],
@@ -515,8 +512,8 @@ interface LineMeta {
 }
 
 /**
- * 오늘 이미 쓴 의도 줄. 선톡은 meta_json의 intent_line에 줄 코드를 적고, 답장은 쓴 수를
- * move에 적는다 — 수를 이미 뒀으면 시도할 수 줄은 오늘 쓴 것으로 본다.
+ * 오늘 이미 쓴 의도 줄. 선톡은 meta_json의 intent_line에 줄 코드를 적고, 답장은 쓴 플러팅을
+ * move에 적는다 — 플러팅을 이미 뒀으면 시도할 플러팅 줄은 오늘 쓴 것으로 본다.
  */
 export const usedIntentLines = (
   chatId: string,
@@ -556,7 +553,7 @@ export const pickIntentLine = (
   used: IntentLine[],
 ): IntentLine | null => {
   if (!intent) return null;
-  // 고백 차례는 수 코드 없이 자리만 적힌 날이라 move_note만 있어도 시도할 수 줄이 산다.
+  // 고백 차례는 플러팅 코드 없이 자리만 적힌 날이라 move_note만 있어도 시도할 플러팅 줄이 산다.
   const filled: Record<IntentLine, boolean> = {
     dig: !!intent.dig,
     share: !!intent.share,
