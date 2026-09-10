@@ -15,6 +15,7 @@ import { DIARY_TAG_MAX } from "../thresholds.js";
 import {
   FIRST_BY_NAME,
   FIRST_KIND_NAME,
+  INTENT_LINE_NAME,
   LEAD_TONE_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
@@ -124,8 +125,12 @@ const LEAD_TONE_CODES = (Object.keys(LEAD_TONE_NAME) as LeadTone[])
   .map((k) => `${k}=${LEAD_TONE_NAME[k]}`)
   .join(" · ");
 
-/** 오늘의 의도 4줄을 한 줄로. 없는 줄은 뺀다. 선톡 상황 문단과 어제 의도 줄이 같이 쓴다. */
-export const intentSummary = (i: MorningIntent | null | undefined): string => {
+/** 오늘의 의도 4줄을 한 줄로. 없는 줄은 뺀다. 선톡 상황 문단과 어제 의도 줄이 같이 쓴다.
+ * moveLabel은 시도할 것 한 줄의 이름이다 — 슬랙 게시가 사람이 읽는 말을 넣어 부른다. */
+export const intentSummary = (
+  i: MorningIntent | null | undefined,
+  moveLabel: string = INTENT_LINE_NAME.move,
+): string => {
   if (!i) return "";
   const parts: string[] = [];
   if (i.dig) parts.push(`파고들 것: ${i.dig}`);
@@ -140,7 +145,7 @@ export const intentSummary = (i: MorningIntent | null | undefined): string => {
       : null;
   if (move || i.move_note)
     parts.push(
-      `시도할 수: ${[move, i.move_note].filter(Boolean).join(" ")}${tone ? `, 앞세울 결은 ${tone}` : ""}`,
+      `${moveLabel}: ${[move, i.move_note].filter(Boolean).join(" ")}${tone ? `, 앞세울 결은 ${tone}` : ""}`,
     );
   if (i.thread) parts.push(`이어갈 자리: ${i.thread}`);
   return parts.join(" / ");
