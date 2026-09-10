@@ -79,6 +79,7 @@ const OFF_BUDGET_META = [
   AWAY,
   kindPattern("promise"),
   kindPattern("mend"),
+  kindPattern("care"),
   kindPattern("glance"),
 ];
 
@@ -187,7 +188,14 @@ export const lunchDueToday = (chatId: string, characterId: number): boolean => {
 // 다른 하나는 나이다. 만든 지 오래된 문안은 지금 상황을 더 이상 말하지 못하므로 버린다.
 
 export type HeldDraftKind =
-  "goodnight" | "mend" | "catchup" | "lunch" | "away" | "glance" | "intent";
+  | "goodnight"
+  | "mend"
+  | "care"
+  | "catchup"
+  | "lunch"
+  | "away"
+  | "glance"
+  | "intent";
 
 export interface HeldDraft {
   kind: HeldDraftKind;
@@ -337,17 +345,23 @@ export const budgetedSinceLastUser = (
     notLike: OFF_BUDGET_META,
   });
 
-/** 그 시각 이후 달래기 선톡이 이미 나갔는가 — 상대 상태 한 발현에 한 통이다. 기준 시각은
- * 관계 행의 상태 시작 시각(user_state_since)이고, 그 상태가 이어지는 동안 자리 비움 예고가
- * 끼어도 구간을 통째로 보므로 가려지지 않는다. */
-export const mendSentSince = (
+/** 상대 상태를 보고 나가는 선톡의 종류 — 달래기는 나 때문에 안 좋을 때, 살피기는 상대의 다른
+ * 일로 안 좋을 때다(이슈 #361). 둘 다 상태 한 발현에 한 통이다. */
+export type StateKind = "mend" | "care";
+
+/** 그 시각 이후 그 종류의 상태 선톡이 이미 나갔는가 — 상대 상태 한 발현에 한 통이다. 기준
+ * 시각은 관계 행의 상태 시작 시각(user_state_since)이고, 그 상태가 이어지는 동안 자리 비움
+ * 예고가 끼어도 구간을 통째로 보므로 가려지지 않는다. 달래기와 살피기는 서로 세지 않는다 —
+ * 원인이 바뀌면 상태 시작 시각도 새로 찍혀 같은 구간에 둘이 겹칠 일이 없다. */
+export const stateKindSentSince = (
   chatId: string,
   characterId: number,
   since: string,
+  kind: StateKind,
 ): boolean =>
   hasAssistantMeta(chatId, characterId, since, {
     after: true,
-    like: [kindPattern("mend")],
+    like: [kindPattern(kind)],
   });
 
 // ── 선톡의 근거와 단계별 예산 ────────────────────────────────────────────
@@ -355,11 +369,12 @@ export const mendSentSince = (
 //
 //   의도    오늘의 관계 의도 네 줄 가운데 아직 안 쓴 줄 하나로 건다
 //   일정    각본 블록이 부르는 자리 — 아침·근황·점심·밤 인사·자리 비움·복귀·틈새 한 줄
-//   달래기  상대 상태 판정이 안 좋게 나온 뒤 한 번
+//   달래기  상대 상태 판정이 안 좋게 나온 뒤 한 번 — 나 때문이면 달래기, 상대의 다른 일이면
+//           살피기(이슈 #361). 근거의 출처가 같아서 근거 종류는 하나로 둔다
 //   약속    답장에서 캐릭터가 하겠다고 말한 연락
 //
 // 상한은 둘이다. 의도 근거로 나가는 건수와 하루 전체 합계이고, 둘 다 관계 단계마다 다르다
-// (thresholds.ts의 PROACTIVE_STAGE_BUDGET). 자리 비움·복귀·약속·달래기·틈새 한 줄은 합계에
+// (thresholds.ts의 PROACTIVE_STAGE_BUDGET). 자리 비움·복귀·약속·달래기·살피기·틈새 한 줄은 합계에
 // 넣지 않는다 — 전부 유저가 이미 말을 걸었거나 캐릭터가 자리를 비우는 상황에 붙는 한 마디라
 // 새로 거는 연락과 성격이 다르다. 종류마다 붙어 있던 자기 상한과 시간 조건은 그대로다.
 
@@ -376,14 +391,15 @@ export const PROACTIVE_BASIS: Record<ProactiveKind, ProactiveBasis> = {
   away: "schedule",
   glance: "schedule",
   mend: "mend",
+  care: "mend",
   promise: "promise",
 };
 
 // 하루 합계에 안 넣는 종류. 자리 비움은 나갈 때와 돌아왔을 때가 같은 종류라 복귀 인사도
-// 여기에 함께 들어간다. 자리 비움은 AWAY_DAILY_MAX가, 달래기는 상태 한 발현에 한 통이,
+// 여기에 함께 들어간다. 자리 비움은 AWAY_DAILY_MAX가, 달래기와 살피기는 상태 한 발현에 한 통이,
 // 틈새 한 줄은 불가 블록마다 한 번이 따로 막는다. 약속은 답장에서 한 말을 지키는 연락이라
 // 상한에 걸리면 약속을 어기는 쪽이 된다(이슈 #308).
-const OFF_BUDGET: ProactiveKind[] = ["away", "promise", "mend", "glance"];
+const OFF_BUDGET: ProactiveKind[] = ["away", "promise", "mend", "care", "glance"];
 
 /** 이 종류가 하루 합계에 드는가. */
 export const onDailyBudget = (kind: ProactiveKind): boolean =>
@@ -440,7 +456,9 @@ export interface BasisDetail {
   promiseId?: number | null;
 }
 
-/** 슬랙 선톡 게시에 붙는 근거 줄 — 의도(이어갈 자리) · 일정(12:00 블록) · 달래기 · 약속(행 12). */
+/** 슬랙 선톡 게시에 붙는 근거 줄 — 의도(이어갈 자리) · 일정(12:00 블록) · 달래기 · 살피기 ·
+ * 약속(행 12). 상대 상태 근거는 종류 이름으로 갈라 적는다 — 어느 원인을 보고 나간 통인지가
+ * 게시에서 바로 읽히게. */
 export const basisLine = (d: BasisDetail): string => {
   const basis = PROACTIVE_BASIS[d.kind];
   if (basis === "intent")
@@ -449,7 +467,7 @@ export const basisLine = (d: BasisDetail): string => {
     return `일정(${d.block ? `${d.block} 블록` : PROACTIVE_KIND_NAME[d.kind]})`;
   if (basis === "promise")
     return d.promiseId ? `약속(행 ${d.promiseId})` : "약속";
-  return "달래기";
+  return d.kind === "care" ? "살피기" : "달래기";
 };
 
 /**

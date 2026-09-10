@@ -104,12 +104,21 @@ export const recordSendAttempt = (id: number, error: string): void => {
   ).run(error.slice(0, 300), id);
 };
 
-// scheduled_messages 밖의 선톡(팔로업·자리비움 예고·틈새 한 줄) 전송 실패 흔적. 이 메시지들은 순간에 묶여 있어
+// scheduled_messages 밖의 선톡(팔로업·자리비움 예고·틈새 한 줄) 전송 실패 흔적. 종류를 더하면
+// db/connection.ts의 send_failures CHECK와 rebuildSendFailures도 같이 고친다. 이 메시지들은 순간에 묶여 있어
 // 유예·재시도가 없다 — 대신 실패했다는 사실만은 콘솔이 아니라 DB에 남겨 사후 추적이 되게 한다.
 export const recordSendFailure = (
   chatId: string,
   characterId: number,
-  kind: "away" | "catchup" | "goodnight" | "mend" | "lunch" | "glance" | "intent",
+  kind:
+    | "away"
+    | "catchup"
+    | "goodnight"
+    | "mend"
+    | "care"
+    | "lunch"
+    | "glance"
+    | "intent",
   error: string,
 ): void => {
   const failedAt = `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;

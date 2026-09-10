@@ -1,9 +1,10 @@
-// 침묵 팔로업(followup.ts)의 상황 문단 다섯 — 굿나잇·달래기·점심·근황·의도 — 을 검사한다.
+// 침묵 팔로업(followup.ts)의 상황 문단 여섯 — 굿나잇·달래기·살피기·점심·근황·의도 — 을 검사한다.
 // 모델은 부르지 않는다.
 //
 // 각 문단이 제 머리글과 제 사정(자정 넘긴 침묵·나 때문에 안 좋은 상태·이틀째·네 시간·오늘
-// 하려던 것)을 적는지, 굿나잇·달래기는 text만 받고 나머지는 send로 접을 수 있는 형식인지,
-// 달래기에 변명·재촉·자러 간다는 말을 막는 줄이 있는지, 다섯이 서로 다른지 본다.
+// 하려던 것)을 적는지, 굿나잇·달래기·살피기는 text만 받고 나머지는 send로 접을 수 있는 형식인지,
+// 달래기에 변명·재촉·자러 간다는 말을 막는 줄이 있는지, 살피기에 상대 말 인용·조언·자리 선언을
+// 막는 줄이 있는지, 여섯이 서로 다른지 본다.
 //
 // 오늘의 관계 의도를 받는 셋(굿나잇·근황·의도)은 그 줄이 문단에 실제로 들어가는지, 의도 행이
 // 없는 날에도 문단이 제 모양을 지키는지 함께 본다(설계 원본 §4).
@@ -28,6 +29,7 @@ process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:1";
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다 — 정적 import는 이 줄들보다 먼저 돈다.
 const { db } = await import("../src/db.js");
 const {
+  careSituation,
   catchupSituation,
   goodnightSituation,
   intentSituation,
@@ -87,6 +89,25 @@ test("달래기 문단은 상대 상태를 가리키고 변명·재촉·자러 �
   assert.doesNotMatch(out, /"send"/);
 });
 
+test("살피기 문단은 상대의 일이 원인임을 적고 인용·조언·자리 선언·자러 간다는 말을 막는다", () => {
+  const out = careSituation();
+  assert.match(out, /^\[문안 — 지금 보낼 살피기 한 통\]/);
+  assert.match(out, /\[상대의 지금 상태\]/);
+  assert.match(out, /자기 일로 안 좋은 상태/);
+  assert.match(out, /너 때문이 아니라/);
+  assert.match(out, /30분쯤 됐다/);
+  assert.match(out, /그대로 옮기거나 말만 바꿔 되돌려주지 않는다/);
+  assert.match(out, /조언하지 않고/);
+  assert.match(out, /재촉하지 않는다/);
+  assert.match(out, /네 자리를 선언하지 않는다/);
+  assert.match(out, /자러 간다는 말도/);
+  assert.match(out, TEXT_ONLY);
+  assert.doesNotMatch(out, /"send"/);
+  // 달래기와 갈리는 자리 — 변명을 막는 줄은 달래기에만 있고, 여기엔 원인이 상대의 일이라고 적는다.
+  assert.doesNotMatch(out, /변명하지 않는다/);
+  assert.doesNotMatch(mendSituation(), /너 때문이 아니라/);
+});
+
 test("점심 문단은 이틀째 침묵과 아침 한 통을 적고 send로 접을 수 있다", () => {
   const out = lunchSituation();
   assert.match(out, /^\[문안 — 지금 보낼 점심 한 통\]/);
@@ -134,15 +155,16 @@ test("의도 문단은 고른 줄의 이름과 내용을 적고 그대로 읊지
   assert.match(out, SEND_OR_FOLD);
 });
 
-test("다섯 문단은 서로 다르고 같은 인자에 같은 값을 돌려준다", () => {
+test("여섯 문단은 서로 다르고 같은 인자에 같은 값을 돌려준다", () => {
   const all = [
     goodnightSituation(null),
     mendSituation(),
+    careSituation(),
     lunchSituation(),
     catchupSituation(null),
     intentSituation("thread", "다음 주 발표 준비"),
   ];
-  assert.equal(new Set(all).size, 5);
+  assert.equal(new Set(all).size, 6);
   assert.equal(goodnightSituation(null), all[0]);
-  assert.equal(catchupSituation(null), all[3]);
+  assert.equal(catchupSituation(null), all[4]);
 });

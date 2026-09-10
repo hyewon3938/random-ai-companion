@@ -54,6 +54,7 @@ const POST_PURPOSES = [
   "catchup",
   "goodnight",
   "mend",
+  "care",
   "away",
   "comeback",
   "promise",
