@@ -9,26 +9,37 @@
 // 출력이 쓸 키의 행을 미리 읽어 둔다.
 //
 //   본문   — 반영 요약, 그날 오늘 메모, 각본과 달라진 하루, 관계 갱신(바뀐 자리 표시),
+//            관계 단계(문턱 조건별 값과 넘김 여부, 처음 확정과 취소, 오늘의 의도),
 //            상대 프로필 갱신, 새 일정, 일정 시각 고침
 //   스레드 — 기억 신규·덮어쓰기, 일기 전문, 오늘 선톡 문안과 발송 창, 새벽 정리가 부른 호출 원문
+//   따로   — 단계가 오르면 stage_change, 처음이 확정·취소되거나 상대가 먼저 한 처음이 더해지면
+//            first_event 게시가 스레드 밖에 한 건씩 나간다(relationship.md 「슬랙 게시」).
+//
+// 처음의 확정·취소는 트랜잭션이 돌려주지 않는다 — 수집이 넣어 둔 어제 후보(g.relation.firstsPending)와
+// 반영 뒤 확정·미확정 행을 견줘 다시 센다. 단계도 반영 전 값을 스냅샷에 두고 뒤 값과 견준다.
 //
 // 게시를 위한 모델 호출은 없다. 전부 DB 값과 코드 계산이다.
 
 import {
   db,
   getBlob,
+  getConfirmedFirsts,
   getDiaryOn,
   getMemoryItemById,
   getRelationship,
   getScheduleById,
   getScheduledSendsOn,
+  getStage,
   getTags,
+  getUnconfirmedFirsts,
   getUserProfile,
   listMemoryItems,
   markLlmCallTraced,
   untracedCallsSince,
+  type FirstRow,
   type MemoryRow,
   type RelationshipRow,
+  type StageRow,
   type StoredUserProfile,
 } from "./db.js";
 import { recordTraceChunks, recordTraceEvent, traceEnabled } from "./trace.js";
@@ -44,13 +55,17 @@ import {
   tokenLine,
 } from "./trace/format.js";
 import {
+  FIRST_BY_NAME,
+  FIRST_KIND_NAME,
   INTEREST_NAME,
   MEMORY_ITEM_TYPE_NAME,
   MEMORY_OWNER_NAME,
   SPEECH_LEVEL_NAME,
+  type FirstKind,
   type MemoryOrigin,
   type UserKnows,
 } from "./labels.js";
+import { intentSummary } from "./prompts/nightly.js";
 import { wordDiff } from "./trace/diff.js";
 import { keyProblem } from "./memory.js";
 import { getKstNow } from "./kst.js";
@@ -126,6 +141,8 @@ export interface NightlySnapshot {
   >;
   relationship: RelationshipRow | undefined;
   profile: StoredUserProfile;
+  // 반영 전 단계 — 반영 뒤 값과 견줘 단계 전이 게시를 낸다.
+  stage: StageRow | undefined;
 }
 
 /**
@@ -187,6 +204,7 @@ export const beforeNightlyTrace = (
       scheduleTimes,
       relationship: getRelationship(g.characterId),
       profile: getUserProfile(g.chatId),
+      stage: getStage(g.characterId),
     };
   } catch (err) {
     console.error("[trace] 새벽 정리 이전 값 읽기 실패:", err);
@@ -253,6 +271,157 @@ const profileBlocks = (
   return out;
 };
 
+// ── 관계 단계 ────────────────────────────────────────────────────────────
+
+interface FirstChanges {
+  confirmed: FirstRow[];
+  cancelled: FirstKind[];
+  userAdded: FirstRow[];
+}
+
+/** 반영 뒤 확정·미확정 행을 어제 후보와 견줘 무엇이 확정되고 취소됐는지 센다. 상대가 먼저 한
+ * 처음은 후보에도 이미 한 처음에도 없던 종류가 유저 쪽으로 확정된 것이다. */
+const firstChangesOf = (g: NightlyGathered): FirstChanges => {
+  const confirmedRows = getConfirmedFirsts(g.characterId);
+  const unconfirmedIds = new Set(
+    getUnconfirmedFirsts(g.characterId).map((r) => r.id),
+  );
+  const confirmed: FirstRow[] = [];
+  const cancelled: FirstKind[] = [];
+  for (const p of g.relation.firstsPending) {
+    const row = confirmedRows.find((r) => r.id === p.id);
+    if (row) confirmed.push(row);
+    else if (!unconfirmedIds.has(p.id)) cancelled.push(p.kind);
+  }
+  const before = new Set<FirstKind>([
+    ...g.relation.firstsDone.map((f) => f.kind),
+    ...g.relation.firstsPending.map((f) => f.kind),
+  ]);
+  const userAdded = confirmedRows.filter(
+    (r) => r.by === "user" && !before.has(r.kind),
+  );
+  return { confirmed, cancelled, userAdded };
+};
+
+const firstLabel = (r: FirstRow): string =>
+  `${FIRST_KIND_NAME[r.kind]} · ${FIRST_BY_NAME[r.by]} · ${r.happened_at.slice(5, 16)}${
+    r.message_id ? ` · 메시지 #${r.message_id}` : ""
+  }`;
+
+const conditionLines = (g: NightlyGathered): string[] =>
+  g.relation.threshold.conditions.map((c) => {
+    const v =
+      c.value === null
+        ? "표본 없음"
+        : typeof c.value === "boolean"
+          ? c.value
+            ? "있음"
+            : "없음"
+          : String(c.value);
+    const need = typeof c.need === "boolean" ? "있음" : String(c.need);
+    return `${c.name} ${v}/${need} ${c.met ? "찼음" : "안 찼음"}`;
+  });
+
+/** 본문의 관계 단계 절. 단계와 문턱은 늘 적고, 넘김·처음·의도는 그 회차에 있을 때만 적는다. */
+const relationStageBlock = (
+  g: NightlyGathered,
+  out: NightlyOutput,
+  snap: NightlySnapshot,
+  afterStage: StageRow | undefined,
+  firsts: FirstChanges,
+): string => {
+  const r = g.relation;
+  const t = r.threshold;
+  const lines: string[] = [
+    `> ${r.stageNo}단계 ${r.stageSince}부터 ${r.stayDays}일 · 다음 문턱 ${
+      t.to === null ? "없음(마지막 단계)" : `${t.from}→${t.to} ${t.met ? "찼음" : "안 찼음"}`
+    }`,
+  ];
+  const conds = conditionLines(g);
+  if (conds.length) lines.push(`> 조건: ${esc(conds.join(" · "))}`);
+  const adv = out.extract?.relation?.advance;
+  if (adv)
+    lines.push(
+      `> 넘김 판단: ${adv.go === true ? "넘긴다" : "아직"}${adv.basis ? ` — ${esc(adv.basis)}` : ""}`,
+    );
+  if (snap.stage && afterStage && afterStage.stage_no > snap.stage.stage_no)
+    lines.push(`> *단계 전이* ${snap.stage.stage_no}단계 → ${afterStage.stage_no}단계`);
+  else if (adv?.go === true)
+    lines.push(`> 단계는 그대로 — 반영 자리가 건너뜀`);
+  if (firsts.confirmed.length)
+    lines.push(`> 처음 확정: ${esc(firsts.confirmed.map(firstLabel).join(" / "))}`);
+  if (firsts.cancelled.length)
+    lines.push(`> 처음 취소: ${esc(firsts.cancelled.map((k) => FIRST_KIND_NAME[k]).join(" / "))}`);
+  if (firsts.userAdded.length)
+    lines.push(`> 상대가 먼저 한 처음: ${esc(firsts.userAdded.map(firstLabel).join(" / "))}`);
+  if (r.confessionDue) lines.push(`> 고백 차례 — 오늘 의도에 마음 확인을 넣는 날`);
+  const intent = out.extract?.relation?.intent;
+  const summary = intentSummary(intent);
+  if (summary) {
+    lines.push(`> 오늘 의도: ${esc(summary)}`);
+    if (intent?.basis && typeof intent.basis === "object") {
+      const basis = Object.entries(intent.basis)
+        .filter(([, v]) => typeof v === "string" && v)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(" · ");
+      if (basis) lines.push(`> 의도 근거: ${esc(basis)}`);
+    }
+  }
+  return [`*관계 단계*`, ...lines].join("\n");
+};
+
+/** 단계가 올랐으면 스레드 밖에 게시 한 건. 같은 단계로 두 번 나가지 않는다. */
+const stageChangeEvent = (
+  g: NightlyGathered,
+  out: NightlyOutput,
+  snap: NightlySnapshot,
+  afterStage: StageRow | undefined,
+): void => {
+  if (!snap.stage || !afterStage || afterStage.stage_no <= snap.stage.stage_no)
+    return;
+  const basis = out.extract?.relation?.advance?.basis;
+  recordTraceEvent({
+    characterId: g.characterId,
+    kind: "stage_change",
+    dedupeKey: `stage:${g.characterId}:${afterStage.stage_no}`,
+    text: [
+      `:arrow_up: *단계 전이* ${snap.stage.stage_no}단계 → ${afterStage.stage_no}단계 · ${clock()}`,
+      `> ${snap.stage.stage_no}단계에 ${g.relation.stageSince}부터 ${g.relation.stayDays}일 머묾`,
+      `> 조건: ${esc(conditionLines(g).join(" · ") || "없음")}`,
+      basis ? `> 근거: ${esc(basis)}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  });
+};
+
+/** 처음의 확정·취소·상대가 먼저 한 처음마다 스레드 밖에 게시 한 건. */
+const firstEvents = (g: NightlyGathered, firsts: FirstChanges): void => {
+  const key = (kind: FirstKind, what: string): string =>
+    `first:${g.characterId}:${kind}:${g.diaryDate}:${what}`;
+  for (const r of firsts.confirmed)
+    recordTraceEvent({
+      characterId: g.characterId,
+      kind: "first_event",
+      dedupeKey: key(r.kind, "confirm"),
+      text: `:sparkles: *처음 확정* ${esc(firstLabel(r))} · 확정됨`,
+    });
+  for (const k of firsts.cancelled)
+    recordTraceEvent({
+      characterId: g.characterId,
+      kind: "first_event",
+      dedupeKey: key(k, "cancel"),
+      text: `:leftwards_arrow_with_hook: *처음 취소* ${FIRST_KIND_NAME[k]} · 답장이 표시했지만 대화를 읽어 보니 그 처음이 아니었다`,
+    });
+  for (const r of firsts.userAdded)
+    recordTraceEvent({
+      characterId: g.characterId,
+      kind: "first_event",
+      dedupeKey: key(r.kind, "user"),
+      text: `:sparkles: *처음 확정* ${esc(firstLabel(r))} · 상대가 먼저 한 것을 새벽 정리가 더함`,
+    });
+};
+
 const SILENCE_NOTE: Record<NightlyGathered["silenceTier"], string | null> = {
   normal: null,
   quiet: "각본·선톡은 만들지 않았다 — 일기·시드만",
@@ -278,6 +447,8 @@ const headText = (
   after: RelationshipRow | undefined,
   afterProfile: StoredUserProfile,
   result: string,
+  afterStage: StageRow | undefined,
+  firsts: FirstChanges,
 ): string => {
   const parts: string[] = [
     `:crescent_moon: *${dateLabel(g.diaryDate)} 새벽 정리* · ${clock()}`,
@@ -300,6 +471,7 @@ const headText = (
   const rel = relationshipBlocks(snap.relationship, after);
   if (rel.length)
     parts.push([`*관계 갱신* ${rel.length}항목`, ...rel].join("\n"));
+  parts.push(relationStageBlock(g, out, snap, afterStage, firsts));
   const prof = profileBlocks(snap.profile, afterProfile);
   if (prof.length)
     parts.push([`*상대 프로필 갱신* ${prof.length}항목`, ...prof].join("\n"));
@@ -584,19 +756,23 @@ export const afterNightlyTrace = (
     const parentKey = `nightly:${g.characterId}:${g.diaryDate}`;
     const after = getRelationship(g.characterId);
     const afterProfile = getUserProfile(g.chatId);
+    const afterStage = getStage(g.characterId);
+    const firsts = firstChangesOf(g);
     db.transaction(() => {
       recordTraceEvent({
         characterId: g.characterId,
         kind: "nightly",
         dedupeKey: parentKey,
         threadKey: parentKey,
-        text: headText(g, out, snap, after, afterProfile, result),
+        text: headText(g, out, snap, after, afterProfile, result, afterStage, firsts),
       });
       memoryChild(g, out, snap, parentKey);
       progressChild(g, out, snap, parentKey);
       diaryChild(g, parentKey);
       sendChild(g, parentKey);
       callChildren(g, parentKey);
+      stageChangeEvent(g, out, snap, afterStage);
+      firstEvents(g, firsts);
     })();
   } catch (err) {
     console.error("[trace] 새벽 정리 게시 준비 실패:", err);
