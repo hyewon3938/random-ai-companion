@@ -78,11 +78,11 @@ test("예산은 합계에 드는 선톡만 세고 단계에서 상한을 읽는�
   assert.equal(budgetLabel(b), "1단계 · 합계 4/4통 · 의도 1/1");
 });
 
-test("합계가 찬 뒤에도 자리 비움·약속·달래기·틈새 한 줄은 열려 있다", () => {
+test("합계가 찬 뒤에도 자리 비움·약속·달래기·살피기·틈새 한 줄은 열려 있다", () => {
   const b = proactiveBudget(FULL, fullId, SINCE);
   for (const kind of ["catchup", "lunch", "goodnight", "intent"] as const)
     assert.equal(budgetAllows(b, kind), false, kind);
-  for (const kind of ["away", "promise", "mend", "glance"] as const) {
+  for (const kind of ["away", "promise", "mend", "care", "glance"] as const) {
     assert.equal(onDailyBudget(kind), false, kind);
     assert.equal(budgetAllows(b, kind), true, kind);
   }
@@ -119,6 +119,7 @@ test("근거 줄은 근거 종류마다 다른 칸을 읽는다", () => {
   assert.equal(basisLine({ kind: "goodnight" }), "일정(밤 인사 선톡)");
   assert.equal(basisLine({ kind: "promise", promiseId: 12 }), "약속(행 12)");
   assert.equal(basisLine({ kind: "mend" }), "달래기");
+  assert.equal(basisLine({ kind: "care" }), "살피기");
 });
 
 test("발송 기록으로 만드는 근거 줄은 선톡이 아닌 종류에 null을 준다", () => {
@@ -132,6 +133,7 @@ test("발송 기록으로 만드는 근거 줄은 선톡이 아닌 종류에 nul
     "약속(행 12)",
   );
   assert.equal(basisLineFromMeta("mend"), "달래기");
+  assert.equal(basisLineFromMeta("care"), "살피기");
   assert.equal(basisLineFromMeta("reply"), null);
   // 값이 이상하면 그 칸만 비운 채로 근거 종류는 적는다.
   assert.equal(basisLineFromMeta("intent", { intent_line: "없는줄" }), "의도");

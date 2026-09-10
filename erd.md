@@ -581,14 +581,14 @@ role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰�
 | chat_id | TEXT | O | PK |
 | replied_up_to | TEXT | O | 이 시각까지 온 유저 메시지에는 답장을 마침 |
 
-**send_failures** — 대화 중에 보내는 선톡 넷(자리비움 · 근황 · 밤 인사 · 달래기)이 전송에 실패한 기록
+**send_failures** — 예약 발송 표를 거치지 않는 선톡(자리비움 · 근황 · 밤 인사 · 달래기 · 살피기 · 점심 · 틈새 한 줄 · 의도)이 전송에 실패한 기록
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | id | INTEGER | O | PK |
 | chat_id | TEXT | O | |
 | character_id | INTEGER | | |
-| kind | TEXT | O | `away` · `catchup` · `goodnight` · `mend` |
+| kind | TEXT | O | `away` · `catchup` · `goodnight` · `mend` · `care` · `lunch` · `glance` · `intent` |
 | error | TEXT | O | |
 | failed_at | TEXT | O | |
 
@@ -764,7 +764,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | trace_events.status | `pending` 대기 · `sent` 게시 · `failed` 실패 · `skipped` 건너뜀 |
 | call_feedback.source 표시를 남긴 방법 | `reaction` 리액션으로 고른 분류 · `reply` 스레드에 적은 이유 |
 | call_feedback.kind 분류 | `fact` 사실 오류 · `tone` 말투 · `timing` 타이밍 · `good` 좋음 |
-| messages 메타의 발송 종류, send_failures.kind | `reply` 답장 · `recover` 복구 · `morning` 아침 · `checkin` 안부 · `away` 자리비움 · `catchup` 근황 · `goodnight` 밤 인사 · `mend` 달래기 · `promise` 약속 연락 · `intent` 의도 선톡 · `glance` 틈새 한 줄 (send_failures는 자리비움 · 근황 · 밤 인사 · 달래기 4개만) |
+| messages 메타의 발송 종류, send_failures.kind | `reply` 답장 · `recover` 복구 · `morning` 아침 · `checkin` 안부 · `away` 자리비움 · `catchup` 근황 · `goodnight` 밤 인사 · `mend` 달래기 · `care` 살피기 · `promise` 약속 연락 · `intent` 의도 선톡 · `glance` 틈새 한 줄 (send_failures는 예약 발송 표를 거치지 않는 종류만) |
 
 영역 이름은 캐릭터마다 목록이 달라서 CHECK 대신 areas 테이블로 관리한다. 각본 블록의 세 태그는 plan_json 안에 있어 CHECK가 걸리지 않으므로 쓰기 코드에서 검사한다. llm_calls.purpose는 값이 목록으로 정해져 있는데도 CHECK를 걸지 않는다. 호출하는 자리가 늘 때마다 제약을 다시 만들어야 하고 제약에 걸린 INSERT는 기록을 통째로 잃어서, 코드의 타입으로 막는 쪽을 택했다.
 

@@ -20,10 +20,10 @@ const {
   awayNoticeSent,
   budgetedSinceLastUser,
   glanceSentForBlock,
-  mendSentSince,
   proactiveCountToday,
   proactiveKindCountToday,
   proactiveSinceLastUser,
+  stateKindSentSince,
 } = await import("../src/proactive-policy.js");
 const { userBurstGaps } = await import("../src/reply-timing.js");
 
@@ -46,13 +46,14 @@ before(() => {
   say("2026-09-06 13:00:00", { kind: "reply" });
   say("2026-09-06 14:00:00", { kind: "checkin", proactive: true });
   say("2026-09-06 15:00:00", { kind: "mend", proactive: true });
+  say("2026-09-06 16:00:00", { kind: "care", proactive: true });
 });
 after(() => {
   db.close();
 });
 
-test("하루 합계는 자리 비움·틈새 한 줄·달래기를 빼고 센다", () => {
-  // 심어 둔 오늘 선톡은 아침·자리 비움·복귀·틈새·안부·달래기 여섯이고, 합계에 드는 건
+test("하루 합계는 자리 비움·틈새 한 줄·달래기·살피기를 빼고 센다", () => {
+  // 심어 둔 오늘 선톡은 아침·자리 비움·복귀·틈새·안부·달래기·살피기 일곱이고, 합계에 드는 건
   // 아침과 안부 둘이다(설계 원본 §7).
   assert.equal(proactiveCountToday(CHAT, characterId, SINCE), 2);
   assert.equal(proactiveKindCountToday(CHAT, characterId, SINCE, "checkin"), 1);
@@ -71,19 +72,25 @@ test("틈새 한 줄은 블록별로 하루 한 번인지 찾는다", () => {
 });
 
 test("마지막 유저 말 이후 구간만 본다", () => {
-  assert.equal(proactiveSinceLastUser(CHAT, characterId), 2);
-  // 의도 선톡이 보는 셈은 같은 구간에서 달래기를 뺀다 — 안부 한 통만 남는다.
+  // 안부·달래기·살피기 셋 — 밤 인사는 이 셈을 봐서 상태 선톡이 나간 뒤에는 겹치지 않는다.
+  assert.equal(proactiveSinceLastUser(CHAT, characterId), 3);
+  // 의도 선톡이 보는 셈은 같은 구간에서 달래기·살피기를 뺀다 — 안부 한 통만 남는다.
   assert.equal(budgetedSinceLastUser(CHAT, characterId), 1);
-  // 달래기는 상대 상태가 시작된 시각 뒤로만 찾는다
-  assert.equal(mendSentSince(CHAT, characterId, "2026-09-06 12:30:00"), true);
-  assert.equal(mendSentSince(CHAT, characterId, "2026-09-06 15:30:00"), false);
+  // 달래기·살피기는 상대 상태가 시작된 시각 뒤로, 제 종류만 찾는다 — 15:30 뒤에는 살피기만 있다
+  assert.equal(stateKindSentSince(CHAT, characterId, "2026-09-06 12:30:00", "mend"), true);
+  assert.equal(stateKindSentSince(CHAT, characterId, "2026-09-06 15:30:00", "mend"), false);
+  assert.equal(stateKindSentSince(CHAT, characterId, "2026-09-06 15:30:00", "care"), true);
+  assert.equal(stateKindSentSince(CHAT, characterId, "2026-09-06 16:30:00", "care"), false);
   // 유저가 한 번도 말하지 않은 방은 대화 전체를 본다
   logMessage("chat-quiet", characterId, "assistant", "말", "2026-09-06 09:00:00", {
     kind: "checkin",
     proactive: true,
   });
   assert.equal(proactiveSinceLastUser("chat-quiet", characterId), 1);
-  assert.equal(mendSentSince("chat-quiet", characterId, "2026-09-06 00:00:00"), false);
+  assert.equal(
+    stateKindSentSince("chat-quiet", characterId, "2026-09-06 00:00:00", "mend"),
+    false,
+  );
 });
 
 test("유저가 이어 보낸 텀만 세고 답장이 끼거나 2분을 넘으면 뺀다", () => {

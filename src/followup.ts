@@ -1,6 +1,6 @@
 // 침묵 팔로업 — 답이 끊긴 자리에 한 통 보낸다(15분 틱).
 //
-// 관제탑을 통과할 때만 보낸다. 다섯이다.
+// 관제탑을 통과할 때만 보낸다. 여섯이다.
 //   낮 근황   — 유저의 마지막 말도 캐릭터의 마지막 말도 4시간 넘게 지났으면 하루 1통. 보낸 뒤에도
 //               답이 없으면 그날은 물러난다. 그날 미리 만들어 둔 선톡이 아직 안 나갔으면 그것을
 //               먼저 내보내고 기다린다.
@@ -13,10 +13,13 @@
 //   달래기    — 관계 행의 상대 상태(user-state가 답장마다 판정)가 나 때문에 안 좋은데 그 뒤로
 //               답이 끊기면 30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다. 어떤 상태를
 //               보고 나가는 통인지는 문안 호출 행에 남겨 슬랙 문안 게시가 머리에 적는다.
+//   살피기    — 같은 상대 상태가 상대의 다른 일로 안 좋은데 답이 끊기면 30분 뒤 1통(이슈 #361).
+//               조건과 대우는 달래기와 같고 문안만 다르다. 달래기가 내가 한 일을 알아차렸다는
+//               통이라면 이건 상대의 일이 계속 마음에 걸린다는 통이다.
 //
 // 근황·점심·의도·밤 인사는 하루 합계 상한을 함께 쓴다 — 1단계의 4는 아침 한 통에 이 넷 가운데
-// 셋이 붙는 수다(설계 원본 §7). 달래기만 합계에서 뺀다: 상대 상태가 부르는 한 통이라 그날 몇
-// 통이 나갔든 열려 있어야 한다(proactive-policy의 OFF_BUDGET).
+// 셋이 붙는 수다(설계 원본 §7). 달래기와 살피기는 합계에서 뺀다: 상대 상태가 부르는 한 통이라
+// 그날 몇 통이 나갔든 열려 있어야 한다(proactive-policy의 OFF_BUDGET).
 //
 // 문안은 대화와 같은 3층(buildSystemBlocks)에 상황 문단을 더해 만든다 — 앞 두 층 캐시를
 // 대화와 함께 쓴다. 경과 시간은 Date.now()로 잰다(getKstNow().getTime()은 9시간 어긋난다).
@@ -51,12 +54,12 @@ import {
   budgetLabel,
   budgetedSinceLastUser,
   lunchDueToday,
-  mendSentSince,
   pickIntentLine,
   proactiveAllowed,
   proactiveBudget,
   proactiveKindCountToday,
   proactiveSinceLastUser,
+  stateKindSentSince,
   usedIntentLines,
 } from "./proactive-policy.js";
 import {
@@ -75,6 +78,7 @@ import {
 } from "./kst.js";
 import { userStateLabel } from "./user-state.js";
 import {
+  CARE_SILENCE_MS,
   GOODNIGHT_SILENCE_MS,
   GOODNIGHT_WINDOW,
   INTENT_QUIET_MS,
@@ -107,6 +111,12 @@ const dayStart = (): string => logicalDayStartTs();
 const minutesBetween = (ts: string, nowMs: number): number =>
   (nowMs - new Date(ts.replace(" ", "T") + "+09:00").getTime()) / 60000;
 const minutesSince = (ts: string): number => minutesBetween(ts, Date.now());
+
+/** 문안에 적는 끊긴 시간 — 한 시간 안이면 10분 단위로, 그 뒤는 시간 단위로 뭉뚱그린다. */
+const elapsedLabel = (minutes: number): string =>
+  minutes < 60
+    ? `${Math.max(10, Math.floor(minutes / 10) * 10)}분쯤`
+    : `${Math.round(minutes / 60)}시간쯤`;
 
 /** 모델이 안 보낸다고 답한 자리를 기억한다 — 키는 chatId와 종류, 값은 그때의 자리 이름. */
 const declined = new Map<string, string>();
@@ -201,6 +211,33 @@ export const mendSituation = (): string =>
     `JSON으로만 답한다: {"text":"..."}`,
   ].join("\n");
 
+/**
+ * 살피기 선톡의 상황 문단 — 상대가 자기 일로 안 좋은 채 답이 끊긴 뒤 한 번 더 거는 한 통(이슈 #361).
+ *
+ * 전하는 것은 그 일이 네 마음에 남아 있다는 것 하나다. 금지 줄은 9/10 슬랙 말투 피드백에서 나온
+ * 모양을 그대로 막는다 — 상대가 한 말을 인용하거나 말만 바꿔 되돌려주며 위로하는 것, 조언과
+ * 대화를 닫는 말, 언제든 말하라며 자기 자리를 선언하는 말. 그런 말 없이 신경 쓰고 있다는 게
+ * 드러나야 사람의 결이다.
+ *
+ * 끊긴 시간은 잰 값으로 적는다. 조건은 30분이지만 봇이 멈춰 있다 돌아오거나 배포 직후면 몇 시간
+ * 뒤에 처음 걸릴 수 있어서, 30분이라고 박아 두면 그때 문안이 거짓이 된다.
+ */
+export const careSituation = (minutes: number): string =>
+  [
+    `[문안 — 지금 보낼 살피기 한 통]`,
+    `위 [상대의 지금 상태]대로 상대가 자기 일로 안 좋은 상태인 채 답이 끊긴 지 ${elapsedLabel(minutes)} 됐다. 너 때문이 아니라 상대의 일이다. 그 일이 계속 마음에 걸려서 한 번 더 말을 거는 한 통이다 — 상대가 넘긴 척했어도 속으로는 아직 그럴 것 같아 신경 쓰인다는 결.`,
+    `- 전하는 건 하나다. 그 일이 네 마음에 남아 있다는 것. 무엇이 어떻게 된 일인지 정리해 주거나 해결책을 내지 않는다.`,
+    `- 상대가 한 말을 그대로 옮기거나 말만 바꿔 되돌려주지 않는다. 상대가 쓴 표현을 인용해 위로하면 상담사가 된다. 네 말로, 네 쪽에서 나오는 말로 한다.`,
+    `- 네가 지금 하는 일(위 [지금])에 얹어 열어도 된다 — 뭘 하다가 생각났다는 결. 없으면 그냥 상대 얘기로 연다.`,
+    `- 조언하지 않고 시키지 않는다. 쉬어라·무리하지 마라·힘내라처럼 대화를 마무리하는 말로 닫지 않는다.`,
+    `- 재촉하지 않는다. 답을 요구하거나 왜 말이 없냐고 묻지 않는다.`,
+    `- 언제든 말하라거나 내가 여기 있다는 식으로 네 자리를 선언하지 않는다. 그런 말 없이도 신경 쓰고 있다는 게 드러나야 한다.`,
+    `- 자러 간다는 말도, 어디 나간다는 말도 붙이지 않는다. 상대가 답할 자리를 여는 한 통인데 그런 말을 붙이면 그 자리를 네가 닫는다. 지금이 네 각본에서 자는 시간이어도 마찬가지다.`,
+    `- 1~2개 말풍선(줄바꿈 구분).`,
+    ``,
+    `JSON으로만 답한다: {"text":"..."}`,
+  ].join("\n");
+
 export const lunchSituation = (): string =>
   [
     `[문안 — 지금 보낼 점심 한 통]`,
@@ -286,7 +323,7 @@ const followupTickBody = async (): Promise<void> => {
     const today = kstLogicalDate();
     const intent = getRelationshipIntent(c.id, today) ?? null;
 
-    // 오늘 남은 선톡 예산. 아래 넷 가운데 달래기만 이걸 보지 않는다.
+    // 오늘 남은 선톡 예산. 아래 가운데 달래기와 살피기만 이걸 보지 않는다.
     const budget = proactiveBudget(c.chat_id, c.id, dayStart());
 
     // 밤 인사 선톡: 자정을 넘겨 대화하다 유저가 '잔다'는 말 없이 한 시간 답이 없으면, 잠든 것으로
@@ -336,7 +373,7 @@ const followupTickBody = async (): Promise<void> => {
       minutesSince(lu) >= MEND_SILENCE_MS / 60_000 &&
       rel?.user_state_tone === "bad" &&
       rel.user_state_cause === "char" &&
-      !mendSentSince(c.chat_id, c.id, rel.user_state_since ?? lu)
+      !stateKindSentSince(c.chat_id, c.id, rel.user_state_since ?? lu, "mend")
     ) {
       await sendProactiveDraft({
         characterId: c.id,
@@ -352,6 +389,32 @@ const followupTickBody = async (): Promise<void> => {
         },
         label: "[followup] 달래기",
         sentLog: `[followup] mend to ${c.chat_id}`,
+      });
+      continue;
+    }
+
+    // 살피기 선톡: 상대의 지금 상태가 상대의 다른 일로 안 좋은데 답을 멈추면 30분 뒤에 한 통
+    // (이슈 #361). 대우는 달래기와 같다 — 한 발현에 한 통, 잠 블록에도 나가고 하루 합계를
+    // 보지 않는다. 다른 것은 문안뿐이라 위 블록과 조건 하나(원인)와 상황 문단만 다르다.
+    if (
+      minutesSince(lu) >= CARE_SILENCE_MS / 60_000 &&
+      rel?.user_state_tone === "bad" &&
+      rel.user_state_cause === "other" &&
+      !stateKindSentSince(c.chat_id, c.id, rel.user_state_since ?? lu, "care")
+    ) {
+      await sendProactiveDraft({
+        characterId: c.id,
+        chatId: c.chat_id,
+        kind: "care",
+        lastSentAt: last.sent_at,
+        situation: careSituation(minutesSince(lu)),
+        maxTokens: 300,
+        read: readText,
+        context: {
+          userState: { label: userStateLabel(rel, logicalDateOf(kstStamp())) },
+        },
+        label: "[followup] 살피기",
+        sentLog: `[followup] care to ${c.chat_id}`,
       });
       continue;
     }

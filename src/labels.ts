@@ -289,6 +289,7 @@ export type ProactiveKind =
   | "lunch"
   | "goodnight"
   | "mend"
+  | "care"
   | "away"
   | "promise"
   | "glance";
@@ -302,6 +303,7 @@ export const PROACTIVE_KIND_NAME: Record<ProactiveKind, string> = {
   lunch: "점심 선톡",
   goodnight: "밤 인사 선톡",
   mend: "달래기 선톡",
+  care: "살피기 선톡",
   away: "자리비움 선톡",
   promise: "약속 연락",
   glance: "틈새 한 줄",
@@ -328,6 +330,7 @@ export type CallPurpose =
   | "catchup"
   | "goodnight"
   | "mend"
+  | "care"
   | "away"
   | "glance"
   | "comeback"
@@ -354,6 +357,7 @@ export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
   catchup: "근황 선톡",
   goodnight: "밤 인사 선톡",
   mend: "달래기 선톡",
+  care: "살피기 선톡",
   away: "자리비움 선톡",
   glance: "틈새 한 줄",
   comeback: "복귀 선톡",
