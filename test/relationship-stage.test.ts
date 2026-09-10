@@ -1,11 +1,12 @@
 // 관계 단계의 문턱 계산과 전이 판정을 검사한다 — 모델은 부르지 않는다.
 //
 // 앞부분은 순수 계산이다. 05:00 경계로 날을 묶어 세는지, 최소 체류가 하한으로 남는지, 표본이
-// 없는 수는 미충족으로 두는지, 마음 확인 사건을 양쪽 방향으로 읽는지, 시도할 수 추천이 점수와
-// 어제 쓴 수와 탐색일을 규칙대로 섞는지를 본다. 뒷부분은 임시 DB 위에서 저장 자리를 돌린다 —
-// 문턱이 찼고 모델이 넘기자고 했을 때만 단계가 오르는지, 처음 후보를 확정·취소하고 상대가 먼저
-// 한 처음을 더하는지, 3→4는 마음 확인 처음이 확정돼야 하는지, 의도는 오늘 것만 적고 고백 차례는
-// 수 없이 자리만 남기는지를 잡는다.
+// 없는 수는 미충족으로 두는지, 마음 확인 사건을 양쪽 방향으로 바로 다음 턴만 읽는지, 시도할 수
+// 추천이 점수와 어제 쓴 수와 탐색일을 규칙대로 섞는지를 본다. 뒷부분은 임시 DB 위에서 저장
+// 자리를 돌린다 — 문턱이 찼고 모델이 넘기자고 했을 때만 단계가 오르는지, 처음 후보를 by와
+// 무관하게 확정·취소하고 관계 절이 없으면 다 확정하는지, 상대가 먼저 한 처음을 더하는지, 3→4는
+// 마음 확인 처음이 확정돼야 하는지, 의도는 오늘 것만 후보 안의 수로 적고 고백 차례는 수 없이
+// 자리만 남기는지를 잡는다.
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -135,7 +136,10 @@ test("1→2 문턱은 네 조건이 다 차야 하고 최소 체류는 하한이
     ["stay_days", "talked_days", "user_first_days", "self_story_days"],
   );
   // 다른 조건이 다 차도 체류 일수가 모자라면 안 찬다
-  const early = evaluateThreshold(1, { ...full, stayDays: STAGE_1_TO_2.stayDays - 1 });
+  const early = evaluateThreshold(1, {
+    ...full,
+    stayDays: STAGE_1_TO_2.stayDays - 1,
+  });
   assert.equal(early.met, false);
   assert.deepEqual(
     early.conditions.filter((c) => !c.met).map((c) => c.key),
@@ -254,54 +258,113 @@ test("수 평균은 이 단계에서 열린 수 가운데 표본이 있는 것�
 });
 
 test("마음 확인 사건은 캐릭터가 먼저면 그 뒤 같은 날 받은 판정, 유저가 먼저면 같은 날 호감 판정이다", () => {
-  const byChar = [first("first_confession", "character", "2026-09-08 22:00:00")];
+  const byChar = [
+    first("first_confession", "character", "2026-09-08 22:00:00"),
+  ];
   assert.equal(confessionExchangeOf(byChar, []), false);
   assert.equal(
     confessionExchangeOf(byChar, [
-      signal("2026-09-08 22:10:00", { prev_move: "only_you", move_reaction: "accepted" }),
+      signal("2026-09-08 22:10:00", {
+        prev_move: "only_you",
+        move_reaction: "accepted",
+      }),
     ]),
     true,
   );
   assert.equal(
-    confessionExchangeOf(byChar, [signal("2026-09-09 01:30:00", { said_affection: 1 })]),
+    confessionExchangeOf(byChar, [
+      signal("2026-09-09 01:30:00", { said_affection: 1 }),
+    ]),
     true,
     "새벽 1시는 같은 논리일이다",
   );
   assert.equal(
-    confessionExchangeOf(byChar, [signal("2026-09-08 21:00:00", { said_affection: 1 })]),
+    confessionExchangeOf(byChar, [
+      signal("2026-09-08 21:00:00", { said_affection: 1 }),
+    ]),
     false,
     "고백보다 앞선 판정은 받은 것이 아니다",
   );
   assert.equal(
-    confessionExchangeOf(byChar, [signal("2026-09-09 09:00:00", { said_affection: 1 })]),
+    confessionExchangeOf(byChar, [
+      signal("2026-09-09 09:00:00", { said_affection: 1 }),
+    ]),
     false,
     "다음 날은 사건이 아니다",
   );
+  // 바로 다음 턴만 답으로 읽는다 — 배열 순서와 무관하게 시각이 가장 이른 것이다
+  assert.equal(
+    confessionExchangeOf(byChar, [
+      signal("2026-09-08 23:00:00", { said_affection: 1 }),
+      signal("2026-09-08 22:05:00"),
+    ]),
+    false,
+    "다음 턴이 받지 않았으면 그 뒤 판정은 답이 아니다",
+  );
+  assert.equal(
+    confessionExchangeOf(byChar, [
+      signal("2026-09-08 23:00:00"),
+      signal("2026-09-08 22:05:00", {
+        prev_move: "only_you",
+        move_reaction: "accepted",
+      }),
+    ]),
+    true,
+  );
   const byUser = [first("first_confession", "user", "2026-09-08 22:00:00")];
   assert.equal(
-    confessionExchangeOf(byUser, [signal("2026-09-08 22:00:00", { said_affection: 1 })]),
+    confessionExchangeOf(byUser, [
+      signal("2026-09-08 22:00:00", { said_affection: 1 }),
+    ]),
     true,
   );
   assert.equal(
-    confessionExchangeOf(byUser, [signal("2026-09-08 23:00:00", { move_reaction: "accepted" })]),
+    confessionExchangeOf(byUser, [
+      signal("2026-09-08 23:00:00", { move_reaction: "accepted" }),
+    ]),
     false,
   );
   assert.equal(
-    confessionExchangeOf([first("first_laugh", "user", "2026-09-08 22:00:00")], []),
+    confessionExchangeOf(
+      [first("first_laugh", "user", "2026-09-08 22:00:00")],
+      [],
+    ),
     false,
   );
 });
 
 test("고백 차례는 3단계에서 사건 없이 10일 지나고 점수가 양수일 때, 아니면 20일 지났을 때다", () => {
-  assert.equal(confessionDueOf(3, counts({ stayDays: 10, stageScorePositive: true })), true);
-  assert.equal(confessionDueOf(3, counts({ stayDays: 10, stageScorePositive: null })), false);
-  assert.equal(confessionDueOf(3, counts({ stayDays: 19, stageScorePositive: false })), false);
-  assert.equal(confessionDueOf(3, counts({ stayDays: 20, stageScorePositive: false })), true);
   assert.equal(
-    confessionDueOf(3, counts({ stayDays: 30, stageScorePositive: true, confessionExchange: true })),
+    confessionDueOf(3, counts({ stayDays: 10, stageScorePositive: true })),
+    true,
+  );
+  assert.equal(
+    confessionDueOf(3, counts({ stayDays: 10, stageScorePositive: null })),
     false,
   );
-  assert.equal(confessionDueOf(2, counts({ stayDays: 30, stageScorePositive: true })), false);
+  assert.equal(
+    confessionDueOf(3, counts({ stayDays: 19, stageScorePositive: false })),
+    false,
+  );
+  assert.equal(
+    confessionDueOf(3, counts({ stayDays: 20, stageScorePositive: false })),
+    true,
+  );
+  assert.equal(
+    confessionDueOf(
+      3,
+      counts({
+        stayDays: 30,
+        stageScorePositive: true,
+        confessionExchange: true,
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    confessionDueOf(2, counts({ stayDays: 30, stageScorePositive: true })),
+    false,
+  );
 });
 
 test("탐색일은 날짜 일련번호가 5로 나누어떨어지는 날이라 다시 돌려도 같다", () => {
@@ -370,10 +433,9 @@ const charId = createFixtureCharacter(CHAT);
 const DIARY = "2026-09-09";
 const TODAY = "2026-09-10";
 
-db.prepare(`UPDATE relationships SET stage_since = ? WHERE character_id = ?`).run(
-  "2026-09-01",
-  charId,
-);
+db.prepare(
+  `UPDATE relationships SET stage_since = ? WHERE character_id = ?`,
+).run("2026-09-01", charId);
 
 const relation = (over: Partial<NightlyRelation> = {}): NightlyRelation => ({
   stageNo: 1,
@@ -391,7 +453,11 @@ const relation = (over: Partial<NightlyRelation> = {}): NightlyRelation => ({
   ...over,
 });
 
-const ctx = (rel: NightlyRelation, diaryDate = DIARY, today = TODAY): RelationContext => ({
+const ctx = (
+  rel: NightlyRelation,
+  diaryDate = DIARY,
+  today = TODAY,
+): RelationContext => ({
   characterId: charId,
   chatId: CHAT,
   diaryDate,
@@ -418,14 +484,30 @@ test("처음 후보는 모델이 지운 것만 지우고 나머지는 확정하�
   });
   assert.ok(laugh !== undefined && remember !== undefined);
   logMessage(CHAT, charId, "user", "오늘 좀 힘들었어", "2026-09-09 22:10:00");
-  logMessage(CHAT, charId, "assistant", "무슨 일 있었어?", "2026-09-09 22:12:00");
+  logMessage(
+    CHAT,
+    charId,
+    "assistant",
+    "무슨 일 있었어?",
+    "2026-09-09 22:12:00",
+  );
 
   const r = applyRelationOutput(
     ctx(
       relation({
         firstsPending: [
-          { id: laugh, kind: "first_laugh", by: "character", happenedAt: "2026-09-09 21:00:00" },
-          { id: remember, kind: "first_remember", by: "character", happenedAt: "2026-09-09 20:00:00" },
+          {
+            id: laugh,
+            kind: "first_laugh",
+            by: "character",
+            happenedAt: "2026-09-09 21:00:00",
+          },
+          {
+            id: remember,
+            kind: "first_remember",
+            by: "character",
+            happenedAt: "2026-09-09 20:00:00",
+          },
         ],
         firstsOpen: ["first_self_story", "first_waited"],
       }),
@@ -457,6 +539,100 @@ test("처음 후보는 모델이 지운 것만 지우고 나머지는 확정하�
     ].sort(),
   );
   assert.deepEqual(getUnconfirmedFirsts(charId), []);
+});
+
+test("유저 쪽으로 적힌 후보도 by가 붙은 출력으로 지우고, 지운 종류를 유저 쪽으로 새로 적을 수 있다", () => {
+  // 답장이 유저 쪽으로 적어 둔 후보 — 모델이 by를 그대로 돌려줘도 keep:false면 지운다
+  const waited = insertFirst({
+    characterId: charId,
+    chatId: CHAT,
+    kind: "first_waited",
+    by: "user",
+    happenedAt: "2026-09-09 21:30:00",
+  });
+  // 캐릭터 쪽 후보를 지우고 같은 종류를 유저가 먼저 한 것으로 다시 적는다
+  const laugh = insertFirst({
+    characterId: charId,
+    chatId: CHAT,
+    kind: "first_laugh",
+    by: "character",
+    happenedAt: "2026-09-09 21:40:00",
+  });
+  assert.ok(waited !== undefined && laugh !== undefined);
+  const r = applyRelationOutput(
+    ctx(
+      relation({
+        firstsPending: [
+          {
+            id: waited,
+            kind: "first_waited",
+            by: "user",
+            happenedAt: "2026-09-09 21:30:00",
+          },
+          {
+            id: laugh,
+            kind: "first_laugh",
+            by: "character",
+            happenedAt: "2026-09-09 21:40:00",
+          },
+        ],
+      }),
+    ),
+    {
+      firsts: [
+        { kind: "first_waited", by: "user", keep: false },
+        { kind: "first_laugh", keep: false },
+        { kind: "first_laugh", by: "user", keep: true },
+      ],
+    },
+    NOW,
+  );
+  assert.deepEqual(r.cancelled, ["first_waited", "first_laugh"]);
+  assert.deepEqual(r.confirmed, []);
+  assert.deepEqual(r.userAdded, ["first_laugh"]);
+  const laughNow = getConfirmedFirsts(charId).find(
+    (f) => f.kind === "first_laugh",
+  );
+  assert.ok(laughNow && laughNow.id !== laugh);
+  assert.equal(laughNow.by, "user");
+  assert.equal(
+    getConfirmedFirsts(charId).some((f) => f.kind === "first_waited"),
+    false,
+  );
+  assert.deepEqual(getUnconfirmedFirsts(charId), []);
+});
+
+test("관계 절이 통째로 없는 회차는 후보를 전부 확정한다", () => {
+  const waited = insertFirst({
+    characterId: charId,
+    chatId: CHAT,
+    kind: "first_waited",
+    by: "user",
+    happenedAt: "2026-09-09 22:00:00",
+  });
+  assert.ok(waited !== undefined);
+  const r = applyRelationOutput(
+    ctx(
+      relation({
+        firstsPending: [
+          {
+            id: waited,
+            kind: "first_waited",
+            by: "user",
+            happenedAt: "2026-09-09 22:00:00",
+          },
+        ],
+      }),
+    ),
+    null,
+    NOW,
+  );
+  assert.deepEqual(r.confirmed, ["first_waited"]);
+  assert.deepEqual(r.cancelled, []);
+  assert.equal(
+    getConfirmedFirsts(charId).find((f) => f.kind === "first_waited")?.id,
+    waited,
+  );
 });
 
 test("문턱이 안 찼으면 넘기자는 출력을 받아도 단계는 그대로다", () => {
@@ -493,6 +669,21 @@ test("문턱이 찼고 모델이 넘기자고 하면 한 단계 오르고 시작
   assert.equal(again.advanced, null);
   assert.match(again.advanceRejected ?? "", /단계가 달라/);
   assert.equal(getStage(charId)?.stage_no, 2);
+
+  // 마지막 단계는 넘길 곳이 없다는 까닭으로 갈라 적는다
+  const last = applyRelationOutput(
+    ctx(
+      relation({
+        stageNo: 4,
+        threshold: { from: 4, to: null, met: false, conditions: [] },
+      }),
+    ),
+    { advance: { go: true } },
+    NOW,
+  );
+  assert.equal(last.advanced, null);
+  assert.match(last.advanceRejected ?? "", /마지막 단계/);
+  assert.equal(getStage(charId)?.stage_no, 2);
 });
 
 test("3→4는 마음 확인 처음이 확정돼야 오르고 그 확정은 같은 밤에 할 수 있다", () => {
@@ -526,11 +717,19 @@ test("3→4는 마음 확인 처음이 확정돼야 오르고 그 확정은 같�
       relation: {
         ...rel3,
         firstsPending: [
-          { id: confession, kind: "first_confession", by: "character", happenedAt: "2026-09-09 23:00:00" },
+          {
+            id: confession,
+            kind: "first_confession",
+            by: "character",
+            happenedAt: "2026-09-09 23:00:00",
+          },
         ],
       },
     },
-    { firsts: [{ kind: "first_confession", keep: true }], advance: { go: true, basis: "받았다" } },
+    {
+      firsts: [{ kind: "first_confession", keep: true }],
+      advance: { go: true, basis: "받았다" },
+    },
     NOW,
   );
   assert.deepEqual(r.confirmed, ["first_confession"]);
@@ -539,16 +738,28 @@ test("3→4는 마음 확인 처음이 확정돼야 오르고 그 확정은 같�
 });
 
 test("의도는 오늘 것만 적고 고백 차례의 마음 확인은 수 없이 자리만 남긴다", () => {
+  const candidates = relation({
+    stageNo: 2,
+    moveCandidates: ["sudden_ping", "remember"],
+  });
   const stale = applyRelationOutput(
-    ctx(relation({ stageNo: 2 }), "2026-09-07", TODAY),
-    { intent: { dig: "러닝 얘기", share: "요즘 잠", move: "sudden_ping", lead_tone: "direct", thread: "저녁" } },
+    ctx(candidates, "2026-09-07", TODAY),
+    {
+      intent: {
+        dig: "러닝 얘기",
+        share: "요즘 잠",
+        move: "sudden_ping",
+        lead_tone: "direct",
+        thread: "저녁",
+      },
+    },
     NOW,
   );
   assert.equal(stale.intentSaved, false);
   assert.equal(getRelationshipIntent(charId, TODAY), undefined);
 
   const r = applyRelationOutput(
-    ctx(relation({ stageNo: 2 })),
+    ctx(relation({ stageNo: 3, confessionDue: true })),
     {
       intent: {
         dig: "  어제 말한  러닝 ",
@@ -573,10 +784,16 @@ test("의도는 오늘 것만 적고 고백 차례의 마음 확인은 수 없�
   assert.equal(row.thread, "저녁에 이어서");
   assert.equal(row.basis_json, JSON.stringify({ dig: "21:10 러닝 얘기" }));
 
-  // 같은 날 다시 적으면 덮어쓰고 수 코드와 결 코드는 그대로 들어간다
+  // 같은 날 다시 적으면 덮어쓰고 후보 안의 수 코드와 결 코드는 그대로 들어간다
   const r2 = applyRelationOutput(
-    ctx(relation({ stageNo: 2 })),
-    { intent: { move: "sudden_ping", move_note: "점심에", lead_tone: "tease_sincere" } },
+    ctx(candidates),
+    {
+      intent: {
+        move: "sudden_ping",
+        move_note: "점심에",
+        lead_tone: "tease_sincere",
+      },
+    },
     NOW,
   );
   assert.equal(r2.intentSaved, true);
@@ -586,10 +803,37 @@ test("의도는 오늘 것만 적고 고백 차례의 마음 확인은 수 없�
   assert.equal(row2?.lead_tone, "tease_sincere");
   assert.equal(row2?.dig, null);
 
-  // 네 줄이 다 비면 안 적는다
-  const empty = applyRelationOutput(
+  // 후보에 없는 수는 버리고, 고백 차례가 아닌 날의 코드 아닌 move도 버린다
+  const outside = applyRelationOutput(
+    ctx(relation({ stageNo: 2, moveCandidates: ["remember"] })),
+    { intent: { dig: "러닝", move: "sudden_ping", move_note: "점심에" } },
+    NOW,
+  );
+  assert.equal(outside.intentSaved, true);
+  assert.equal(getRelationshipIntent(charId, TODAY)?.move, null);
+  assert.equal(getRelationshipIntent(charId, TODAY)?.move_note, "점심에");
+  const notDue = applyRelationOutput(
+    ctx(relation({ stageNo: 2 })),
+    { intent: { dig: "러닝", move: "마음 확인" } },
+    NOW,
+  );
+  assert.equal(notDue.intentSaved, true);
+  assert.equal(getRelationshipIntent(charId, TODAY)?.move_note, null);
+
+  // 결 하나만 있어도 적는다 — 아침 선톡이 그 결을 따른다
+  const toneOnly = applyRelationOutput(
     ctx(relation({ stageNo: 2 })),
     { intent: { lead_tone: "direct", basis: { dig: "x" } } },
+    NOW,
+  );
+  assert.equal(toneOnly.intentSaved, true);
+  assert.equal(getRelationshipIntent(charId, TODAY)?.lead_tone, "direct");
+  assert.equal(getRelationshipIntent(charId, TODAY)?.dig, null);
+
+  // 줄이 다 비면 안 적는다
+  const empty = applyRelationOutput(
+    ctx(relation({ stageNo: 2 })),
+    { intent: { lead_tone: "unknown_tone", basis: { dig: "x" } } },
     NOW,
   );
   assert.equal(empty.intentSaved, false);
@@ -598,10 +842,9 @@ test("의도는 오늘 것만 적고 고백 차례의 마음 확인은 수 없�
 test("수집은 단계 창의 값을 세고 어제 후보·어제 쓴 수·의도를 함께 돌려준다", () => {
   const CHATG = "chat-stage-gather";
   const idG = createFixtureCharacter(CHATG);
-  db.prepare(`UPDATE relationships SET stage_since = ? WHERE character_id = ?`).run(
-    "2026-09-05",
-    idG,
-  );
+  db.prepare(
+    `UPDATE relationships SET stage_since = ? WHERE character_id = ?`,
+  ).run("2026-09-05", idG);
   // 9/5·9/6은 유저가 먼저, 9/9는 캐릭터가 먼저 — 창 밖(9/4)은 안 센다
   logMessage(CHATG, idG, "user", "안녕", "2026-09-04 20:00:00");
   logMessage(CHATG, idG, "user", "안녕", "2026-09-05 20:00:00");
@@ -656,7 +899,9 @@ test("수집은 단계 창의 값을 세고 어제 후보·어제 쓴 수·의�
   assert.equal(rel.stageSince, "2026-09-05");
   assert.equal(rel.stayDays, 5);
   assert.equal(rel.threshold.met, false);
-  const byKey = Object.fromEntries(rel.threshold.conditions.map((c) => [c.key, c.value]));
+  const byKey = Object.fromEntries(
+    rel.threshold.conditions.map((c) => [c.key, c.value]),
+  );
   assert.deepEqual(byKey, {
     stay_days: 5,
     talked_days: 3,
@@ -665,10 +910,19 @@ test("수집은 단계 창의 값을 세고 어제 후보·어제 쓴 수·의�
   });
   assert.deepEqual(rel.firstsDone, []);
   assert.deepEqual(rel.firstsPending, [
-    { id: pendingId, kind: "first_remember", by: "character", happenedAt: "2026-09-09 21:00:00" },
+    {
+      id: pendingId,
+      kind: "first_remember",
+      by: "character",
+      happenedAt: "2026-09-09 21:00:00",
+    },
   ]);
   // 후보는 열린 처음에서 빠지고, 다음 단계 처음은 아직 안 열린다
-  assert.deepEqual(rel.firstsOpen, ["first_self_story", "first_laugh", "first_waited"]);
+  assert.deepEqual(rel.firstsOpen, [
+    "first_self_story",
+    "first_laugh",
+    "first_waited",
+  ]);
   assert.deepEqual(rel.yesterdayMoves, [
     { move: "notice", reaction: "ignored" },
     { move: "remember", reaction: "accepted" },

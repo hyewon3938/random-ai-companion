@@ -4,6 +4,10 @@
 // NightlyGathered를 받아 글자만 만든다. 4번 영역의 prompts/reply.ts와 같은 꼴로 나눠 둬서,
 // 문안만 고친 커밋의 diff가 순서 코드와 섞이지 않는다(#298).
 //
+// 관계 절(relationSection)은 수집이 센 단계·문턱 조건·처음 후보·시도할 수 후보를 기억 정리
+// 프롬프트에 적어 모델이 다시 세지 않게 하고, 아침 선톡 상황 문단은 그날의 관계 의도
+// (MorningIntent)를 받아 intentSummary가 만든 한 줄을 엮을 후보에 넣는다(#355).
+//
 // 봇 밖의 외부 스케줄러 지시서가 같은 일을 자체 지능으로 하므로, 여기 규칙을 고치면 그
 // 지시서의 규칙도 함께 맞춘다.
 import type { NightlyGathered } from "../nightly.js";
@@ -95,7 +99,9 @@ export const PROGRESS_SYSTEM = `너는 캐릭터가 며칠에 걸쳐 하는 일�
 // 진행 반영 프롬프트. 어제 각본에 들어간 일마다 지금 값·끝나는 조건·실제 기록을 넘기고
 // 새 값을 받는다. 어제 대화가 있으면 같이 넘긴다 — 대화에서 이미 어디까지 갔다고 말했으면
 // 그 말과 어긋난 값을 적지 않게.
-export const progressPrompt = (g: NightlyGathered): string => `[어제 각본에 들어간 진행 중인 일 — [번호] 영역/무엇: 지금 값 (끝나는 조건) — 어제 각본: 시각 활동 → 각본대로 / 달라짐]
+export const progressPrompt = (
+  g: NightlyGathered,
+): string => `[어제 각본에 들어간 진행 중인 일 — [번호] 영역/무엇: 지금 값 (끝나는 조건) — 어제 각본: 시각 활동 → 각본대로 / 달라짐]
 ${g.ongoingTouched.join("\n")}
 ${g.convo ? `\n[어제 대화 — ${g.diaryDate}]\n${g.convo}\n` : ""}
 규칙:
@@ -159,11 +165,15 @@ export const relationSection = (r: NightlyRelation): string => {
     `- threshold_met(다음 단계 문턱): ${threshold}`,
     `- firsts_done(이미 한 처음): ${
       r.firstsDone
-        .map((f) => `${FIRST_KIND_NAME[f.kind]}(${FIRST_BY_NAME[f.by]}, ${monthDay(f.date)})`)
+        .map(
+          (f) =>
+            `${FIRST_KIND_NAME[f.kind]}(${FIRST_BY_NAME[f.by]}, ${monthDay(f.date)})`,
+        )
         .join(" · ") || "(없음)"
     }`,
     `- firsts_open(이 단계까지 열렸는데 아직 안 한 처음, 코드=이름): ${
-      r.firstsOpen.map((k) => `${k}=${FIRST_KIND_NAME[k]}`).join(" · ") || "(없음)"
+      r.firstsOpen.map((k) => `${k}=${FIRST_KIND_NAME[k]}`).join(" · ") ||
+      "(없음)"
     }`,
     `- firsts_pending(어제 답장이 표시한 처음 후보, 코드=이름): ${
       r.firstsPending
@@ -174,12 +184,16 @@ export const relationSection = (r: NightlyRelation): string => {
         .join(" · ") || "(없음)"
     }`,
     `- move_candidates(시도할 수 추천, 앞이 우선, 코드=이름): ${
-      r.moveCandidates.map((m) => `${m}=${MOVE_NAME[m]}`).join(" · ") || "(없음)"
+      r.moveCandidates.map((m) => `${m}=${MOVE_NAME[m]}`).join(" · ") ||
+      "(없음)"
     }`,
     `- rapport_moves(잘 통하는 수): ${r.rapportMoves.map((m) => MOVE_NAME[m]).join(" · ") || "(아직 없음)"}`,
     `- yesterday_moves(어제 쓴 수 → 상대 반응): ${
       r.yesterdayMoves
-        .map((m) => `${MOVE_NAME[m.move]} → ${m.reaction ? MOVE_REACTION_NAME[m.reaction] : "판정 없음"}`)
+        .map(
+          (m) =>
+            `${MOVE_NAME[m.move]} → ${m.reaction ? MOVE_REACTION_NAME[m.reaction] : "판정 없음"}`,
+        )
         .join(" · ") || "(없음)"
     }`,
     `- yesterday_intent(어제 의도): ${intentSummary(r.yesterdayIntent) || "(없음)"}`,
@@ -256,7 +270,7 @@ memories 규칙:
 - tags: ${TAG_RULE}
 - user_knows: '나'(char) 쪽 기억에만 — 이 사실을 상대가 아는가. 위 재료 줄 끝의 표시가 지금 값이고, 오늘 대화에서 내가 상대에게 말한 것만 known으로 바꾼다. 상대가 이미 알던 것은 그 줄의 지금 값을 그대로 다시 적는다. 한 번 known이 된 것은 다시 unknown으로 되돌리지 않는다 — 이미 말한 일을 다음에 처음 꺼내는 것처럼 말하게 된다. 오늘 말하지 않은 일을 짐작으로 known으로 바꾸지 않는다.
 
-relationship 규칙: 이 하루로 실제 달라진 항목만 넣는다 (넣은 항목만 갱신되고, 나머지는 그대로 남는다). 각 항목은 짧은 서술로. 지금 어떤 사이인지·서로 부르는 말·존댓말과 반말은 대화하는 자리에서 이미 갱신되니 여기서 건드리지 않는다. [상대의 오늘 상태]는 이 정리가 끝나면 비워지니, 내일도 알고 있어야 할 것이면 feelings나 cautions에 녹여 적는다 — 나 때문에 안 좋았던 상태는 무엇 때문이었는지가 남게. 달라진 게 없으면 relationship은 null. 잘 통하는 것(rapport)에는 [관계 단계]의 rapport_moves를 말로 옮겨 넣는다 — 숫자와 코드는 적지 않는다.
+relationship 규칙: 이 하루로 실제 달라진 항목만 넣는다 (넣은 항목만 갱신되고, 나머지는 그대로 남는다). 각 항목은 짧은 서술로. 지금 어떤 사이인지·서로 부르는 말·존댓말과 반말은 대화하는 자리에서 이미 갱신되니 여기서 건드리지 않는다. [상대의 오늘 상태]는 이 정리가 끝나면 비워지니, 내일도 알고 있어야 할 것이면 feelings나 cautions에 녹여 적는다 — 나 때문에 안 좋았던 상태는 무엇 때문이었는지가 남게. 달라진 게 없으면 relationship은 null. 잘 통하는 것(rapport)에는 [관계 단계]의 rapport_moves 가운데 지금 값에 아직 없는 것만 말로 옮겨 넣는다 — 숫자와 코드는 적지 않고, 이미 적힌 것을 다시 넣지 않는다.
 user_profile 규칙:
 - 상대가 하는 일·사는 지역이 대화에서 분명히 드러났을 때만 넣는다. 어림짐작으로 채우지 않고, 확실하지 않으면 비워 둔다.
 - 위 [상대 프로필 — 지금 값]에 이미 있는 값과 같으면 넣지 않는다. 두 값 다 그대로면 user_profile은 null.
@@ -280,7 +294,7 @@ schedule_updates 규칙:
 - time_hint는 14:30처럼 시각으로 적을 수 있으면 시각으로, 아니면 대화에 나온 말 그대로 적는다.
 relation 규칙 — [관계 단계]를 읽고 적는다. 값은 코드가 센 것이라 다시 세지 않는다:
 - advance: threshold_met가 찼음일 때만 넣는다. 오늘의 대화에서 상대가 다음 단계의 관계로 읽히면 go를 true로 하고 basis에 근거 한 줄을 적는다. 확신이 없으면 false. 조건이 찼다고 자동으로 넘기지 않는다. 3단계는 마음 확인 사건이 조건이라 문턱이 찼으면 넘긴다. 문턱이 안 찼거나 마지막 단계면 advance는 null.
-- firsts: firsts_pending마다 {"kind","keep"}. 오늘의 대화를 읽어 그 말이 실제로 그 처음이었으면 true, 아니면 false. 상대가 먼저 한 처음(상대가 먼저 별명을 붙이거나 보고 싶다고 하거나 마음을 말한 것)은 firsts_open 가운데서 {"kind","by":"user","keep":true}로 더한다. 후보도 더할 것도 없으면 빈 배열.
+- firsts: firsts_pending마다 {"kind","keep"}. 오늘의 대화를 읽어 그 말이 실제로 그 처음이었으면 true, 아니면 false. 상대가 먼저 한 처음(상대가 먼저 별명을 붙이거나 보고 싶다고 하거나 마음을 말한 것)은 firsts_open 가운데서 {"kind","by":"user","keep":true}로 더한다. 후보도 더할 것도 없으면 빈 배열. 적지 않은 후보는 확정된 것으로 처리된다.
 - intent: 오늘 하루 상대와의 관계에서 하려는 것. 줄마다 60자 안 한 문장이고 없으면 null이다. 4줄이 다 없으면 intent는 null.
   · dig: 오늘의 대화에서 더 물어볼 만한 상대 얘기 하나. 상대가 스스로 연 얘기를 고른다.
   · share: 오늘 흘릴 내 얘기 하나 — 정체성·진행 중인 일·주변 인물에서 상대가 아직 모르는 것.

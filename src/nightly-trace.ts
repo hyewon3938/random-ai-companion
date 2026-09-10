@@ -165,7 +165,10 @@ export const beforeNightlyTrace = (
         if (!wanted.has(k)) continue;
         // 트랜잭션과 같은 규칙 — 같은 키에 두 행이 있으면 대화로 쌓인 쪽이 지금 값이다.
         const cur = memories.get(k);
-        if (cur && !(cur.origin !== "conversation" && r.origin === "conversation"))
+        if (
+          cur &&
+          !(cur.origin !== "conversation" && r.origin === "conversation")
+        )
           continue;
         memories.set(k, {
           value: r.value,
@@ -280,12 +283,14 @@ interface FirstChanges {
 }
 
 /** 반영 뒤 확정·미확정 행을 어제 후보와 견줘 무엇이 확정되고 취소됐는지 센다. 상대가 먼저 한
- * 처음은 후보에도 이미 한 처음에도 없던 종류가 유저 쪽으로 확정된 것이다. */
+ * 처음은 후보 행도 아니고 이미 한 종류도 아닌 유저 쪽 확정 행이다 — 후보를 지우고 같은 종류를
+ * 유저 쪽으로 새로 적은 밤도 잡히게 종류가 아니라 행으로 가른다. */
 const firstChangesOf = (g: NightlyGathered): FirstChanges => {
   const confirmedRows = getConfirmedFirsts(g.characterId);
   const unconfirmedIds = new Set(
     getUnconfirmedFirsts(g.characterId).map((r) => r.id),
   );
+  const pendingIds = new Set(g.relation.firstsPending.map((p) => p.id));
   const confirmed: FirstRow[] = [];
   const cancelled: FirstKind[] = [];
   for (const p of g.relation.firstsPending) {
@@ -293,12 +298,11 @@ const firstChangesOf = (g: NightlyGathered): FirstChanges => {
     if (row) confirmed.push(row);
     else if (!unconfirmedIds.has(p.id)) cancelled.push(p.kind);
   }
-  const before = new Set<FirstKind>([
-    ...g.relation.firstsDone.map((f) => f.kind),
-    ...g.relation.firstsPending.map((f) => f.kind),
-  ]);
+  const doneKinds = new Set<FirstKind>(
+    g.relation.firstsDone.map((f) => f.kind),
+  );
   const userAdded = confirmedRows.filter(
-    (r) => r.by === "user" && !before.has(r.kind),
+    (r) => r.by === "user" && !pendingIds.has(r.id) && !doneKinds.has(r.kind),
   );
   return { confirmed, cancelled, userAdded };
 };
@@ -334,7 +338,9 @@ const relationStageBlock = (
   const t = r.threshold;
   const lines: string[] = [
     `> ${r.stageNo}단계 ${r.stageSince}부터 ${r.stayDays}일 · 다음 문턱 ${
-      t.to === null ? "없음(마지막 단계)" : `${t.from}→${t.to} ${t.met ? "찼음" : "안 찼음"}`
+      t.to === null
+        ? "없음(마지막 단계)"
+        : `${t.from}→${t.to} ${t.met ? "찼음" : "안 찼음"}`
     }`,
   ];
   const conds = conditionLines(g);
@@ -345,16 +351,25 @@ const relationStageBlock = (
       `> 넘김 판단: ${adv.go === true ? "넘긴다" : "아직"}${adv.basis ? ` — ${esc(adv.basis)}` : ""}`,
     );
   if (snap.stage && afterStage && afterStage.stage_no > snap.stage.stage_no)
-    lines.push(`> *단계 전이* ${snap.stage.stage_no}단계 → ${afterStage.stage_no}단계`);
+    lines.push(
+      `> *단계 전이* ${snap.stage.stage_no}단계 → ${afterStage.stage_no}단계`,
+    );
   else if (adv?.go === true)
-    lines.push(`> 단계는 그대로 — 반영 자리가 건너뜀`);
+    lines.push(`> 단계는 그대로 — 반영 자리가 건너뜀, 까닭은 위 결과 줄에`);
   if (firsts.confirmed.length)
-    lines.push(`> 처음 확정: ${esc(firsts.confirmed.map(firstLabel).join(" / "))}`);
+    lines.push(
+      `> 처음 확정: ${esc(firsts.confirmed.map(firstLabel).join(" / "))}`,
+    );
   if (firsts.cancelled.length)
-    lines.push(`> 처음 취소: ${esc(firsts.cancelled.map((k) => FIRST_KIND_NAME[k]).join(" / "))}`);
+    lines.push(
+      `> 처음 취소: ${esc(firsts.cancelled.map((k) => FIRST_KIND_NAME[k]).join(" / "))}`,
+    );
   if (firsts.userAdded.length)
-    lines.push(`> 상대가 먼저 한 처음: ${esc(firsts.userAdded.map(firstLabel).join(" / "))}`);
-  if (r.confessionDue) lines.push(`> 고백 차례 — 오늘 의도에 마음 확인을 넣는 날`);
+    lines.push(
+      `> 상대가 먼저 한 처음: ${esc(firsts.userAdded.map(firstLabel).join(" / "))}`,
+    );
+  if (r.confessionDue)
+    lines.push(`> 고백 차례 — 오늘 의도에 마음 확인을 넣는 날`);
   const intent = out.extract?.relation?.intent;
   const summary = intentSummary(intent);
   if (summary) {
@@ -435,9 +450,10 @@ const listSection = (
   emptyNote?: string,
 ): string | null => {
   if (!items.length) return emptyNote ? `*${title}* ${emptyNote}` : null;
-  return [`*${title}* ${items.length}건`, ...items.map((s) => `> ${esc(s)}`)].join(
-    "\n",
-  );
+  return [
+    `*${title}* ${items.length}건`,
+    ...items.map((s) => `> ${esc(s)}`),
+  ].join("\n");
 };
 
 const headText = (
@@ -529,7 +545,8 @@ const memoryChild = (
   // 저장된 행의 태그는 반영 뒤에 읽는다 — 키가 같으면 한 행이므로 대화 쪽 행 하나만 본다.
   const nowTags = new Map<string, string[]>();
   for (const r of listMemoryItems(g.characterId))
-    if (r.origin === "conversation") nowTags.set(rowKey(r), getTags("memory", r.id));
+    if (r.origin === "conversation")
+      nowTags.set(rowKey(r), getTags("memory", r.id));
 
   for (const m of ex.memories) {
     if (!m.value?.trim() || !m.area || !m.subject) continue;
@@ -554,9 +571,11 @@ const memoryChild = (
     ];
     if (!prev) {
       fresh.push(
-        [`＋ *${esc(memLabel(m))}*`, `> ${esc(clip(m.value, 400))}`, ...tail].join(
-          "\n",
-        ),
+        [
+          `＋ *${esc(memLabel(m))}*`,
+          `> ${esc(clip(m.value, 400))}`,
+          ...tail,
+        ].join("\n"),
       );
     } else if (prev.value.trim() === m.value.trim()) {
       kept.push(memLabel(m));
@@ -660,7 +679,13 @@ const sendChild = (g: NightlyGathered, parentKey: string): void => {
       ].join("\n"),
     )
     .join("\n\n");
-  recordTraceChunks(g.characterId, parentKey, "nightly_send", "선톡 문안", body);
+  recordTraceChunks(
+    g.characterId,
+    parentKey,
+    "nightly_send",
+    "선톡 문안",
+    body,
+  );
 };
 
 const systemText = (raw: string | null): string => {
@@ -764,7 +789,16 @@ export const afterNightlyTrace = (
         kind: "nightly",
         dedupeKey: parentKey,
         threadKey: parentKey,
-        text: headText(g, out, snap, after, afterProfile, result, afterStage, firsts),
+        text: headText(
+          g,
+          out,
+          snap,
+          after,
+          afterProfile,
+          result,
+          afterStage,
+          firsts,
+        ),
       });
       memoryChild(g, out, snap, parentKey);
       progressChild(g, out, snap, parentKey);

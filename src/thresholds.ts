@@ -267,7 +267,7 @@ export const TAG_PICK_MAX = 8;
 // 코드가 어제까지의 값을 세어 문턱을 재고, 넘길지는 모델이 정한다. 세는 자리와 판정 함수는
 // relationship-stage.ts에 있다. 여기는 값만 둔다.
 
-/** 1→2. 최소 체류와 대화한 날, 유저가 먼저 건 날, 캐릭터가 자기 얘기를 연 날. */
+/** 1→2. 최소 체류와 대화한 날, 유저가 먼저 건 날, 유저가 자기 얘기를 연 날. */
 export const STAGE_1_TO_2 = {
   stayDays: 5,
   talkedDays: 5,

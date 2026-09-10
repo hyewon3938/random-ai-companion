@@ -31,6 +31,7 @@ const {
   addSchedule,
   confirmFirst,
   deleteUnconfirmedFirst,
+  getConfirmedFirsts,
   getRelationship,
   insertDiary,
   insertFirst,
@@ -43,13 +44,11 @@ const {
   setTags,
   updateRelationshipNotes,
 } = await import("../src/db.js");
-const { beforeNightlyTrace, afterNightlyTrace } = await import(
-  "../src/nightly-trace.js"
-);
+const { beforeNightlyTrace, afterNightlyTrace } =
+  await import("../src/nightly-trace.js");
 const { saveMemory } = await import("../src/memory.js");
-const { createFixtureCharacter } = await import(
-  "../src/eval/fixture-character.js"
-);
+const { createFixtureCharacter } =
+  await import("../src/eval/fixture-character.js");
 
 const CHAT_ID = "1";
 const characterId = createFixtureCharacter(CHAT_ID);
@@ -148,11 +147,14 @@ const standaloneOf = (kinds: string[]): EventRow[] =>
 
 const childrenOf = (diaryDate: string): EventRow[] =>
   db
-    .prepare(`SELECT ${COLS} FROM trace_events WHERE parent_key = ? ORDER BY id`)
+    .prepare(
+      `SELECT ${COLS} FROM trace_events WHERE parent_key = ? ORDER BY id`,
+    )
     .all(parentKeyOf(diaryDate)) as EventRow[];
 
 // 본문 첫 줄에는 지금 시각이 들어가서 날짜 표시까지만 맞춰 본다.
-const HEAD_LINE = /^:crescent_moon: \*(\d+\/\d+\([일월화수목금토]\)) 새벽 정리\* · \d{2}:\d{2}:\d{2}\n\n/;
+const HEAD_LINE =
+  /^:crescent_moon: \*(\d+\/\d+\([일월화수목금토]\)) 새벽 정리\* · \d{2}:\d{2}:\d{2}\n\n/;
 
 test("skip 결과면 게시함에 아무것도 쌓지 않는다", () => {
   const g = gathered({ diaryDate: "2026-08-31" });
@@ -229,16 +231,44 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
         met: true,
         conditions: [
           { key: "stay_days", name: "체류 일수", value: 8, need: 5, met: true },
-          { key: "talked_days", name: "대화한 날", value: 6, need: 5, met: true },
-          { key: "user_first_days", name: "유저가 먼저 건 날", value: 3, need: 2, met: true },
-          { key: "self_story_days", name: "유저가 자기 얘기를 연 날", value: 2, need: 2, met: true },
+          {
+            key: "talked_days",
+            name: "대화한 날",
+            value: 6,
+            need: 5,
+            met: true,
+          },
+          {
+            key: "user_first_days",
+            name: "유저가 먼저 건 날",
+            value: 3,
+            need: 2,
+            met: true,
+          },
+          {
+            key: "self_story_days",
+            name: "유저가 자기 얘기를 연 날",
+            value: 2,
+            need: 2,
+            met: true,
+          },
         ],
       },
       firstsDone: [],
       firstsOpen: ["first_self_story", "first_waited"],
       firstsPending: [
-        { id: laugh, kind: "first_laugh", by: "character", happenedAt: "2026-09-08 21:00:00" },
-        { id: remember, kind: "first_remember", by: "character", happenedAt: "2026-09-08 20:00:00" },
+        {
+          id: laugh,
+          kind: "first_laugh",
+          by: "character",
+          happenedAt: "2026-09-08 21:00:00",
+        },
+        {
+          id: remember,
+          kind: "first_remember",
+          by: "character",
+          happenedAt: "2026-09-08 20:00:00",
+        },
       ],
       moveCandidates: ["remember", "notice"],
       rapportMoves: [],
@@ -288,11 +318,18 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
   confirmFirst(selfStory);
   assert.equal(raiseStage(characterId, 2, "2026-09-09"), true);
 
-  afterNightlyTrace(g, out, snap, "ok: 일기 저장, 단계 1→2, 처음 확정 1건, 처음 취소 1건, 상대가 먼저 한 처음 1건, 오늘 의도");
+  afterNightlyTrace(
+    g,
+    out,
+    snap,
+    "ok: 일기 저장, 단계 1→2, 처음 확정 1건, 처음 취소 1건, 상대가 먼저 한 처음 1건, 오늘 의도",
+  );
 
   const head = parentOf("2026-09-08");
   assert.ok(head);
-  const block = head.text.split("\n\n").find((p) => p.startsWith("*관계 단계*"));
+  const block = head.text
+    .split("\n\n")
+    .find((p) => p.startsWith("*관계 단계*"));
   assert.ok(block);
   assert.equal(
     block,
@@ -325,16 +362,196 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
     assert.equal(e.thread_key, null);
   }
   const stage = events[0].text;
-  assert.match(stage, /^:arrow_up: \*단계 전이\* 1단계 → 2단계 · \d{2}:\d{2}:\d{2}\n/);
+  assert.match(
+    stage,
+    /^:arrow_up: \*단계 전이\* 1단계 → 2단계 · \d{2}:\d{2}:\d{2}\n/,
+  );
   assert.match(stage, /> 1단계에 2026-09-01부터 8일 머묾/);
   assert.match(stage, /> 근거: 근황을 먼저 묻고 자기 얘기를 꺼낸다$/);
-  assert.match(events[1].text, /처음 확정\* 웃기기 · 캐릭터 · 09-08 21:00 · 메시지 #41 · 확정됨/);
+  assert.match(
+    events[1].text,
+    /처음 확정\* 웃기기 · 캐릭터 · 09-08 21:00 · 메시지 #41 · 확정됨/,
+  );
   assert.match(events[2].text, /처음 취소\* 기억해서 챙기기/);
-  assert.match(events[3].text, /처음 확정\* 자기 얘기 · 유저 · 09-08 22:10 · 상대가 먼저 한 것/);
+  assert.match(
+    events[3].text,
+    /처음 확정\* 자기 얘기 · 유저 · 09-08 22:10 · 상대가 먼저 한 것/,
+  );
 
   // 같은 밤을 다시 돌려도 같은 게시가 두 번 나가지 않는다.
   afterNightlyTrace(g, out, snap, "ok: 일기 저장");
   assert.equal(standaloneOf(["stage_change", "first_event"]).length, 4);
+});
+
+test("관계 절이 없는 회차의 후보 확정과, 후보를 지우고 같은 종류를 유저 쪽으로 새로 적은 밤이 게시된다", () => {
+  const remember = insertFirst({
+    characterId,
+    chatId: CHAT_ID,
+    kind: "first_remember",
+    by: "character",
+    happenedAt: "2026-09-10 20:00:00",
+  });
+  const waited = insertFirst({
+    characterId,
+    chatId: CHAT_ID,
+    kind: "first_waited",
+    by: "user",
+    happenedAt: "2026-09-10 21:00:00",
+  });
+  assert.ok(remember !== undefined && waited !== undefined);
+  const g = gathered({
+    diaryDate: "2026-09-10",
+    today: "2026-09-11",
+    todayLabel: "9/11(금)",
+    relation: {
+      stageNo: 2,
+      stageSince: "2026-09-09",
+      stayDays: 2,
+      threshold: { from: 2, to: 3, met: false, conditions: [] },
+      firstsDone: [
+        { kind: "first_laugh", by: "character", date: "2026-09-08" },
+        { kind: "first_self_story", by: "user", date: "2026-09-08" },
+      ],
+      firstsOpen: [],
+      firstsPending: [
+        {
+          id: remember,
+          kind: "first_remember",
+          by: "character",
+          happenedAt: "2026-09-10 20:00:00",
+        },
+        {
+          id: waited,
+          kind: "first_waited",
+          by: "user",
+          happenedAt: "2026-09-10 21:00:00",
+        },
+      ],
+      moveCandidates: [],
+      rapportMoves: [],
+      yesterdayIntent: null,
+      yesterdayMoves: [],
+      confessionDue: false,
+    },
+  });
+  // 관계 절이 통째로 없는 출력 — 반영 자리는 후보를 그대로 확정한다.
+  const out: NightlyOutput = {
+    entry: entry("조용한 하루"),
+    extract: { memories: [], schedules: [] },
+  };
+  const snap = beforeNightlyTrace(g, out);
+  assert.ok(snap);
+
+  // 반영 트랜잭션이 할 일을 손으로 한다 — 하나는 확정, 하나는 지우고 같은 종류를 유저 쪽 행으로.
+  confirmFirst(remember);
+  deleteUnconfirmedFirst(waited);
+  const waitedByUser = insertFirst({
+    characterId,
+    chatId: CHAT_ID,
+    kind: "first_waited",
+    by: "user",
+    happenedAt: "2026-09-10 21:30:00",
+  });
+  assert.ok(waitedByUser !== undefined);
+  confirmFirst(waitedByUser);
+
+  afterNightlyTrace(
+    g,
+    out,
+    snap,
+    "ok: 일기 저장, 처음 확정 1건, 처음 취소 1건, 상대가 먼저 한 처음 1건",
+  );
+
+  const head = parentOf("2026-09-10");
+  assert.ok(head);
+  const block = head.text
+    .split("\n\n")
+    .find((p) => p.startsWith("*관계 단계*"));
+  assert.equal(
+    block,
+    [
+      "*관계 단계*",
+      "> 2단계 2026-09-09부터 2일 · 다음 문턱 2→3 안 찼음",
+      "> 처음 확정: 기억해서 챙기기 · 캐릭터 · 09-10 20:00",
+      "> 처음 취소: 기다렸다는 말",
+      "> 상대가 먼저 한 처음: 기다렸다는 말 · 유저 · 09-10 21:30",
+    ].join("\n"),
+  );
+  const events = standaloneOf(["first_event"]).filter((e) =>
+    e.dedupe_key?.includes(":2026-09-10:"),
+  );
+  assert.deepEqual(
+    events.map((e) => e.dedupe_key),
+    [
+      `first:${characterId}:first_remember:2026-09-10:confirm`,
+      `first:${characterId}:first_waited:2026-09-10:cancel`,
+      `first:${characterId}:first_waited:2026-09-10:user`,
+    ],
+  );
+});
+
+test("넘기자는 출력을 반영하지 않은 회차는 단계 그대로 줄과 결과 줄의 까닭이 함께 보인다", () => {
+  // 앞 시험들이 확정해 둔 처음은 수집 값의 firstsDone에 들어 있어야 상대가 먼저 한 처음으로 다시 안 잡힌다.
+  const g = gathered({
+    diaryDate: "2026-09-11",
+    today: "2026-09-12",
+    todayLabel: "9/12(토)",
+    relation: {
+      stageNo: 1,
+      stageSince: "2026-09-01",
+      stayDays: 0,
+      threshold: { from: 1, to: 2, met: false, conditions: [] },
+      firstsDone: getConfirmedFirsts(characterId).map((f) => ({
+        kind: f.kind,
+        by: f.by,
+        date: f.happened_at.slice(0, 10),
+      })),
+      firstsOpen: [],
+      firstsPending: [],
+      moveCandidates: [],
+      rapportMoves: [],
+      yesterdayIntent: null,
+      yesterdayMoves: [],
+      confessionDue: false,
+    },
+  });
+  const out: NightlyOutput = {
+    entry: entry("평범한 하루"),
+    extract: {
+      memories: [],
+      schedules: [],
+      relation: { advance: { go: true, basis: "느낌이 그렇다" } },
+    },
+  };
+  const snap = beforeNightlyTrace(g, out);
+  assert.ok(snap);
+  afterNightlyTrace(
+    g,
+    out,
+    snap,
+    "ok: 2026-09-11 일기 응고 (대화 3개, 단계 전이 건너뜀(문턱이 안 찼는데 넘기자는 출력))",
+  );
+  const head = parentOf("2026-09-11");
+  assert.ok(head);
+  assert.match(head.text, /단계 전이 건너뜀\(문턱이 안 찼는데 넘기자는 출력\)/);
+  const block = head.text
+    .split("\n\n")
+    .find((p) => p.startsWith("*관계 단계*"));
+  assert.equal(
+    block,
+    [
+      "*관계 단계*",
+      "> 1단계 2026-09-01부터 0일 · 다음 문턱 1→2 안 찼음",
+      "> 넘김 판단: 넘긴다 — 느낌이 그렇다",
+      "> 단계는 그대로 — 반영 자리가 건너뜀, 까닭은 위 결과 줄에",
+    ].join("\n"),
+  );
+  assert.equal(
+    standaloneOf(["stage_change"]).some((e) =>
+      e.dedupe_key?.endsWith(":2026-09-11"),
+    ),
+    false,
+  );
 });
 
 test("일기 전문이 오늘 메모와 각본과 달라진 하루와 함께 붙는다", () => {
@@ -545,11 +762,7 @@ test("관계 항목과 상대 프로필이 바뀌면 전문 하나에 빠진 말
   );
   assert.ok(
     head.text.includes(
-      [
-        "*상대 프로필 갱신* 1항목",
-        "*하는 일*",
-        "> {+디자이너+}",
-      ].join("\n"),
+      ["*상대 프로필 갱신* 1항목", "*하는 일*", "> {+디자이너+}"].join("\n"),
     ),
   );
   assert.equal(childrenOf("2026-09-04").length, 0);
@@ -578,7 +791,12 @@ test("새 일정과 일정 시각 고침이 본문에 적힌다", () => {
           content: "친구 결혼식",
           tags: ["결혼식"],
         },
-        { who: "char", date: "2026-09-13", time_hint: null, content: "청주 내려감" },
+        {
+          who: "char",
+          date: "2026-09-13",
+          time_hint: null,
+          content: "청주 내려감",
+        },
       ],
       schedule_updates: [
         { id: dentistId, time_hint: "14:30" },

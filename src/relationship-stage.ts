@@ -69,7 +69,13 @@ import {
 export const STAGE_MOVES: Record<RelationshipStage, Move[]> = {
   1: ["remember", "laugh", "anticipate", "scene", "notice"],
   2: ["sudden_ping", "nickname", "weakness"],
-  3: ["late_night_truth", "jealousy_light", "dodge_after_direct", "only_you", "ask_help"],
+  3: [
+    "late_night_truth",
+    "jealousy_light",
+    "dodge_after_direct",
+    "only_you",
+    "ask_help",
+  ],
   4: [],
 };
 
@@ -139,13 +145,16 @@ const averageOf = (
   scores: ReactionScoreRow[],
   moves: Move[],
 ): number | null => {
-  const rows = scores.filter((s) => moves.includes(s.move) && s.sample_count > 0);
+  const rows = scores.filter(
+    (s) => moves.includes(s.move) && s.sample_count > 0,
+  );
   if (!rows.length) return null;
   return rows.reduce((a, r) => a + r.score, 0) / rows.length;
 };
 
-/** 마음 확인 사건이 있었는지. 캐릭터가 먼저 말했으면 그 뒤 같은 날 유저 턴의 판정이 받음이거나
- * 호감 표현이고, 유저가 먼저 말했으면 같은 날 호감 표현 판정이 있는 것이다. */
+/** 마음 확인 사건이 있었는지. 캐릭터가 먼저 말했으면 같은 날 바로 다음 유저 턴의 판정이 받음이거나
+ * 호감 표현인 것이고, 유저가 먼저 말했으면 같은 날 호감 표현 판정이 있는 것이다. 다음 턴만 보는
+ * 까닭은 몇 시간 뒤 다른 얘기에 붙은 판정을 고백의 답으로 읽지 않기 위해서다. */
 export const confessionExchangeOf = (
   firsts: FirstRow[],
   signals: RelationshipSignalRow[],
@@ -153,13 +162,15 @@ export const confessionExchangeOf = (
   const c = firsts.find((f) => f.kind === "first_confession");
   if (!c) return false;
   const day = logicalDateOf(c.happened_at);
-  if (c.by === "character")
-    return signals.some(
-      (s) =>
-        s.at > c.happened_at &&
-        logicalDateOf(s.at) === day &&
-        (s.move_reaction === "accepted" || s.said_affection === 1),
+  if (c.by === "character") {
+    const next = signals
+      .filter((s) => s.at > c.happened_at && logicalDateOf(s.at) === day)
+      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))[0];
+    return (
+      next !== undefined &&
+      (next.move_reaction === "accepted" || next.said_affection === 1)
     );
+  }
   return signals.some(
     (s) => logicalDateOf(s.at) === day && s.said_affection === 1,
   );
@@ -247,17 +258,47 @@ export const evaluateThreshold = (
     case 1:
       conditions = [
         atLeast("stay_days", "체류 일수", c.stayDays, STAGE_1_TO_2.stayDays),
-        atLeast("talked_days", "대화한 날", c.talkedDays, STAGE_1_TO_2.talkedDays),
-        atLeast("user_first_days", "유저가 먼저 건 날", c.userFirstDays, STAGE_1_TO_2.userFirstDays),
-        atLeast("self_story_days", "유저가 자기 얘기를 연 날", c.selfStoryDays, STAGE_1_TO_2.selfStoryDays),
+        atLeast(
+          "talked_days",
+          "대화한 날",
+          c.talkedDays,
+          STAGE_1_TO_2.talkedDays,
+        ),
+        atLeast(
+          "user_first_days",
+          "유저가 먼저 건 날",
+          c.userFirstDays,
+          STAGE_1_TO_2.userFirstDays,
+        ),
+        atLeast(
+          "self_story_days",
+          "유저가 자기 얘기를 연 날",
+          c.selfStoryDays,
+          STAGE_1_TO_2.selfStoryDays,
+        ),
       ];
       break;
     case 2:
       conditions = [
         atLeast("stay_days", "체류 일수", c.stayDays, STAGE_2_TO_3.stayDays),
-        atLeast("asked_char_days", "캐릭터 근황을 먼저 물은 날", c.askedCharDays, STAGE_2_TO_3.askedCharDays),
-        atLeast("stage_move_avg", "2단계에서 열린 수의 반응 점수 평균", round2(c.stageMoveAvg), STAGE_2_TO_3.moveAvgMin),
-        atLeast("affection_count", "유저 쪽 호감 표현", c.affectionCount, STAGE_2_TO_3.affectionCount),
+        atLeast(
+          "asked_char_days",
+          "캐릭터 근황을 먼저 물은 날",
+          c.askedCharDays,
+          STAGE_2_TO_3.askedCharDays,
+        ),
+        atLeast(
+          "stage_move_avg",
+          "2단계에서 열린 수의 반응 점수 평균",
+          round2(c.stageMoveAvg),
+          STAGE_2_TO_3.moveAvgMin,
+        ),
+        atLeast(
+          "affection_count",
+          "유저 쪽 호감 표현",
+          c.affectionCount,
+          STAGE_2_TO_3.affectionCount,
+        ),
       ];
       break;
     case 3:
@@ -290,7 +331,8 @@ export const confessionDueOf = (
 ): boolean =>
   stage === 3 &&
   !c.confessionExchange &&
-  ((c.stayDays >= STAGE_3_TO_4.confessionDueDays && c.stageScorePositive === true) ||
+  ((c.stayDays >= STAGE_3_TO_4.confessionDueDays &&
+    c.stageScorePositive === true) ||
     c.stayDays >= STAGE_3_TO_4.confessionDueDaysAnyScore);
 
 // ── 시도할 수 추천 목록 — relationship.md §6 ─────────────────────────────────
@@ -472,7 +514,10 @@ export const gatherRelation = (
       by: f.by,
       date: logicalDateOf(f.happened_at),
     })),
-    firstsOpen: openFirsts(stageNo, [...doneKinds, ...pending.map((f) => f.kind)]),
+    firstsOpen: openFirsts(stageNo, [
+      ...doneKinds,
+      ...pending.map((f) => f.kind),
+    ]),
     firstsPending: pending.map((f) => ({
       id: f.id,
       kind: f.kind,
@@ -511,7 +556,11 @@ export interface RelationOutput {
 }
 
 export interface RelationApplied {
-  advanced: { from: RelationshipStage; to: RelationshipStage; basis: string | null } | null;
+  advanced: {
+    from: RelationshipStage;
+    to: RelationshipStage;
+    basis: string | null;
+  } | null;
   /** 넘기자는 출력을 받았지만 반영하지 않은 까닭. 없으면 null. */
   advanceRejected: string | null;
   confirmed: FirstKind[];
@@ -542,7 +591,9 @@ const userFirstHappenedAt = (g: RelationContext): string => {
     dayStart(g.diaryDate),
     dayStart(shiftDate(g.diaryDate, 1)),
   ).filter((m) => m.role === "user");
-  return rows.length ? rows[rows.length - 1].sent_at : `${g.diaryDate} 12:00:00`;
+  return rows.length
+    ? rows[rows.length - 1].sent_at
+    : `${g.diaryDate} 12:00:00`;
 };
 
 /** 트랜잭션 안에서 부른다. 순서는 처음 → 단계 → 의도. */
@@ -560,13 +611,16 @@ export const applyRelationOutput = (
     intentSaved: false,
   };
   const rel = g.relation;
+  // 후보 종류에 대한 출력은 by가 무엇이든 그 후보의 판정이다 — 답장이 유저 쪽으로 적어 둔
+  // 후보를 모델이 by를 붙여 돌려줘도 지울 수 있게. 지우자는 출력이 하나라도 있으면 지운다.
+  const pendingKinds = new Set<FirstKind>(rel.firstsPending.map((p) => p.kind));
   const judged = new Map<FirstKind, boolean>();
   for (const f of out?.firsts ?? [])
-    if (f && isFirstKind(f.kind) && f.by !== "user")
-      judged.set(f.kind, f.keep !== false);
+    if (f && isFirstKind(f.kind) && pendingKinds.has(f.kind))
+      judged.set(f.kind, (judged.get(f.kind) ?? true) && f.keep !== false);
 
   // 처음 — 후보마다 모델이 지운 것만 지우고, 언급이 없는 후보는 확정한다. 답장이 표시한 처음을
-  // 모델이 빠뜨렸다고 잃지 않는다.
+  // 모델이 빠뜨렸다고 잃지 않는다. 관계 절이 통째로 없는 회차도 같다.
   for (const p of rel.firstsPending) {
     if (judged.get(p.kind) === false) {
       deleteUnconfirmedFirst(p.id);
@@ -576,15 +630,19 @@ export const applyRelationOutput = (
       r.confirmed.push(p.kind);
     }
   }
-  // 유저가 먼저 한 처음 — 아직 없는 종류만 새로 넣고 바로 확정한다. 이 단계까지 열린 종류만이다.
-  const doneNow = new Set<FirstKind>(getConfirmedFirsts(g.characterId).map((f) => f.kind));
+  // 유저가 먼저 한 처음 — 아직 없는 종류만 새로 넣고 바로 확정한다. 이 단계까지 열린 종류만이고,
+  // 방금 확정한 후보 종류는 이미 있는 것으로 센다.
+  const doneNow = new Set<FirstKind>(
+    getConfirmedFirsts(g.characterId).map((f) => f.kind),
+  );
   const openNow = new Set<FirstKind>(
     ([1, 2, 3, 4] as RelationshipStage[])
       .filter((s) => s <= rel.stageNo)
       .flatMap((s) => STAGE_FIRSTS[s]),
   );
   for (const f of out?.firsts ?? []) {
-    if (!f || f.by !== "user" || f.keep === false || !isFirstKind(f.kind)) continue;
+    if (!f || f.by !== "user" || f.keep === false || !isFirstKind(f.kind))
+      continue;
     if (doneNow.has(f.kind) || !openNow.has(f.kind)) continue;
     const id = insertFirst({
       characterId: g.characterId,
@@ -603,7 +661,8 @@ export const applyRelationOutput = (
   if (out?.advance?.go === true) {
     const target = rel.threshold.to;
     const live = getStage(g.characterId);
-    if (!rel.threshold.met || target === null)
+    if (target === null) r.advanceRejected = "마지막 단계라 넘길 곳이 없음";
+    else if (!rel.threshold.met)
       r.advanceRejected = "문턱이 안 찼는데 넘기자는 출력";
     else if (!live || live.stage_no !== rel.stageNo)
       r.advanceRejected = "수집 때와 단계가 달라 건너뜀";
@@ -621,10 +680,16 @@ export const applyRelationOutput = (
   // 의도 — 오늘 것만 적는다. 며칠 지난 새벽 정리를 다시 돌린 경우면 그날 의도는 이미 지났다.
   const it = out?.intent;
   if (it && shiftDate(g.diaryDate, 1) === g.today) {
-    const move = isMove(it.move) ? it.move : undefined;
+    // 수는 코드가 고른 후보 안에서만 받는다 — 점수가 낮아 뺀 수나 이 단계에 아직 안 연 수를
+    // 모델이 고르면 버린다.
+    const move =
+      isMove(it.move) && rel.moveCandidates.includes(it.move)
+        ? it.move
+        : undefined;
     let moveNote = cleanLine(it.move_note);
-    // 고백 차례의 "마음 확인"은 수 코드가 아니라 move를 비우고 자리를 적는 줄로 남긴다.
-    if (!move && !moveNote && typeof it.move === "string" && it.move.trim())
+    // 고백 차례의 "마음 확인"은 수 코드가 아니라 move를 비우고 자리를 적는 줄로 남긴다. 고백
+    // 차례가 아닌 날의 코드 아닌 move는 버린다.
+    if (rel.confessionDue && !moveNote && !isMove(it.move))
       moveNote = cleanLine(it.move);
     const v = {
       dig: cleanLine(it.dig),
@@ -638,7 +703,8 @@ export const applyRelationOutput = (
           ? JSON.stringify(it.basis)
           : undefined,
     };
-    if (v.dig || v.share || v.move || v.moveNote || v.thread) {
+    // 결 하나만 있어도 적는다 — 아침 선톡이 앞세울 결만 따르는 날이 있다.
+    if (v.dig || v.share || v.move || v.moveNote || v.leadTone || v.thread) {
       saveRelationshipIntent(g.characterId, g.today, v, now);
       pruneRelationshipIntents();
       r.intentSaved = true;

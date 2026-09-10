@@ -226,7 +226,11 @@ export interface ExtractOutput {
   // 옵셔널인 이유는 이 항목을 아직 안 만드는 생성 경로가 있어서다(이슈 #278).
   // user_knows는 그날 대화에서 상대에게 말한 일정에만 known으로 온다 — 시각과 달리 되돌리는
   // 값은 받지 않아서, 이 자리에 known 말고 다른 값이 와도 반영하지 않는다(이슈 #345).
-  schedule_updates?: { id: number; time_hint?: string; user_knows?: UserKnows }[];
+  schedule_updates?: {
+    id: number;
+    time_hint?: string;
+    user_knows?: UserKnows;
+  }[];
   // 관계 절 — 넘길지와 근거, 처음 확정, 오늘의 관계 의도. 아직 이 절을 안 만드는 생성 경로가
   // 있어 옵셔널이고, 없으면 처음 후보만 확정하고 단계와 의도는 건드리지 않는다.
   relation?: RelationOutput | null;
@@ -564,12 +568,7 @@ export const gatherNightlyInput = (
       [convo, ...todayNotes].join("\n"),
     ),
     relationship: relationshipLines(getRelationship(character.id)),
-    relation: gatherRelation(
-      character.id,
-      character.chat_id,
-      diaryDate,
-      today,
-    ),
+    relation: gatherRelation(character.id, character.chat_id, diaryDate, today),
     userState: userStateLine(getRelationship(character.id), diaryDate),
     userProfile: userProfileLines(character.chat_id),
     todayNotes,
@@ -915,7 +914,7 @@ const applyNightlyTxn = db.transaction(
       (relNow.user_state_since ?? "") < `${nextDate(g.diaryDate)} 05:00:00`;
     if (stateCleared) setUserState(g.characterId, null);
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.advanceRejected ? `, 단계 전이 건너뜀(${rel.advanceRejected})` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
@@ -950,7 +949,14 @@ export const missingDiaryDates = (
       new Date(shifted.getTime() - (i - 1) * 24 * 3600_000),
     );
     if (hasDiaryOn(characterId, d)) continue;
-    if (hasMessageBetween(chatId, characterId, `${d} 05:00:00`, `${next} 05:00:00`))
+    if (
+      hasMessageBetween(
+        chatId,
+        characterId,
+        `${d} 05:00:00`,
+        `${next} 05:00:00`,
+      )
+    )
       out.push(d);
   }
   return out;
@@ -1159,6 +1165,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
   // 결번 백필: '어제'보다 오래된 미응고 날짜(대화는 있는데 일기가 없는 날)를 먼저 처리한다.
   // 새벽 정리가 며칠 안 돌았어도 중간 날짜의 기억·일정 정리가 영구히 빠지지 않게. 각본·선톡은
   // 오늘 것만 의미가 있으므로 백필에서는 만들지 않는다.
+  let backfilled = 0;
   for (const d of missingDiaryDates(g.characterId, g.chatId).filter(
     (x) => x < g.diaryDate,
   )) {
@@ -1178,8 +1185,17 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
         config.modelDeep,
         { purpose: "extract", characterId: bg.characterId, chatId: bg.chatId },
       );
+      // 백필 회차는 관계 절에서 처음 확정만 받는다 — 며칠 지난 날의 값으로 단계를 올리거나
+      // 그날 의도를 적지 않게. 의도는 applyRelationOutput이 날짜로 한 번 더 거른다.
+      const backfillExtract: ExtractOutput = {
+        ...extract,
+        relation: extract.relation
+          ? { firsts: extract.relation.firsts ?? null }
+          : null,
+      };
+      backfilled += 1;
       console.log(
-        `[nightly] 백필 ${applyNightlyOutput(bg, { entry, extract })}`,
+        `[nightly] 백필 ${applyNightlyOutput(bg, { entry, extract: backfillExtract })}`,
       );
     } catch (e) {
       // 백필 하루 실패가 오늘(어제 일기) 처리까지 막지 않게 — 다음 새벽에 같은 날짜를 재시도한다
@@ -1189,6 +1205,9 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
       );
     }
   }
+  // 백필이 처음을 확정했으면 오늘 회차의 관계 값은 수집 때와 달라져 있다 — 다시 읽는다.
+  if (backfilled)
+    g.relation = gatherRelation(g.characterId, g.chatId, g.diaryDate, g.today);
 
   if (g.diaryExists) {
     // 정식(어제 일기 반영) 각본 확보 — 새벽 대화가 만든 lazy 각본이 있으면 교체된다
