@@ -1,15 +1,21 @@
 // 침묵 팔로업 — 답이 끊긴 자리에 한 통 보낸다(15분 틱).
 //
-// 관제탑을 통과할 때만 보낸다. 넷이다.
+// 관제탑을 통과할 때만 보낸다. 다섯이다.
 //   낮 근황   — 유저의 마지막 말도 캐릭터의 마지막 말도 4시간 넘게 지났으면 하루 1통. 보낸 뒤에도
 //               답이 없으면 그날은 물러난다. 그날 미리 만들어 둔 선톡이 아직 안 나갔으면 그것을
 //               먼저 내보내고 기다린다.
 //   점심      — 무응답 이틀째 12:05~12:50에 1통. 그날은 아침 선톡과 이 한 통이 나가고 낮 근황은
 //               겹치지 않는다(이슈 #314).
+//   의도      — 오늘의 관계 의도 네 줄 가운데 아직 안 쓴 줄 하나로 먼저 거는 한 통. 각본이 답할
+//               수 있는 블록이고 양쪽 마지막 말이 2시간 넘게 지난 09~23시에 나간다. 하루 몇 통까지
+//               쓸 수 있는지는 관계 단계가 정한다(설계 원본 §7).
 //   밤 인사   — 자정~새벽 5시에 유저가 잔다는 말 없이 1시간 넘게 조용하면 1회.
 //   달래기    — 관계 행의 상대 상태(user-state가 답장마다 판정)가 나 때문에 안 좋은데 그 뒤로
 //               답이 끊기면 30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다. 어떤 상태를
 //               보고 나가는 통인지는 문안 호출 행에 남겨 슬랙 문안 게시가 머리에 적는다.
+//
+// 근황·점심·의도는 하루 합계 상한을 함께 쓴다. 밤 인사는 하루를 닫는 인사라, 달래기는 상대
+// 상태가 부르는 한 통이라 합계에서 뺀다(proactive-policy의 OFF_BUDGET).
 //
 // 문안은 대화와 같은 3층(buildSystemBlocks)에 상황 문단을 더해 만든다 — 앞 두 층 캐시를
 // 대화와 함께 쓴다. 경과 시간은 Date.now()로 잰다(getKstNow().getTime()은 9시간 어긋난다).
@@ -22,18 +28,28 @@ import {
   getActiveCharacter,
   getActiveCharacters,
   getRelationship,
+  getRelationshipIntent,
   hasPendingSendOn,
   lastMessage,
   lastUserTs,
+  type RelationshipIntentRow,
 } from "./db.js";
 import { currentBlock } from "./context.js";
+import { intentLineText } from "./context/relationship.js";
+import { INTENT_LINE_NAME, type IntentLine } from "./labels.js";
+import { isWaiting } from "./pending.js";
 import {
+  budgetAllows,
+  budgetLabel,
+  budgetedSinceLastUser,
   lunchDueToday,
   mendSentSince,
+  pickIntentLine,
   proactiveAllowed,
-  proactiveCountToday,
+  proactiveBudget,
   proactiveKindCountToday,
   proactiveSinceLastUser,
+  usedIntentLines,
 } from "./proactive-policy.js";
 import {
   noOverlap,
@@ -53,9 +69,10 @@ import { userStateLabel } from "./user-state.js";
 import {
   GOODNIGHT_SILENCE_MS,
   GOODNIGHT_WINDOW,
+  INTENT_QUIET_MS,
+  INTENT_WINDOW,
   LUNCH_WINDOW,
   MEND_SILENCE_MS,
-  PROACTIVE_DAILY_MAX,
   RECENT_USER_MS,
 } from "./thresholds.js";
 
@@ -100,15 +117,29 @@ export const catchupSilenceOk = (
   );
 };
 
-export const goodnightSituation = (): string =>
-  [
-    `[문안 — 지금 보낼 굿나잇 한 통]`,
-    `자정을 넘겨 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 한 시간쯤 됐다. 잠든 것 같다. 너도 자러 가며 다정하게 굿나잇 인사를 남긴다 — 상대가 아침에 보면 기분 좋을 결로.`,
-    `- 매번 다르게, 자연스럽게. 재촉하거나 매달리지 않는다.`,
-    `- 1~2개 말풍선(줄바꿈 구분).`,
-    ``,
+// 상황 문단 한 벌로 잇는다 — 값이 없는 줄은 빼고, 마지막 응답 형식 앞에만 빈 줄을 둔다.
+const situationText = (head: string[], format: string): string =>
+  [...head.filter(Boolean), ``, format].join("\n");
+
+export const goodnightSituation = (
+  intent: RelationshipIntentRow | null,
+): string => {
+  // 오늘의 의도 가운데 이어갈 자리 줄을 인사에 얹는다 — 하루를 닫는 말이 다음 날 이어질 자리를
+  // 하나 남겨 두는 것이라 이 줄이 여기로 온다(설계 원본 §4).
+  const thread = intentLineText(intent, "thread");
+  return situationText(
+    [
+      `[문안 — 지금 보낼 굿나잇 한 통]`,
+      `자정을 넘겨 상대와 대화하다 상대가 잔다는 말 없이 답이 끊긴 지 한 시간쯤 됐다. 잠든 것 같다. 너도 자러 가며 다정하게 굿나잇 인사를 남긴다 — 상대가 아침에 보면 기분 좋을 결로.`,
+      `- 매번 다르게, 자연스럽게. 재촉하거나 매달리지 않는다.`,
+      thread
+        ? `- 오늘 이어갈 자리로 둔 건 이거다: ${thread}. 오늘 그 얘기가 실제로 나왔으면 인사 끝에 한 자락만 남긴다 — 묻지 말고, 안 나왔으면 그냥 둔다.`
+        : ``,
+      `- 1~2개 말풍선(줄바꿈 구분).`,
+    ],
     `JSON으로만 답한다: {"text":"..."}`,
-  ].join("\n");
+  );
+};
 
 export const mendSituation = (): string =>
   [
@@ -134,18 +165,57 @@ export const lunchSituation = (): string =>
     `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
   ].join("\n");
 
-export const catchupSituation = (): string =>
-  [
-    `[문안 — 지금 보낼 근황 한 통]`,
-    `상대가 네 시간 넘게 조용하다. 재촉하지 않고 위 [지금]에서 네가 하는 일만 가볍게 한 마디 전한다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,
-    `- 막 시작하는 참이면 이제 그걸 하러 간다고 가볍게 흘리는 결.`,
-    `- 자기 삶 공유가 핵심. 가볍게 질문 하나 얹어도 좋다.`,
-    `- 재촉하지 않는다. 왜 답이 없냐고 묻거나 답을 요구하지 않는다. 기다리고 있다는 티는 네 성격대로 한 마디까지다.`,
-    `- 지금 상황에서 이 말이 억지스러우면 send=false.`,
-    `- 1~2개 말풍선(줄바꿈 구분).`,
-    ``,
+/**
+ * 근황 선톡의 상황 문단 — 지금 하는 일에서 상대가 전에 한 말이 떠올랐으면 그 말을 꺼낸다.
+ *
+ * 예전에는 캐릭터가 지금 하는 일만 전하는 한 통이라, 매일 자기 하루를 보고하는 꼴이 됐다.
+ * 먼저 거는 말의 사물은 상대 쪽에서 와야 해서 기본 모양을 뒤집었다(설계 원본 §4). 재료는 3층
+ * 꼬리에 함께 들어간다 — 태그 없이 고른 상대 쪽 기억과 최근 대화 12줄이다(이슈 #343).
+ *
+ * 오늘의 의도 가운데 흘릴 내 얘기와 파고들 것 두 줄이 여기로 온다. 흘릴 내 얘기는 1단계에서
+ * 의도 선톡이 되지 않고 이 한 통에 얹히는 줄이다.
+ */
+export const catchupSituation = (
+  intent: RelationshipIntentRow | null,
+): string => {
+  const share = intentLineText(intent, "share");
+  const dig = intentLineText(intent, "dig");
+  return situationText(
+    [
+      `[문안 — 지금 보낼 근황 한 통]`,
+      `상대가 네 시간 넘게 조용하다. 재촉하지 않고 먼저 한 마디 건다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,
+      `- 기본은 이거다. 위 [지금]에서 네가 하는 일이 [상대가 전에 한 말]이나 [방금까지 오간 말] 가운데 무엇을 떠올리게 하면, 그 말을 꺼낸다. 상대가 전에 했던 말이 지금 장면과 이어질 때 그렇게 연다.`,
+      `- 떠오르는 게 없으면 네가 하는 일만 가볍게 한 마디 전한다. 막 시작하는 참이면 이제 그걸 하러 간다고 흘리는 결.`,
+      share ? `- 오늘 흘릴 내 얘기로 둔 건 이거다: ${share}. 지금 장면에 얹을 자리가 있으면 흘린다.` : ``,
+      dig ? `- 오늘 파고들 것으로 둔 건 이거다: ${dig}. 물어볼 자리가 열리면 하나만 묻는다.` : ``,
+      `- 재촉하지 않는다. 왜 답이 없냐고 묻거나 답을 요구하지 않는다. 기다리고 있다는 티는 네 성격대로 한 마디까지다.`,
+      `- 지금 상황에서 이 말이 억지스러우면 send=false.`,
+      `- 1~2개 말풍선(줄바꿈 구분).`,
+    ],
     `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
-  ].join("\n");
+  );
+};
+
+/**
+ * 의도 선톡의 상황 문단 — 오늘의 의도 네 줄 가운데 아직 안 쓴 줄 하나를 넣는다.
+ *
+ * 다른 선톡은 각본의 시각이 부르지만 이 한 통은 오늘 하려던 것이 부른다. 어느 줄을 썼는지는
+ * 발송 기록의 intent_line으로 세므로 여기서 고른 줄을 그대로 발송 쪽에 넘긴다(설계 원본 §7).
+ */
+export const intentSituation = (line: IntentLine, text: string): string =>
+  situationText(
+    [
+      `[문안 — 지금 보낼 한 통]`,
+      `오늘 상대에게 하려던 것 가운데 이게 아직 남았다. ${INTENT_LINE_NAME[line]}: ${text}`,
+      `상대도 너도 두 시간 넘게 말이 없다. 용건이 있어서가 아니라 그게 떠올라서 먼저 거는 한 통이다.`,
+      `- 말을 여는 사물은 위 [상대가 전에 한 말]이나 [방금까지 오간 말]에서 가져온다. 네 하루를 보고하듯 열지 않는다.`,
+      `- 위 줄을 그대로 읊지 않는다. 무슨 말을 걸지 네가 정해 둔 메모지, 상대에게 알릴 내용이 아니다.`,
+      `- 답을 재촉하지 않는다. 왜 조용하냐고 묻지 않는다.`,
+      `- 지금 상황에서 이 말이 억지스러우면 send=false.`,
+      `- 1~2개 말풍선(줄바꿈 구분).`,
+    ],
+    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
+  );
 
 // 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
 const followupTickBody = async (): Promise<void> => {
@@ -162,6 +232,11 @@ const followupTickBody = async (): Promise<void> => {
 
     const lu = lastUserTs(c.chat_id, c.id);
     if (!lu) continue;
+
+    // 오늘의 관계 의도. 밤 인사는 이어갈 자리 줄을, 근황은 흘릴 내 얘기와 파고들 것을, 의도
+    // 선톡은 아직 안 쓴 줄 하나를 여기서 꺼낸다(설계 원본 §4).
+    const today = kstLogicalDate();
+    const intent = getRelationshipIntent(c.id, today) ?? null;
 
     // 밤 인사 선톡: 자정을 넘겨 대화하다 유저가 '잔다'는 말 없이 한 시간 답이 없으면, 잠든 것으로
     // 보고 다정한 인사를 한 번 남긴다(아침에 보면 설렘). 이미 굿나잇을 주고받았으면 보내지 않는다.
@@ -186,7 +261,7 @@ const followupTickBody = async (): Promise<void> => {
         chatId: c.chat_id,
         kind: "goodnight",
         lastSentAt: last.sent_at,
-        situation: goodnightSituation(),
+        situation: goodnightSituation(intent),
         maxTokens: 300,
         read: readText,
         label: "[followup] 굿나잇",
@@ -202,14 +277,14 @@ const followupTickBody = async (): Promise<void> => {
     //
     // 각본이 잠 블록이어도 보낸다. 근황 선톡에 있는 답장 가능 구간 검사를 여기엔 걸지 않는데,
     // 밤 인사가 이미 같은 대우를 받고 있어 새 동작이 아니고 서운하게 해 놓고 답도 못 받은 채
-    // 그냥 자는 쪽이 오히려 사람과 멀다.
+    // 그냥 자는 쪽이 오히려 사람과 멀다. 하루 합계 상한도 보지 않는다 — 상대 상태가 부르는
+    // 한 통이라 그날 몇 통이 나갔든 이 자리는 열려 있어야 한다(설계 원본 §7).
     const rel = getRelationship(c.id);
     if (
       minutesSince(lu) >= MEND_SILENCE_MS / 60_000 &&
       rel?.user_state_tone === "bad" &&
       rel.user_state_cause === "char" &&
-      !mendSentSince(c.chat_id, c.id, rel.user_state_since ?? lu) &&
-      proactiveCountToday(c.chat_id, c.id, dayStart()) < PROACTIVE_DAILY_MAX
+      !mendSentSince(c.chat_id, c.id, rel.user_state_since ?? lu)
     ) {
       await sendProactiveDraft({
         characterId: c.id,
@@ -235,12 +310,13 @@ const followupTickBody = async (): Promise<void> => {
     // 시각의 각본에서 읽어 쓰기 위해서다. 침묵 조건은 걸지 않는다 — 아침 선톡에서 세 시간쯤
     // 지난 자리라 네 시간을 채우지 못하는데, 이 한 통은 그 침묵과 무관하게 그날 몫으로 나간다.
     // 15분 틱이 창 안에 세 번 들어오므로 불가 구간에 걸려 한 번 접혀도 다시 온다.
+    const budget = proactiveBudget(c.chat_id, c.id, dayStart());
     if (
       lunchDueToday(c.chat_id, c.id) &&
       now >= LUNCH_WINDOW.start &&
       now < LUNCH_WINDOW.end &&
       proactiveKindCountToday(c.chat_id, c.id, dayStart(), "lunch") < 1 &&
-      proactiveCountToday(c.chat_id, c.id, dayStart()) < PROACTIVE_DAILY_MAX
+      budgetAllows(budget, "lunch")
     ) {
       const lunchBlock = currentBlock(c.id);
       if (lunchBlock && lunchBlock.responsiveness !== "unavailable") {
@@ -254,6 +330,57 @@ const followupTickBody = async (): Promise<void> => {
           read: readSendText,
           label: "[followup] 점심",
           sentLog: `[followup] lunch to ${c.chat_id} @ ${lunchBlock.activity}`,
+        });
+        continue;
+      }
+    }
+
+    // 의도 선톡: 오늘의 관계 의도 네 줄 가운데 아직 안 쓴 줄 하나를 근거로 먼저 건다.
+    //
+    // 다른 선톡은 각본의 시각이 부른다 — 아침이라서, 점심이라서, 네 시간 조용해서. 이 한 통만
+    // 오늘 하려던 것이 부르고, 그래서 2단계부터는 용건 없이 오는 연락이 열린다. 조건은 설계
+    // 원본 §7 그대로다. 답할 수 있는 블록, 양쪽 마지막 말이 둘 다 2시간 넘게 전, 09~23시,
+    // 아직 안 쓴 줄이 있을 것, 대기 중인 답장이 없을 것.
+    //
+    // 여기에 하나를 더 본다. 유저의 마지막 말 뒤로 합계에 드는 선톡이 이미 나갔으면 보내지
+    // 않는다 — 답이 없는 위에 이유 없는 연락을 또 얹으면 물러난다는 원칙과 어긋나고, 무응답
+    // 이틀째의 아침·점심 두 통(이슈 #314) 위에 한 통이 더 붙는다.
+    const intentQuiet = INTENT_QUIET_MS / 60_000;
+    if (
+      budgetAllows(budget, "intent") &&
+      now >= INTENT_WINDOW.start &&
+      now < INTENT_WINDOW.end &&
+      minutesSince(lu) >= intentQuiet &&
+      minutesSince(last.sent_at) >= intentQuiet &&
+      budgetedSinceLastUser(c.chat_id, c.id) < 1 &&
+      !isWaiting(c.chat_id) &&
+      !hasPendingSendOn(c.id, today)
+    ) {
+      const line = pickIntentLine(
+        intent,
+        budget.stage,
+        usedIntentLines(c.chat_id, c.id, dayStart()),
+      );
+      const text = line ? intentLineText(intent, line) : null;
+      const intentBlock = currentBlock(c.id);
+      if (
+        line &&
+        text &&
+        intentBlock &&
+        intentBlock.responsiveness !== "unavailable"
+      ) {
+        await sendProactiveDraft({
+          characterId: c.id,
+          chatId: c.chat_id,
+          kind: "intent",
+          lastSentAt: last.sent_at,
+          situation: intentSituation(line, text),
+          maxTokens: 500,
+          read: readSendText,
+          // 어느 줄을 썼는지는 발송 기록의 intent_line으로 센다(usedIntentLines).
+          extraMeta: { intent_line: line },
+          label: "[followup] 의도",
+          sentLog: `[followup] intent(${line}) to ${c.chat_id} · ${budgetLabel(budget)}`,
         });
         continue;
       }
@@ -273,9 +400,8 @@ const followupTickBody = async (): Promise<void> => {
     if (proactiveKindCountToday(c.chat_id, c.id, dayStart(), "lunch") >= 1) continue;
     // 근황은 하루 한 통. 보낸 뒤에도 답이 없으면 그날은 더 보내지 않고 다음 날 아침으로 넘긴다.
     if (proactiveKindCountToday(c.chat_id, c.id, dayStart(), "catchup") >= 1) continue;
-    // 하루 절대 상한(안전장치, 자리비움을 뺀 선톡 합산)
-    if (proactiveCountToday(c.chat_id, c.id, dayStart()) >= PROACTIVE_DAILY_MAX)
-      continue;
+    // 하루 합계 상한. 관계 단계가 정하고, 자리 비움·복귀·약속·달래기·틈새 한 줄은 빠진다.
+    if (!budgetAllows(budget, "catchup")) continue;
 
     const block = currentBlock(c.id);
     if (!block || block.responsiveness === "unavailable") continue; // 운전·잠 등엔 못 보냄
@@ -285,7 +411,7 @@ const followupTickBody = async (): Promise<void> => {
       chatId: c.chat_id,
       kind: "catchup",
       lastSentAt: last.sent_at,
-      situation: catchupSituation(),
+      situation: catchupSituation(intent),
       maxTokens: 500,
       read: readSendText,
       label: "[followup]",

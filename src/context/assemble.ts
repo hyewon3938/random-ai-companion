@@ -6,9 +6,9 @@
 //   불변층   — 정체성 기억(creation), 유저 프로필, 공통 규칙(태도·대화·표기·말의 결·note 신호),
 //              관계 단계 공통 틀과 지금 단계 블록(단계가 오를 때만 바뀐다)
 //   일간층   — 관계 8컬럼 서술, 주변 인물, 진행 중인 일, 아크, 일정, 최근 일기
-//   실시간   — 검색해 꺼낸 기억, 주제로 찾은 지난 일기와 일정, 오늘 각본, 오늘 메모, 지금 관계
-//              (며칠째·처음·오늘 쓴 수·오늘의 의도), 직전 대화 시점, 오늘 안의 연락 텀, 지금 시각,
-//              말투, 상황 문단, 답장 객체 설명
+//   실시간   — 검색해 꺼낸 기억, 선톡이 태그 없이 고른 상대 쪽 기억, 주제로 찾은 지난 일기와
+//              일정, 오늘 각본, 오늘 메모, 지금 관계(며칠째·처음·오늘 쓴 수·오늘의 의도),
+//              직전 대화 시점, 오늘 안의 연락 텀, 지금 시각, 말투, 상황 문단, 답장 객체 설명
 //
 // 말투는 저장값(relationships.speech_level)을 먼저 보고, 없을 때만 최근 발화 판정값을 쓴다.
 // 판정만으로 정하면 존댓말로 되돌아간다.
@@ -33,6 +33,7 @@ import {
   memorySection,
   oldDiarySection,
   scheduleSearchSection,
+  userMemorySection,
 } from "../recall.js";
 import { REPLY_ENVELOPE } from "../reply-signal.js";
 import { clockLabel, type ContactGap } from "../kst.js";
@@ -329,6 +330,8 @@ export const assembleSystemBlocks = (
 
   const live = [
     memorySection(input.search.memories),
+    // 선톡 문안 경로에서만 찬다 — 검색어로 쓸 상대 발화가 없는 자리라 태그 없이 골라 넣는다.
+    userMemorySection(input.userMemories),
     oldDiarySection(input.search.oldDiaries),
     scheduleSearchSection(input.search.schedules, input.today),
     todaySection,
