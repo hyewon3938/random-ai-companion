@@ -109,7 +109,7 @@ export const recordSendAttempt = (id: number, error: string): void => {
 export const recordSendFailure = (
   chatId: string,
   characterId: number,
-  kind: "away" | "catchup" | "goodnight" | "mend" | "lunch" | "glance",
+  kind: "away" | "catchup" | "goodnight" | "mend" | "lunch" | "glance" | "intent",
   error: string,
 ): void => {
   const failedAt = `${kstDateString()} ${getKstNow().toISOString().slice(11, 19)}`;

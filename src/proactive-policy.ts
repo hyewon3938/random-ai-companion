@@ -5,6 +5,11 @@
 // 새벽에 문안을 준비할 때, 반영 게이트에서, 발송 직전 재확인에서 모두 이 함수를 부른다.
 // 세 자리가 각자 판단하면 준비한 것과 보내는 것이 어긋난다.
 //
+// 선톡은 근거 종류 넷 가운데 하나를 반드시 갖는다(의도·일정·달래기·약속). 종류마다 어떤
+// 근거로 나가는지는 PROACTIVE_BASIS가 갖고, 하루에 몇 통까지인지는 단계별 예산이 정한다
+// (proactiveBudget·budgetAllows). 합계에 안 들어가는 종류는 상대가 이미 말을 걸었거나
+// 캐릭터가 자리를 비우는 상황에 붙는 한 마디라 새로 거는 연락과 성격이 다르다.
+//
 // 유저 메시지가 오면 즉시 평상으로 돌아온다.
 //
 // 발송에 실패한 선톡 문안을 다음 틱까지 들고 있는 자리도 여기다(holdFailedDraft·
@@ -13,13 +18,26 @@
 
 import {
   countAssistantMeta,
+  getAssistantMetaSince,
   getCharacterById,
+  getStage,
   hasAssistantMeta,
   hasUserScheduleOn,
   lastUserTs,
 } from "./db.js";
 import { kstLogicalDate, logicalDateOf } from "./kst.js";
-import { QUIET_AFTER_DAYS, RECONNECT_AT_DAYS } from "./thresholds.js";
+import {
+  INTENT_LINE_NAME,
+  PROACTIVE_KIND_NAME,
+  type IntentLine,
+  type ProactiveKind,
+  type RelationshipStage,
+} from "./labels.js";
+import {
+  PROACTIVE_STAGE_BUDGET,
+  QUIET_AFTER_DAYS,
+  RECONNECT_AT_DAYS,
+} from "./thresholds.js";
 
 // 선제 발화 정책(관제탑): "지금 이 유저에게 먼저 말을 걸어도 되는가"의 단일 판단 지점.
 // 채널(아침 안부·팔로업·자리비움 예고)은 각자의 트리거만 갖고, 발화 허가는 여기서 받는다.
@@ -54,6 +72,15 @@ const daysBetween = (a: string, b: string): number =>
 const PROACTIVE = "%proactive%";
 const AWAY = '%"kind":"away"%';
 const kindPattern = (kind: string): string => `%"kind":"${kind}"%`;
+
+// 하루 합계에서 빼는 종류의 meta_json 패턴. 무엇을 왜 빼는지는 아래 OFF_BUDGET이 갖는다 —
+// 여기는 그 목록을 질의 조건으로 옮겨 적은 것이라 둘을 함께 고친다.
+const OFF_BUDGET_META = [
+  AWAY,
+  kindPattern("promise"),
+  kindPattern("mend"),
+  kindPattern("glance"),
+];
 
 export const silenceState = (
   chatId: string,
@@ -160,7 +187,7 @@ export const lunchDueToday = (chatId: string, characterId: number): boolean => {
 // 다른 하나는 나이다. 만든 지 오래된 문안은 지금 상황을 더 이상 말하지 못하므로 버린다.
 
 export type HeldDraftKind =
-  "goodnight" | "mend" | "catchup" | "lunch" | "away" | "glance";
+  "goodnight" | "mend" | "catchup" | "lunch" | "away" | "glance" | "intent";
 
 export interface HeldDraft {
   kind: HeldDraftKind;
@@ -217,14 +244,12 @@ export const takeHeldDraft = (
 // 캐릭터 말의 meta_json으로 무엇이 선톡이고 어떤 종류인지 가른다. 패턴은 여기서만 정하고
 // db 쪽은 패턴을 받아 세기만 한다.
 
-// 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸 선톡 수 — 하루 총량 상한을 지키는 데 쓴다.
-// followup·dispatch가 공유한다. 채널별 상한만 있으면 합이 통제되지 않아서, 각자 자기 몫을
-// 다 쓰면 하루 10통까지 나갈 수 있었다.
+// 오늘(새벽 5시 이후) 캐릭터가 먼저 보낸 선톡 가운데 하루 합계에 드는 것의 수 — 단계별
+// 합계 상한을 지키는 데 쓴다. followup·dispatch가 공유한다. 채널별 상한만 있으면 합이
+// 통제되지 않아서, 각자 자기 몫을 다 쓰면 하루 10통까지 나갈 수 있었다.
 //
-// 자리비움 선톡은 여기서 뺀다 — 캐릭터가 나갔다 오는 일정 수만큼 나가는 말이라 성격이
-// 다르고, 그쪽은 AWAY_DAILY_MAX가 따로 막는다. 약속 연락도 뺀다 — 답장에서 한 약속을
-// 지키는 말이라 상한에 막히면 약속을 어기는 쪽이 된다(이슈 #308). 틈새 한 줄도 뺀다 — 불가
-// 구간에 유저가 먼저 건 말에 붙는 한 마디라 새로 거는 연락이 아니다(이슈 #339).
+// 무엇을 빼는지는 OFF_BUDGET이 갖는다. 여기서는 그 종류의 meta_json 패턴만 적는다 —
+// 자리 비움은 나갈 때와 돌아왔을 때가 같은 kind라 패턴 하나가 둘을 함께 덮는다.
 export const proactiveCountToday = (
   chatId: string,
   characterId: number,
@@ -232,7 +257,7 @@ export const proactiveCountToday = (
 ): number =>
   countAssistantMeta(chatId, characterId, since, {
     like: [PROACTIVE],
-    notLike: [AWAY, kindPattern("promise"), kindPattern("glance")],
+    notLike: OFF_BUDGET_META,
   });
 
 // 오늘 보낸 선톡을 종류별로 센다.
@@ -294,6 +319,24 @@ export const proactiveSinceLastUser = (
     like: [PROACTIVE],
   });
 
+/**
+ * 마지막 유저 발화 이후 하루 합계에 드는 선톡이 몇 통 나갔는지 — 답이 없는 위에 또 거는 것을
+ * 막는다.
+ *
+ * 위 셈과 다른 자리다. 위는 자리 비움 예고·복귀 인사·틈새 한 줄까지 세는데, 그건 캐릭터가
+ * 자리를 비우는 상황에 붙는 한 마디라 답을 안 했다고 다시 걸면 안 되는 종류가 아니다. 이유
+ * 없이 먼저 거는 의도 선톡만 이 셈을 본다.
+ */
+export const budgetedSinceLastUser = (
+  chatId: string,
+  characterId: number,
+): number =>
+  countAssistantMeta(chatId, characterId, sinceLastUser(chatId, characterId), {
+    after: true,
+    like: [PROACTIVE],
+    notLike: OFF_BUDGET_META,
+  });
+
 /** 그 시각 이후 달래기 선톡이 이미 나갔는가 — 상대 상태 한 발현에 한 통이다. 기준 시각은
  * 관계 행의 상태 시작 시각(user_state_since)이고, 그 상태가 이어지는 동안 자리 비움 예고가
  * 끼어도 구간을 통째로 보므로 가려지지 않는다. */
@@ -306,3 +349,199 @@ export const mendSentSince = (
     after: true,
     like: [kindPattern("mend")],
   });
+
+// ── 선톡의 근거와 단계별 예산 ────────────────────────────────────────────
+// 선톡은 근거 종류 넷 가운데 하나를 반드시 갖는다. 근거 없는 선톡은 코드가 보내지 않는다.
+//
+//   의도    오늘의 관계 의도 네 줄 가운데 아직 안 쓴 줄 하나로 건다
+//   일정    각본 블록이 부르는 자리 — 아침·근황·점심·밤 인사·자리 비움·복귀·틈새 한 줄
+//   달래기  상대 상태 판정이 안 좋게 나온 뒤 한 번
+//   약속    답장에서 캐릭터가 하겠다고 말한 연락
+//
+// 상한은 둘이다. 의도 근거로 나가는 건수와 하루 전체 합계이고, 둘 다 관계 단계마다 다르다
+// (thresholds.ts의 PROACTIVE_STAGE_BUDGET). 자리 비움·복귀·약속·달래기·틈새 한 줄은 합계에
+// 넣지 않는다 — 전부 유저가 이미 말을 걸었거나 캐릭터가 자리를 비우는 상황에 붙는 한 마디라
+// 새로 거는 연락과 성격이 다르다. 종류마다 붙어 있던 자기 상한과 시간 조건은 그대로다.
+
+export type ProactiveBasis = "intent" | "schedule" | "mend" | "promise";
+
+/** 선톡 종류가 무슨 근거로 나가는지. */
+export const PROACTIVE_BASIS: Record<ProactiveKind, ProactiveBasis> = {
+  intent: "intent",
+  morning: "schedule",
+  checkin: "schedule",
+  catchup: "schedule",
+  lunch: "schedule",
+  goodnight: "schedule",
+  away: "schedule",
+  glance: "schedule",
+  mend: "mend",
+  promise: "promise",
+};
+
+// 하루 합계에 안 넣는 종류. 자리 비움은 나갈 때와 돌아왔을 때가 같은 종류라 복귀 인사도
+// 여기에 함께 들어간다. 자리 비움은 AWAY_DAILY_MAX가, 달래기는 상태 한 발현에 한 통이,
+// 틈새 한 줄은 불가 블록마다 한 번이 따로 막는다. 약속은 답장에서 한 말을 지키는 연락이라
+// 상한에 걸리면 약속을 어기는 쪽이 된다(이슈 #308).
+const OFF_BUDGET: ProactiveKind[] = ["away", "promise", "mend", "glance"];
+
+/** 이 종류가 하루 합계에 드는가. */
+export const onDailyBudget = (kind: ProactiveKind): boolean =>
+  !OFF_BUDGET.includes(kind);
+
+export interface ProactiveBudget {
+  stage: RelationshipStage;
+  /** 하루 합계 상한과 오늘 이미 쓴 수. */
+  dailyMax: number;
+  dailyUsed: number;
+  /** 의도 근거 선톡의 하루 상한과 오늘 이미 쓴 수. */
+  intentMax: number;
+  intentUsed: number;
+}
+
+/** 오늘 남은 선톡 예산. since는 논리일 시작 시각이다. */
+export const proactiveBudget = (
+  chatId: string,
+  characterId: number,
+  since: string,
+): ProactiveBudget => {
+  const stage: RelationshipStage = getStage(characterId)?.stage_no ?? 1;
+  const cap = PROACTIVE_STAGE_BUDGET[stage];
+  return {
+    stage,
+    dailyMax: cap.daily,
+    dailyUsed: proactiveCountToday(chatId, characterId, since),
+    intentMax: cap.intent,
+    intentUsed: proactiveKindCountToday(chatId, characterId, since, "intent"),
+  };
+};
+
+/** 예산이 이 종류를 한 통 더 허락하는가. 종류마다 붙은 자기 조건은 부르는 쪽이 따로 본다. */
+export const budgetAllows = (
+  b: ProactiveBudget,
+  kind: ProactiveKind,
+): boolean => {
+  if (kind === "intent" && b.intentUsed >= b.intentMax) return false;
+  return !onDailyBudget(kind) || b.dailyUsed < b.dailyMax;
+};
+
+/** 로그와 게시에 적는 예산 표기 — 합계 2/5통, 의도 1/2. */
+export const budgetLabel = (b: ProactiveBudget): string =>
+  `${b.stage}단계 · 합계 ${b.dailyUsed}/${b.dailyMax}통 · 의도 ${b.intentUsed}/${b.intentMax}`;
+
+/** 근거 줄에 적을 것. 종류마다 채우는 칸이 다르다. */
+export interface BasisDetail {
+  kind: ProactiveKind;
+  /** 의도 근거로 나갈 때 쓴 줄. */
+  intentLine?: IntentLine | null;
+  /** 일정 근거일 때 그 각본 블록의 시작 시각(HH:MM). */
+  block?: string | null;
+  /** 약속 근거일 때 그 약속의 기록 행 번호. */
+  promiseId?: number | null;
+}
+
+/** 슬랙 선톡 게시에 붙는 근거 줄 — 의도(이어갈 자리) · 일정(12:00 블록) · 달래기 · 약속(행 12). */
+export const basisLine = (d: BasisDetail): string => {
+  const basis = PROACTIVE_BASIS[d.kind];
+  if (basis === "intent")
+    return d.intentLine ? `의도(${INTENT_LINE_NAME[d.intentLine]})` : "의도";
+  if (basis === "schedule")
+    return `일정(${d.block ? `${d.block} 블록` : PROACTIVE_KIND_NAME[d.kind]})`;
+  if (basis === "promise")
+    return d.promiseId ? `약속(행 ${d.promiseId})` : "약속";
+  return "달래기";
+};
+
+/**
+ * 발송 기록의 meta_json으로 근거 줄을 만든다 — 슬랙 선톡 게시가 부른다.
+ *
+ * 근거를 고른 자리(followup·presence·bot)와 게시하는 자리가 떨어져 있어서, 고를 때 적어 둔
+ * 값을 그대로 읽는다. 선톡이 아닌 종류(답장·복구 발송)면 null을 준다.
+ */
+export const basisLineFromMeta = (
+  kind: string,
+  meta: Record<string, unknown> = {},
+): string | null => {
+  if (!(kind in PROACTIVE_BASIS)) return null;
+  const line = meta.intent_line;
+  const block = meta.block;
+  const promise = meta.promise_row;
+  return basisLine({
+    kind: kind as ProactiveKind,
+    intentLine:
+      typeof line === "string" && line in INTENT_LINE_NAME
+        ? (line as IntentLine)
+        : null,
+    block: typeof block === "string" ? block : null,
+    promiseId: typeof promise === "number" ? promise : null,
+  });
+};
+
+// ── 의도 선톡이 쓸 줄 고르기 ─────────────────────────────────────────────
+// 1단계는 파고들 것과 이어갈 자리 둘만 의도 선톡이 된다. 흘릴 내 얘기는 근황 선톡에 얹고,
+// 시도할 수는 아직 먼저 걸 자리가 아니다. 2단계부터 네 줄 전부 열린다.
+export const STAGE_INTENT_LINES: Record<RelationshipStage, IntentLine[]> = {
+  1: ["dig", "thread"],
+  2: ["dig", "share", "move", "thread"],
+  3: ["dig", "share", "move", "thread"],
+  4: ["dig", "share", "move", "thread"],
+};
+
+interface LineMeta {
+  intent_line?: unknown;
+  move?: unknown;
+}
+
+/**
+ * 오늘 이미 쓴 의도 줄. 선톡은 meta_json의 intent_line에 줄 코드를 적고, 답장은 쓴 수를
+ * move에 적는다 — 수를 이미 뒀으면 시도할 수 줄은 오늘 쓴 것으로 본다.
+ */
+export const usedIntentLines = (
+  chatId: string,
+  characterId: number,
+  since: string,
+): IntentLine[] => {
+  const out = new Set<IntentLine>();
+  for (const row of getAssistantMetaSince(chatId, characterId, since)) {
+    if (!row.meta_json) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.meta_json);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const m = parsed as LineMeta;
+    if (typeof m.intent_line === "string" && m.intent_line in INTENT_LINE_NAME)
+      out.add(m.intent_line as IntentLine);
+    if (typeof m.move === "string" && m.move) out.add("move");
+  }
+  return [...out];
+};
+
+/** 오늘의 의도 행에서 문안에 넣을 줄 하나. 값이 있고 아직 안 쓴 줄 가운데 앞선 것이다. */
+export interface IntentLineSource {
+  dig?: string | null;
+  share?: string | null;
+  move?: string | null;
+  move_note?: string | null;
+  thread?: string | null;
+}
+
+export const pickIntentLine = (
+  intent: IntentLineSource | null,
+  stage: RelationshipStage,
+  used: IntentLine[],
+): IntentLine | null => {
+  if (!intent) return null;
+  // 고백 차례는 수 코드 없이 자리만 적힌 날이라 move_note만 있어도 시도할 수 줄이 산다.
+  const filled: Record<IntentLine, boolean> = {
+    dig: !!intent.dig,
+    share: !!intent.share,
+    move: !!(intent.move || intent.move_note),
+    thread: !!intent.thread,
+  };
+  for (const line of STAGE_INTENT_LINES[stage])
+    if (filled[line] && !used.includes(line)) return line;
+  return null;
+};
