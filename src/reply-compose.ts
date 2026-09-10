@@ -45,7 +45,11 @@ import {
   type SystemBlock,
 } from "./llm.js";
 import { askReply, type ReplyDraft } from "./reply-ask.js";
-import { REPLY_MAX_TOKENS, type ReplySignals } from "./reply-signal.js";
+import {
+  ALWAYS_KEYS,
+  REPLY_MAX_TOKENS,
+  type ReplySignals,
+} from "./reply-signal.js";
 import { recordHold } from "./reply-timing.js";
 import {
   applyReplySignals,
@@ -244,7 +248,7 @@ export const composeReply = async (
   const meta: CallMeta = { purpose: "reply", characterId, chatId };
   // 빈 답장은 reply-ask.ts가 한 번 다시 부른다. 그래도 비면 아래에서 버린다 — 빈 텍스트를
   // 그대로 보내면 텔레그램이 400으로 거부해 대화가 막혔었다.
-  const { bubbles, signals, parse, retryCallId } = await ask(
+  const { bubbles, signals, parse, slots, retryCallId } = await ask(
     system,
     turns,
     meta,
@@ -282,8 +286,17 @@ export const composeReply = async (
   // 관계 신호 — 이번 대화로 사이나 부르는 말이 달라졌으면 그 자리에서 저장한다.
   // 조립 전에 굳힌 말투와 한 목록에 모아 트레이스가 *관계 갱신* 한 자리에서 읽는다.
   relUpdates.push(...applyReplySignals(characterId, signals, kstStamp()));
-  // 객체를 어느 길로 읽었는지는 답장을 버리는 경우에도 남긴다.
-  attach({ outputParse: parse });
+  // 객체를 어느 길로 읽었는지는 답장을 버리는 경우에도 남긴다. 늘 넣기로 한 칸이 빠졌으면
+  // 그 이름도 같이 남긴다 — 플러팅·처음이 안 남을 때 모델이 안 쓴 것인지 칸을 뺀 것인지를
+  // 이 줄로만 가른다(이슈 #385). 객체로 못 읽은 답은 실을 칸 자체가 없어 세지 않는다.
+  const missingSlots =
+    parse === "plain" || parse === "empty"
+      ? []
+      : ALWAYS_KEYS.filter((k) => !slots.includes(k));
+  attach({
+    outputParse: parse,
+    ...(missingSlots.length ? { missingSlots } : {}),
+  });
   // 조정 가능한(개인·사회) 자기 일정을 취소하거나 미루고 남기로 한 stay 신호.
   const staged = signals.stay ? recordHold(characterId) : null;
   if (input.heldActual) attach({ dayActual: { ...input.heldActual, by: "judge" } });

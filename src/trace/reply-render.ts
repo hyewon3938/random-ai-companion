@@ -159,6 +159,8 @@ export interface CallContext {
   returnRow?: { sendAt: string; activity: string };
   /** 객체를 어느 길로 읽었는지(json·stray·salvage·plain·empty). */
   outputParse?: string;
+  /** 늘 넣기로 한 칸 가운데 안 온 것. 다 왔으면 없는 항목이다(이슈 #385). */
+  missingSlots?: string[];
   bubbles?: number;
   bubbleLens?: number[];
   dropped?: string;
@@ -431,6 +433,10 @@ const outcomeLines = (ctx: CallContext): string[] => {
   out.push(
     `*답장 신호* 남음 ${ctx.stay ? "붙임" : "없음"}${
       ctx.outputParse ? ` · 형식 ${parseName(ctx.outputParse)}` : ""
+    }${
+      ctx.missingSlots?.length
+        ? ` · 칸 빠짐 ${esc(ctx.missingSlots.join("·"))}`
+        : ""
     }`,
   );
   // 상대 상태 — 판정을 못 받은 것과 그대로인 것을 갈라 적는다. 바뀐 턴은 이전 값에서

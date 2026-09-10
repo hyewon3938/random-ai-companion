@@ -49,7 +49,10 @@ test("캐릭터 발화는 답장과 같은 객체로, 늘 넣는 칸까지 적�
   ]);
   assert.equal(got.length, 2);
   assert.equal(got[1]?.role, "assistant");
-  assert.equal(got[1]?.content, '{"reply":["안녕!","밥 먹었어?"],"note":null,"move":null,"first":null}');
+  assert.equal(
+    got[1]?.content,
+    '{"reply":["안녕!","밥 먹었어?"],"note":null,"move":null,"first":null}',
+  );
 });
 
 test("캐릭터가 먼저 말한 기록은 유저 자리를 앞에 채운다", () => {
