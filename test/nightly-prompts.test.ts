@@ -135,6 +135,15 @@ test("morningSituation은 보내는 시점·이어갈 것·일정·어젯밤 잠
   assert.ok(noSleep.includes("- 상대의 다가오는 일정(들은 것): (없음)"));
 });
 
+test("morningSituation은 용건 없는 연락을 막지 않는다", () => {
+  // 이유 없이 생각나서 보내는 말을 해도 되는지는 불변층의 관계 단계 블록이 정한다. 여기서 늘
+  // 막으면 2단계로 올라가도 아침 한 통만 1단계 결에 묶인다(이슈 #359).
+  const p = morningSituation(gathered(), "출근 준비 중", []);
+  assert.ok(!p.includes("용건 없"));
+  assert.ok(!p.includes("핑"));
+  assert.ok(p.includes("- 한 통에 하나만. 캐묻지 않는다."));
+});
+
 test("careSituation과 reconnectSituation은 침묵 일수를 적는다", () => {
   const g = gathered({ silenceTier: "checkin", silenceDays: 5 });
   const care = careSituation(g);
