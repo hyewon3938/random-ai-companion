@@ -27,6 +27,10 @@ const fixtures: {
   stage1?: boolean;
   /** 치켜세우기 쉬운 자리인가. */
   noFlattery?: boolean;
+  /** 상대를 보내는 말로 닫기 쉬운 자리인가. */
+  noSendOff?: boolean;
+  /** 상대 말을 되돌려주기 쉬운 자리인가. */
+  noMirror?: boolean;
 }[] = [
   { name: "깨끗한 답", raw: '{"reply":["헐 진짜?","그래서 어떻게 됐어?"]}', noLaugh: true, want: [] },
   { name: "웃음 1회(허용)", raw: '{"reply":["아 ㅋㅋㅋ 뭐야"]}', noLaugh: false, want: [] },
@@ -99,6 +103,23 @@ const fixtures: {
   { name: "근거 없이 치켜세움", raw: '{"reply":["와 대단하다"]}', noLaugh: false, noFlattery: true, want: ["근거 없이 치켜세우는 말"] },
   { name: "한 것 하나를 짚으면 통과", raw: '{"reply":["하나도 안 빼먹은 게 제일 어려운 건데","그걸 했네"]}', noLaugh: false, noFlattery: true, want: [] },
   { name: "치켜세움 자리가 아니면 안 잡는다", raw: '{"reply":["와 대단하다"]}', noLaugh: false, want: [] },
+  { name: "끝나면 연락할게로 닫음", raw: '{"reply":["오늘 늦게 끝나","끝나면 연락할게"]}', noLaugh: false, noSendOff: true, want: ["상대를 보내는 말로 닫음"] },
+  { name: "또 연락하겠다고 하고 물음으로 닫으면 통과", raw: '{"reply":["퇴근할 때도 또 연락할게 ㅋㅋㅋ","근데 너는 지금 뭐 해?"]}', noLaugh: false, noSendOff: true, want: [] },
+  { name: "앞 말풍선의 이따 얘기하자는 안 잡는다", raw: '{"reply":["이따 얘기하자","근데 지금은 뭐 해?"]}', noLaugh: false, noSendOff: true, want: [] },
+  { name: "푹 쉬어로 닫음", raw: '{"reply":["오늘 힘들었지","푹 쉬어"]}', noLaugh: true, noSendOff: true, want: ["상대를 보내는 말로 닫음"] },
+  { name: "얼른 들어가 봐로 닫음", raw: '{"reply":["얼른 들어가 봐"]}', noLaugh: false, noSendOff: true, want: ["상대를 보내는 말로 닫음"] },
+  { name: "고생 많았어로 닫음", raw: '{"reply":["끝나면 연락할게","오늘 고생 많았어 진짜"]}', noLaugh: false, noSendOff: true, want: ["상대를 보내는 말로 닫음"] },
+  { name: "그대로 있어로 닫음", raw: '{"reply":["지금은 그대로 있어"]}', noLaugh: false, noSendOff: true, want: ["상대를 보내는 말로 닫음"] },
+  { name: "하고 나서 말해 달라는 말은 통과", raw: '{"reply":["씻고 바로 누워","눕고 나서 나한테 말해"]}', noLaugh: false, noSendOff: true, want: [] },
+  { name: "다시 연락해서 물어봤다는 말은 통과", raw: '{"reply":["아까 다시 연락해서 물어봤어","그쪽은 뭐래?"]}', noLaugh: false, noSendOff: true, want: [] },
+  { name: "보내는 말 자리가 아니면 안 잡는다", raw: '{"reply":["푹 쉬어"]}', noLaugh: false, want: [] },
+  { name: "상대 말 되돌려주기", raw: '{"reply":["준비한 게 많았는데 반도 못 한 거네"]}', noLaugh: true, noMirror: true, want: ["상대 말 되돌려주기·지지 선언"] },
+  { name: "다 싶어로 되돌려주기", raw: '{"reply":["그래서 허무하다 싶었구나"]}', noLaugh: true, noMirror: true, want: ["상대 말 되돌려주기·지지 선언"] },
+  { name: "지지 선언", raw: '{"reply":["나 여기 있어","옆에서 힘 실어 줄게"]}', noLaugh: true, noMirror: true, want: ["상대 말 되돌려주기·지지 선언"] },
+  { name: "감정에 이름 붙이기", raw: '{"reply":["진짜 속상했겠다"]}', noLaugh: true, noMirror: true, want: ["상대 말 되돌려주기·지지 선언"] },
+  { name: "반응하고 되묻는 답은 통과", raw: '{"reply":["헐","어디서부터 꼬였는데?"]}', noLaugh: true, noMirror: true, want: [] },
+  { name: "바빴잖아 같은 평범한 말끝은 통과", raw: '{"reply":["이번 달 계속 바빴잖아","뭐부터 할 건데?"]}', noLaugh: true, noMirror: true, want: [] },
+  { name: "되돌려주기 자리가 아니면 안 잡는다", raw: '{"reply":["반도 못 한 거네"]}', noLaugh: true, want: [] },
 ];
 
 const sorted = (v: string[]): string[] => [...v].sort();
@@ -112,6 +133,8 @@ for (const f of fixtures) {
       whyLike: f.whyLike,
       stage1: f.stage1,
       noFlattery: f.noFlattery,
+      noSendOff: f.noSendOff,
+      noMirror: f.noMirror,
     }).map(
       (v) => v.rule,
     );
@@ -128,4 +151,6 @@ test("골든셋이 세 종류의 자리를 모두 덮는다", () => {
   assert.ok(CASES.some((c) => c.wantsQuestion), "되묻는 자리가 없다");
   assert.ok(CASES.some((c) => c.stage1), "1단계 자리가 없다");
   assert.ok(CASES.some((c) => c.noFlattery), "치켜세우기 쉬운 자리가 없다");
+  assert.ok(CASES.some((c) => c.noSendOff), "보내는 말로 닫기 쉬운 자리가 없다");
+  assert.ok(CASES.some((c) => c.noMirror), "되돌려주기 쉬운 자리가 없다");
 });
