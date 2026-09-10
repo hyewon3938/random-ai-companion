@@ -204,6 +204,10 @@ export const MOVE_NAME: Record<Move, string> = {
   notice: "어떤 사람인지 말해 주기",
 };
 
+/** 슬랙 게시에서 이 개념을 부르는 말. 코드와 프롬프트는 수(move)로 쓰고 사람이 읽는 게시만
+ * 이 말로 바꿔 적는다 — 게시에서 '쓴 수 없음'이 '쓸 수 없음'으로 읽히던 것을 막는다. */
+export const MOVE_TERM = "플러팅";
+
 /** 수에 대한 유저 반응 — 판정 호출이 직전 턴의 수를 보고 고른다. */
 export type MoveReaction = "accepted" | "ignored" | "rejected" | "none";
 
@@ -277,6 +281,12 @@ export const INTENT_LINE_NAME: Record<IntentLine, string> = {
   share: "흘릴 내 얘기",
   move: "시도할 수",
   thread: "이어갈 자리",
+};
+
+/** 슬랙 게시에서 쓰는 의도 줄 이름. 시도할 것 한 줄만 사람이 읽는 말로 바꾸고 나머지는 같다. */
+export const INTENT_LINE_POST_NAME: Record<IntentLine, string> = {
+  ...INTENT_LINE_NAME,
+  move: `시도할 ${MOVE_TERM}`,
 };
 
 /** 캐릭터가 먼저 거는 연락의 종류. 발송 쪽 이름표(bot.ts의 SendKind)는 여기에 답장과 복구를

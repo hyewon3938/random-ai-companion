@@ -20,6 +20,7 @@ import {
   FIRST_KIND_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
+  MOVE_TERM,
   RESPONSIVENESS_NAME,
   SPEECH_LEVEL_NAME,
   toActivityCategory,
@@ -452,7 +453,7 @@ const outcomeLines = (ctx: CallContext): string[] => {
     const r = ctx.relationship;
     const parts = [
       `${r.stage ?? 1}단계${r.days ? ` ${r.days}일째` : ""}`,
-      r.move ? `쓴 수 ${MOVE_NAME[r.move] ?? r.move}` : "쓴 수 없음",
+      r.move ? `${MOVE_TERM} ${MOVE_NAME[r.move] ?? r.move}` : `${MOVE_TERM} 없음`,
     ];
     if (r.first)
       parts.push(
@@ -468,7 +469,7 @@ const outcomeLines = (ctx: CallContext): string[] => {
     out.push(
       `*열림* 자기 얘기 ${yn(o.openedSelf)} · 근황 물음 ${yn(o.askedAboutChar)}` +
         ` · 호감 ${yn(o.saidAffection)}` +
-        ` · 수 반응 ${MOVE_REACTION_NAME[o.moveReaction ?? "none"]}`,
+        ` · ${MOVE_TERM} 반응 ${MOVE_REACTION_NAME[o.moveReaction ?? "none"]}`,
     );
   }
   // 메모는 붙었는지와 무엇을 적었는지를 같은 줄에서 본다 — 다른 신호와 묶어 두면

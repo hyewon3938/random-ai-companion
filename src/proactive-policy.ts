@@ -28,6 +28,7 @@ import {
 import { kstLogicalDate, logicalDateOf } from "./kst.js";
 import {
   INTENT_LINE_NAME,
+  INTENT_LINE_POST_NAME,
   PROACTIVE_KIND_NAME,
   type IntentLine,
   type ProactiveKind,
@@ -463,7 +464,9 @@ export interface BasisDetail {
 export const basisLine = (d: BasisDetail): string => {
   const basis = PROACTIVE_BASIS[d.kind];
   if (basis === "intent")
-    return d.intentLine ? `의도(${INTENT_LINE_NAME[d.intentLine]})` : "의도";
+    return d.intentLine
+      ? `의도(${INTENT_LINE_POST_NAME[d.intentLine]})`
+      : "의도";
   if (basis === "schedule")
     return `일정(${d.block ? `${d.block} 블록` : PROACTIVE_KIND_NAME[d.kind]})`;
   if (basis === "promise")
