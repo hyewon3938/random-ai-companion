@@ -9,11 +9,16 @@
 // DB는 읽기 전용으로 열고, 마이그레이션과 API 키 요구를 타지 않으려고
 // src/db.ts·src/config.ts를 거치지 않는다.
 //
+// 열고 닫은 뒤에는 그때 생긴 곁파일(-shm·-wal)을 지운다. 읽기 전용으로 연 연결은 닫을 때
+// 그 둘을 스스로 못 지워서, 그냥 두면 실행할 때마다 한 쌍씩 쌓인다. 열기 전부터 있던 곁파일과
+// 내용이 든 -wal은 우리 것이 아니므로 그대로 둔다 — 돌고 있는 DB를 --check로 볼 때 그 -wal에는
+// 아직 본체로 옮겨지지 않은 내용이 들어 있어서, 지우면 그만큼이 사라진다.
+//
 // 사용: npx tsx src/tools/backup-db.ts <저장할 경로>
 //       npx tsx src/tools/backup-db.ts --check <파일>   (이미 있는 파일을 검사만)
 
 import Database from "better-sqlite3";
-import { statSync } from "node:fs";
+import { existsSync, statSync, unlinkSync } from "node:fs";
 
 interface Report {
   path: string;
@@ -24,6 +29,27 @@ interface Report {
   totalRows: number;
   tables: Record<string, number>;
 }
+
+const sideFilesOf = (file: string): string[] => [`${file}-shm`, `${file}-wal`];
+
+/** 열기 전에 이미 있던 곁파일. 우리가 만든 것만 골라 지우려고 먼저 받아 둔다. */
+const existingSideFiles = (file: string): Set<string> =>
+  new Set(sideFilesOf(file).filter((f) => existsSync(f)));
+
+/** 이번에 생긴 곁파일만 지운다. 내용이 든 -wal이 있으면 살아 있는 DB이므로 손대지 않는다. */
+const removeSideFiles = (file: string, kept: Set<string>): void => {
+  const wal = `${file}-wal`;
+  if (existsSync(wal) && statSync(wal).size > 0) return;
+  for (const f of sideFilesOf(file)) {
+    if (kept.has(f) || !existsSync(f)) continue;
+    try {
+      unlinkSync(f);
+    } catch (e) {
+      // 못 지워도 백업 자체는 성공이다 — 다음 실행이 다시 지운다.
+      console.error(`[backup] 곁파일 정리 실패 (${f}):`, e);
+    }
+  }
+};
 
 const inspect = (file: string): Report => {
   const db = new Database(file, { readonly: true, fileMustExist: true });
@@ -77,17 +103,26 @@ const main = async (): Promise<void> => {
     process.exit(1);
   }
 
+  const targetKept = existingSideFiles(target);
+
   if (!checkOnly) {
     const source = process.env.DB_PATH ?? "./data/companion.db";
+    const sourceKept = existingSideFiles(source);
     const src = new Database(source, { readonly: true, fileMustExist: true });
     try {
       await src.backup(target);
     } finally {
       src.close();
+      removeSideFiles(source, sourceKept);
     }
   }
 
-  const report = inspect(target);
+  let report: Report;
+  try {
+    report = inspect(target);
+  } finally {
+    removeSideFiles(target, targetKept);
+  }
   console.log(JSON.stringify(report));
 
   if (report.integrity !== "ok" || report.foreignKeyViolations > 0) {
