@@ -33,9 +33,10 @@ const makeDb = (name: string): string => {
 const sideFiles = (file: string): string[] =>
   [`${file}-shm`, `${file}-wal`].filter((f) => existsSync(f));
 
+// DB_PATH는 늘 임시 경로로 덮어쓴다 — 비워 두면 도구가 기본값인 운영 DB를 원본으로 잡는다.
 const run = (
   args: string[],
-  dbPath?: string,
+  dbPath = join(dir, "없는-원본.db"),
 ): { status: number | null; stdout: string; stderr: string } => {
   const r = spawnSync(
     process.execPath,
@@ -43,7 +44,7 @@ const run = (
     {
       cwd: root,
       encoding: "utf8",
-      env: { ...process.env, ...(dbPath ? { DB_PATH: dbPath } : {}) },
+      env: { ...process.env, DB_PATH: dbPath },
     },
   );
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
