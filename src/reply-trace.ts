@@ -9,6 +9,9 @@
 // 캐릭터가 한 연락 약속이 그 뒤 어떻게 됐는지(맡김·다시 걺·지킴·접음·거둠·포기)도 약속을 한
 // 답장 스레드에 단다(tracePromise, 이슈 #312) — 약속은 답장 본문에 시각까지 적히는데 그
 // 시각에 무슨 일이 있었는지는 콘솔에만 남아 슬랙에서는 지켰는지 알 수 없었다.
+// 불가 구간의 몰아 답장 표시도 걸고 거두고 울리는 자리마다 쌓고(traceWake), 답장 경로가
+// 답장 없이 예외로 끝난 자리도 단계와 사유를 남긴다(traceReplyFault, 이슈 #379) — 이 둘이
+// 없으면 답장이 안 나간 날과 아직 기다리는 날이 밖에서 똑같이 조용해 보인다.
 
 import { kstLogicalDate, clockLabel } from "./kst.js";
 import { recordTraceEvent, traceEnabled } from "./trace.js";
@@ -244,4 +247,125 @@ export const tracePromise = (p: {
       parentKey: callKey(parent),
       text: head,
     });
+};
+
+// ── 몰아 답장을 걸어 두는 표시가 그 뒤 어떻게 됐는지 ──────────────────
+
+/** 깨우기 표시가 지나는 자리. 값은 kind에 그대로 실어 나중에 자리별로 셀 수 있게 한다. */
+export type WakeStage =
+  | "armed" // 답장 불가 구간이라 구간 끝에 울릴 표시를 걸었다
+  | "merged" // 표시가 이미 걸려 있어 메시지만 쌓는다
+  | "promoted" // 자리 비움 틱이 걸어 둔 표시를 몰아 답장으로 올렸다
+  | "dropped" // 불가 구간이 아닌 길로 답장이 나가게 돼 거뒀다
+  | "yielded" // 울릴 때 다른 경로가 답하는 중이라 양보했다
+  | "no_turn" // 울렸는데 몰아 답할 메시지를 찾지 못했다
+  | "no_reply" // 울려서 답장을 만들었는데 그 답장을 버렸다
+  | "no_last" // 울렸는데 직전 발화가 없거나 캐릭터 것이 아니다
+  | "busy" // 복귀 인사 자리가 차 있어 인사를 접었다
+  | "gave_up"; // 재시도를 다 쓰고 발송을 포기했다
+
+const WAKE_STAGE_NAME: Record<WakeStage, string> = {
+  armed: "구간 끝에 울릴 표시를 걺",
+  merged: "표시가 이미 걸려 있어 메시지만 쌓음",
+  promoted: "구간 끝 표시를 몰아 답장으로 올림",
+  dropped: "표시 거둠",
+  yielded: "다른 경로가 답하는 중이라 양보",
+  no_turn: "몰아 답할 메시지를 찾지 못함",
+  no_reply: "만든 답장을 버림",
+  no_last: "직전 발화가 없거나 캐릭터 것이 아님",
+  busy: "복귀 인사 자리가 차 있어 접음",
+  gave_up: "발송 포기",
+};
+
+const WAKE_STAGE_ICON: Record<WakeStage, string> = {
+  armed: ":alarm_clock:",
+  merged: ":inbox_tray:",
+  promoted: ":arrow_up:",
+  dropped: ":wastebasket:",
+  yielded: ":mute:",
+  no_turn: ":warning:",
+  no_reply: ":warning:",
+  no_last: ":warning:",
+  busy: ":mute:",
+  gave_up: ":x:",
+};
+
+/**
+ * 몰아 답장 표시가 그 뒤 어떻게 됐는지(bot.ts 답장·깨우기 처리, pending.ts).
+ *
+ * 불가 구간에 온 메시지는 답장을 만들지 않고 구간 끝에 울릴 표시만 걸어 두는데, 이 자리가
+ * 콘솔에만 남아 있어서 밖에서는 구간이 끝날 때까지 아무 일도 없는 것처럼 보였다(이슈 #379).
+ * 표시가 울린 뒤 답장 없이 끝나는 갈래는 더 무겁다 — pending.ts가 그 행을 보낸 것으로
+ * 확정해 재시도도 걸리지 않으므로, 여기 적히지 않으면 답장이 사라진 사실 자체가 남지 않는다.
+ *
+ * 같은 행의 같은 자리는 한 번만 쌓는다. 행 번호를 모르는 자리는 블록 단위로 하루 한 번 쌓는다.
+ */
+export const traceWake = (p: {
+  characterId: number;
+  /** pending_replies의 깨우기 행 번호. 걸기 전이거나 알 수 없으면 없다. */
+  rowId?: number | null;
+  stage: WakeStage;
+  activity: string;
+  /** 그 불가 블록의 시작·끝 시각. */
+  block?: { start?: string | null; end?: string | null };
+  detail?: string;
+}): void => {
+  if (!traceEnabled()) return;
+  const start = p.block?.start;
+  const end = p.block?.end;
+  const span = start
+    ? `${clockLabel(start)}${end ? `~${clockLabel(end)}` : ""} `
+    : "";
+  const name = `wake:${p.characterId}:${p.rowId ?? `${kstLogicalDate()}:${start ?? "?"}`}`;
+  recordTraceEvent({
+    characterId: p.characterId,
+    kind: `wake_${p.stage}`,
+    dedupeKey: `${name}:${p.stage}`,
+    text:
+      `${WAKE_STAGE_ICON[p.stage]} *몰아 답장* ${WAKE_STAGE_NAME[p.stage]} · ${clock()}` +
+      `${p.detail ? ` — ${esc(p.detail)}` : ""}` +
+      `\n${span}${esc(clip(p.activity, 120))}`,
+  });
+};
+
+// ── 답장 경로가 예외로 끝난 자리 ──────────────────────────────────────
+
+/** 답장이 멈춘 단계. 값은 kind에 그대로 실어 나중에 단계별로 셀 수 있게 한다. */
+export type ReplyFaultStage =
+  | "no_turn" // 답할 유저 메시지를 찾지 못했다
+  | "respond" // 텀 계산·조립·저장 어딘가에서 예외로 끝났다
+  | "recover" // 놓친 답장 복구가 예외로 끝났다
+  | "bot"; // 봇 핸들러 어딘가에서 예외로 끝났다
+
+const REPLY_FAULT_NAME: Record<ReplyFaultStage, string> = {
+  no_turn: "답할 유저 메시지를 찾지 못함",
+  respond: "답장을 만들다 멈춤",
+  recover: "놓친 답장 복구가 멈춤",
+  bot: "메시지 처리가 멈춤",
+};
+
+/**
+ * 답장 경로가 답장 없이 끝난 자리(bot.ts). 텀 계산·조립·저장 어디서 터지든 콘솔 한 줄만
+ * 남아서, 유저는 답장을 못 받는데 채널은 조용했다(이슈 #379). 어느 단계에서 멈췄는지와
+ * 사유를 남겨 정상 대기와 구분되게 한다.
+ *
+ * 같은 대화의 같은 단계는 분 단위로 한 번만 쌓는다 — 같은 예외가 틱마다 되풀이될 때
+ * 채널이 같은 줄로 덮이지 않게.
+ */
+export const traceReplyFault = (p: {
+  characterId?: number | null;
+  chatId?: string;
+  stage: ReplyFaultStage;
+  detail: string;
+}): void => {
+  if (!traceEnabled()) return;
+  const minute = clock().slice(0, 5);
+  recordTraceEvent({
+    characterId: p.characterId ?? undefined,
+    kind: `reply_fault_${p.stage}`,
+    dedupeKey: `reply_fault:${p.chatId ?? "?"}:${p.stage}:${kstLogicalDate()}:${minute}`,
+    text:
+      `:rotating_light: *답장 멈춤* ${REPLY_FAULT_NAME[p.stage]} · ${clock()}` +
+      `\n${esc(clip(p.detail, 400))}`,
+  });
 };

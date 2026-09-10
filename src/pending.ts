@@ -12,6 +12,7 @@
 //
 // 약속 행(kind='promise')을 거두거나 포기할 때는 그 약속을 한 답장의 슬랙 스레드에 남긴다
 // (tracePromise, 이슈 #312) — 행의 meta에 실린 답장 호출 번호가 그 스레드를 가리킨다.
+// 깨우기·복귀 인사 행을 거두거나 포기할 때도 같은 모양으로 남긴다(traceWake, 이슈 #379).
 //
 // 답장 불가 구간의 깨우기 표시도 같은 표를 쓴다 — 문안 없이 kind='wake' 행으로 구간 끝
 // 시각에 걸어 둔다. 유저가 말을 더 보내도 이 행은 살아남고(구간 끝 시각은 그대로다),
@@ -45,7 +46,11 @@ import {
   type PendingReplyRow,
 } from "./db.js";
 import { saveTodayNote } from "./memory.js";
-import { tracePromise, traceReplyOutcome } from "./reply-trace.js";
+import {
+  tracePromise,
+  traceReplyOutcome,
+  traceWake,
+} from "./reply-trace.js";
 import { getKstNow, kstDateString, kstLogicalClock } from "./kst.js";
 import { toMin } from "./context/day-progress.js";
 import { BLOCK_END_JITTER_MS } from "./thresholds.js";
@@ -207,8 +212,8 @@ const fire = async (id: number): Promise<void> => {
         markPendingReply(row.id, "failed", null, msg);
         if (row.kind !== "promise") releaseRecoveryMark(row);
         console.error(`[pending] ${label} 포기 #${row.id}: ${msg}`);
-        if (row.kind === "promise") {
-          const meta = parseWakeMeta(row);
+        const meta = parseWakeMeta(row);
+        if (row.kind === "promise")
           tracePromise({
             characterId: row.character_id,
             rowId: row.id,
@@ -217,7 +222,15 @@ const fire = async (id: number): Promise<void> => {
             callId: meta.callId,
             detail: msg,
           });
-        }
+        else
+          traceWake({
+            characterId: row.character_id,
+            rowId: row.id,
+            stage: "gave_up",
+            activity: meta.activity ?? "하던 일",
+            block: { start: meta.blockStart, end: meta.blockEnd },
+            detail: msg,
+          });
         return;
       }
       console.warn(
@@ -523,12 +536,26 @@ export const dropPromiseRows = (
 };
 
 /** 구간 끝에 울릴 표시를 거둔다(두 종류 다) — 불가 구간이 아닌 길로 답장이 나가게 됐을 때. */
-export const dropWakeRows = (chatId: string): number => {
+export const dropWakeRows = (chatId: string, detail?: string): number => {
   const rows = supersedeWakeRows(chatId);
   for (const r of rows) {
     const t = timers.get(r.id);
     if (t) clearTimeout(t);
     timers.delete(r.id);
+    let meta: Partial<WakeMeta> = {};
+    try {
+      meta = JSON.parse(r.meta_json ?? "{}") as Partial<WakeMeta>;
+    } catch {
+      /* 활동 이름 없이 적는다 */
+    }
+    traceWake({
+      characterId: r.character_id,
+      rowId: r.id,
+      stage: "dropped",
+      activity: meta.activity ?? "하던 일",
+      block: { start: meta.blockStart, end: meta.blockEnd },
+      detail,
+    });
   }
   return rows.length;
 };
