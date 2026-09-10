@@ -159,7 +159,7 @@ test("careSituation과 reconnectSituation은 침묵 일수를 적는다", () => 
   assert.ok(reconnect.includes('{"text":"..."}'));
 });
 
-test("intentSummary는 있는 줄만 잇고 수 코드와 결 코드는 이름으로 바꾼다", () => {
+test("intentSummary는 있는 줄만 잇고 플러팅 코드와 결 코드는 이름으로 바꾼다", () => {
   assert.equal(intentSummary(null), "");
   assert.equal(
     intentSummary({
@@ -170,12 +170,12 @@ test("intentSummary는 있는 줄만 잇고 수 코드와 결 코드는 이름�
       lead_tone: "silent_care",
       thread: "책 이야기",
     }),
-    "파고들 것: 러닝 얘기 / 시도할 수: 기억해서 챙기기 저녁에, 앞세울 결은 말없이 챙김 / 이어갈 자리: 책 이야기",
+    "파고들 것: 러닝 얘기 / 시도할 플러팅: 기억해서 챙기기 저녁에, 앞세울 결은 말없이 챙김 / 이어갈 자리: 책 이야기",
   );
-  // 고백 차례는 수 코드 없이 자리만 온다 — 그 줄도 시도할 수로 낸다.
+  // 고백 차례는 플러팅 코드 없이 자리만 온다 — 그 줄도 시도할 플러팅으로 낸다.
   assert.equal(
     intentSummary({ move: null, move_note: "밤에 마음을 묻는다" }),
-    "시도할 수: 밤에 마음을 묻는다",
+    "시도할 플러팅: 밤에 마음을 묻는다",
   );
   // 모르는 코드는 이름으로 못 바꾸니 뺀다.
   assert.equal(intentSummary({ move: "unknown_move", lead_tone: "nope" }), "");
@@ -187,12 +187,12 @@ test("morningSituation은 오늘의 관계 의도 한 줄을 받고 없으면 (�
     thread: "책 이야기",
   });
   assert.ok(p.includes("- 오늘의 관계 의도: 파고들 것: 러닝 얘기 / 이어갈 자리: 책 이야기"));
-  assert.ok(p.includes("관계 의도의 흘릴 내 얘기와 시도할 수는 낮 대화의 몫"));
+  assert.ok(p.includes("관계 의도의 흘릴 내 얘기와 시도할 플러팅은 낮 대화의 몫"));
   const none = morningSituation(gathered(), "아침 (여유로운 시간대)", []);
   assert.ok(none.includes("- 오늘의 관계 의도: (없음)"));
 });
 
-test("relationSection은 문턱 조건·처음·추천 수를 이름 붙여 적고 extractPrompt에 그 절과 relation 규칙이 붙는다", () => {
+test("relationSection은 문턱 조건·처음·추천 플러팅을 이름 붙여 적고 extractPrompt에 그 절과 relation 규칙이 붙는다", () => {
   const g = gathered({
     relation: {
       stageNo: 1,

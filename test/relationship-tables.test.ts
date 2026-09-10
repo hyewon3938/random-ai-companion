@@ -285,7 +285,7 @@ test("열림 신호는 창 안의 것만 오래된 것부터 준다", () => {
   );
 });
 
-test("신호의 참거짓 셋은 0과 1로 저장되고 직전 수와 반응은 비워 둘 수 있다", () => {
+test("신호의 참거짓 셋은 0과 1로 저장되고 직전 플러팅과 반응은 비워 둘 수 있다", () => {
   const id = insertRelationshipSignal({
     characterId: charId,
     chatId: CHAT,
