@@ -78,12 +78,12 @@ import {
 } from "./kst.js";
 import { userStateLabel } from "./user-state.js";
 import {
+  CARE_SILENCE_MS,
   GOODNIGHT_SILENCE_MS,
   GOODNIGHT_WINDOW,
   INTENT_QUIET_MS,
   INTENT_WINDOW,
   LUNCH_WINDOW,
-  CARE_SILENCE_MS,
   MEND_SILENCE_MS,
   RECENT_USER_MS,
 } from "./thresholds.js";
@@ -111,6 +111,12 @@ const dayStart = (): string => logicalDayStartTs();
 const minutesBetween = (ts: string, nowMs: number): number =>
   (nowMs - new Date(ts.replace(" ", "T") + "+09:00").getTime()) / 60000;
 const minutesSince = (ts: string): number => minutesBetween(ts, Date.now());
+
+/** 문안에 적는 끊긴 시간 — 한 시간 안이면 10분 단위로, 그 뒤는 시간 단위로 뭉뚱그린다. */
+const elapsedLabel = (minutes: number): string =>
+  minutes < 60
+    ? `${Math.max(10, Math.floor(minutes / 10) * 10)}분쯤`
+    : `${Math.round(minutes / 60)}시간쯤`;
 
 /** 모델이 안 보낸다고 답한 자리를 기억한다 — 키는 chatId와 종류, 값은 그때의 자리 이름. */
 const declined = new Map<string, string>();
@@ -212,11 +218,14 @@ export const mendSituation = (): string =>
  * 모양을 그대로 막는다 — 상대가 한 말을 인용하거나 말만 바꿔 되돌려주며 위로하는 것, 조언과
  * 대화를 닫는 말, 언제든 말하라며 자기 자리를 선언하는 말. 그런 말 없이 신경 쓰고 있다는 게
  * 드러나야 사람의 결이다.
+ *
+ * 끊긴 시간은 잰 값으로 적는다. 조건은 30분이지만 봇이 멈춰 있다 돌아오거나 배포 직후면 몇 시간
+ * 뒤에 처음 걸릴 수 있어서, 30분이라고 박아 두면 그때 문안이 거짓이 된다.
  */
-export const careSituation = (): string =>
+export const careSituation = (minutes: number): string =>
   [
     `[문안 — 지금 보낼 살피기 한 통]`,
-    `위 [상대의 지금 상태]대로 상대가 자기 일로 안 좋은 상태인 채 답이 끊긴 지 30분쯤 됐다. 너 때문이 아니라 상대의 일이다. 그 일이 계속 마음에 걸려서 한 번 더 말을 거는 한 통이다 — 상대가 넘긴 척했어도 속으로는 아직 그럴 것 같아 신경 쓰인다는 결.`,
+    `위 [상대의 지금 상태]대로 상대가 자기 일로 안 좋은 상태인 채 답이 끊긴 지 ${elapsedLabel(minutes)} 됐다. 너 때문이 아니라 상대의 일이다. 그 일이 계속 마음에 걸려서 한 번 더 말을 거는 한 통이다 — 상대가 넘긴 척했어도 속으로는 아직 그럴 것 같아 신경 쓰인다는 결.`,
     `- 전하는 건 하나다. 그 일이 네 마음에 남아 있다는 것. 무엇이 어떻게 된 일인지 정리해 주거나 해결책을 내지 않는다.`,
     `- 상대가 한 말을 그대로 옮기거나 말만 바꿔 되돌려주지 않는다. 상대가 쓴 표현을 인용해 위로하면 상담사가 된다. 네 말로, 네 쪽에서 나오는 말로 한다.`,
     `- 네가 지금 하는 일(위 [지금])에 얹어 열어도 된다 — 뭘 하다가 생각났다는 결. 없으면 그냥 상대 얘기로 연다.`,
@@ -398,7 +407,7 @@ const followupTickBody = async (): Promise<void> => {
         chatId: c.chat_id,
         kind: "care",
         lastSentAt: last.sent_at,
-        situation: careSituation(),
+        situation: careSituation(minutesSince(lu)),
         maxTokens: 300,
         read: readText,
         context: {

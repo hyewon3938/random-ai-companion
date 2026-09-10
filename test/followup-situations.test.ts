@@ -90,12 +90,15 @@ test("달래기 문단은 상대 상태를 가리키고 변명·재촉·자러 �
 });
 
 test("살피기 문단은 상대의 일이 원인임을 적고 인용·조언·자리 선언·자러 간다는 말을 막는다", () => {
-  const out = careSituation();
+  const out = careSituation(32);
   assert.match(out, /^\[문안 — 지금 보낼 살피기 한 통\]/);
   assert.match(out, /\[상대의 지금 상태\]/);
   assert.match(out, /자기 일로 안 좋은 상태/);
   assert.match(out, /너 때문이 아니라/);
-  assert.match(out, /30분쯤 됐다/);
+  // 끊긴 시간은 잰 값으로 적는다 — 한 시간 안은 10분 단위, 그 뒤는 시간 단위.
+  assert.match(out, /끊긴 지 30분쯤 됐다/);
+  assert.match(careSituation(47), /끊긴 지 40분쯤 됐다/);
+  assert.match(careSituation(200), /끊긴 지 3시간쯤 됐다/);
   assert.match(out, /그대로 옮기거나 말만 바꿔 되돌려주지 않는다/);
   assert.match(out, /조언하지 않고/);
   assert.match(out, /재촉하지 않는다/);
@@ -159,7 +162,7 @@ test("여섯 문단은 서로 다르고 같은 인자에 같은 값을 돌려준
   const all = [
     goodnightSituation(null),
     mendSituation(),
-    careSituation(),
+    careSituation(32),
     lunchSituation(),
     catchupSituation(null),
     intentSituation("thread", "다음 주 발표 준비"),
