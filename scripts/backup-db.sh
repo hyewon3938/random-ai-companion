@@ -77,7 +77,7 @@ WORK=$(mktemp -d)
 IN_CONTAINER="/tmp/companion-backup-$STAMP.db"
 cleanup() {
   rm -rf "$WORK"
-  # 검사하려고 열 때 -shm·-wal이 함께 생긴다. 본체만 지우면 그 둘이 매 실행 쌓인다.
+  # 본체를 지운다. 곁파일(-shm·-wal)은 도구가 스스로 치우지만 옛 이미지로 돌 때를 위해 함께 건다.
   docker exec "$CONTAINER" rm -f \
     "$IN_CONTAINER" "$IN_CONTAINER-shm" "$IN_CONTAINER-wal" >/dev/null 2>&1 || true
 }
