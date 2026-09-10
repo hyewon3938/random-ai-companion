@@ -35,7 +35,7 @@ import {
   searchTaggedRefs,
   todayNotes,
 } from "../memory.js";
-import { capHits } from "../recall.js";
+import { capHits, pickUserMemories } from "../recall.js";
 import type { TagPick, TagPicker } from "../tag-pick.js";
 import {
   CONTACT_GAP_HOLD_MS,
@@ -88,6 +88,11 @@ export interface BuildOptions {
    * 답장 경로는 대화 기록을 turns로 넘기므로 켜면 같은 말이 두 번 들어간다.
    */
   recent?: number;
+  /**
+   * 태그 없이 고른 상대 쪽 기억을 이만큼 꼬리에 넣는다 — 선톡 문안 경로에서만 켠다.
+   * 답장 경로는 이번 발화의 태그로 검색하므로 켜면 같은 줄이 두 자리에 들어간다.
+   */
+  userMemories?: number;
   /** 넘겨 주면 검색 결과를 여기에 적어 돌려준다(호출 기록용). */
   trace?: BuildTrace;
   /**
@@ -148,6 +153,8 @@ export interface ContextInput {
   contactGap: ContactGap | null;
   /** 방금까지 오간 말 — opts.recent를 켠 선톡 문안 경로에서만 채운다. */
   recent: MessageRow[];
+  /** 태그 없이 고른 상대 쪽 기억 — opts.userMemories를 켠 선톡 문안 경로에서만 채운다. */
+  userMemories: MemoryRow[];
   /** 지금 관계 — 단계·며칠째·처음·오늘 쓴 수·오늘의 의도(#353). */
   relationship: RelationshipInput;
 }
@@ -184,9 +191,10 @@ export const readContextInput = (
   const today = kstDateString();
   const upcoming = getUpcomingSchedules(characterId, today);
   const diaries = getRecentDiaries(characterId, RECENT_DIARY_DAYS);
-  const coldStart = !listMemoryItems(characterId).some(
-    (r) => r.owner === "user",
-  );
+  // 저장된 기억 전부를 한 번만 읽어 두 자리가 나눠 쓴다 — 첫 대화인지 보는 데도, 선톡이
+  // 태그 없이 상대 쪽 기억을 고르는 데도 같은 목록이 필요하다.
+  const memoryItems = listMemoryItems(characterId);
+  const coldStart = !memoryItems.some((r) => r.owner === "user");
 
   const plan = readTodayPlan(characterId, logicalToday);
   const now = kstLogicalClock();
@@ -293,6 +301,9 @@ export const readContextInput = (
     lastTalk: prev ? lastTalkedLabel(prev.sent_at) : null,
     contactGap: gap ? contactGapOf(gap.lastChar, gap.firstUser) : null,
     recent: opts.recent ? getRecentMessages(chatId, characterId, opts.recent) : [],
+    userMemories: opts.userMemories
+      ? pickUserMemories(memoryItems, opts.userMemories)
+      : [],
     relationship: readRelationshipInput(characterId, chatId, logicalToday),
   };
 };

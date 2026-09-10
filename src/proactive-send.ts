@@ -6,6 +6,8 @@
 //   2. 앞 틱에서 못 나간 같은 종류의 문안이 있으면 모델을 부르지 않고 그것부터 쓴다.
 //   3. 없으면 대화와 같은 3층 프롬프트에 상황 문단을 얹어 모델을 부르고, 부른 쪽이 준 read로
 //      응답을 문안으로 읽는다. read가 null을 주면 보내지 않는다(접은 사유는 read 안에서 남긴다).
+//      선톡에는 검색어로 쓸 상대 발화가 없어서, 꼬리에 최근 대화와 함께 태그 없이 고른 상대 쪽
+//      기억을 넣는다 — 먼저 거는 말의 사물이 상대가 전에 한 말에서 나오게 하는 재료다(#343).
 //   4. 모델을 기다리는 사이 마지막 메시지가 바뀌었으면 접는다 — 유저가 답했거나 다른 경로가
 //      뭔가 보낸 것이다.
 // 부른 쪽이 context를 주면 문안 호출 행에 판단 근거로 남겨 슬랙 문안 게시가 머리에 적는다
@@ -34,7 +36,10 @@ import {
   type HeldDraftKind,
 } from "./proactive-policy.js";
 import { traceProactiveFail } from "./reply-trace.js";
-import { PROACTIVE_RECENT_LINES } from "./thresholds.js";
+import {
+  PROACTIVE_RECENT_LINES,
+  PROACTIVE_USER_MEMORY_LINES,
+} from "./thresholds.js";
 
 export interface ProactiveDraftSpec<T> {
   characterId: number;
@@ -43,6 +48,11 @@ export interface ProactiveDraftSpec<T> {
   kind: HeldDraftKind;
   /** 자리 비움 예고만 채운다 — 보관 문안은 같은 블록(시작 시각)에서만 다시 쓴다. */
   block?: string;
+  /**
+   * 발송 기록의 meta_json에 함께 적을 값 — 의도 선톡의 줄 코드(intent_line)처럼 나중에 세야
+   * 하는 것을 넣는다. block은 여기 넣지 않는다(위 칸이 보관함과 함께 쓴다).
+   */
+  extraMeta?: Record<string, unknown>;
   /** 발송 직전에 대조할 마지막 메시지 시각. 문안을 만드는 사이 바뀌었으면 접는다. */
   lastSentAt: string;
   /** 3층 프롬프트에 얹을 상황 문단. */
@@ -94,6 +104,7 @@ export const sendProactiveDraft = async <T>(
       const draft = await deps.ask<T>(
         buildSystemBlocks(characterId, chatId, {
           recent: PROACTIVE_RECENT_LINES,
+          userMemories: PROACTIVE_USER_MEMORY_LINES,
           situation: spec.situation,
         }),
         "위 상황 문단대로 문안을 만들어.",
@@ -117,12 +128,16 @@ export const sendProactiveDraft = async <T>(
       spec.onMoved?.(meta);
       return "moved";
     }
+    const sendMeta = {
+      ...(spec.block !== undefined ? { block: spec.block } : {}),
+      ...spec.extraMeta,
+    };
     await deps.send(
       chatId,
       characterId,
       outgoing.text,
       kind,
-      spec.block !== undefined ? { block: spec.block } : undefined,
+      Object.keys(sendMeta).length ? sendMeta : undefined,
     );
     outgoing = null; // 나갔으니 들고 있지 않는다
     console.log(spec.sentLog);

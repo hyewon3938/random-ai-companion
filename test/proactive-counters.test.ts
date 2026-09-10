@@ -18,6 +18,7 @@ const { createFixtureCharacter } = await import("../src/eval/fixture-character.j
 const {
   awayNoticeCountToday,
   awayNoticeSent,
+  budgetedSinceLastUser,
   glanceSentForBlock,
   mendSentSince,
   proactiveCountToday,
@@ -50,8 +51,10 @@ after(() => {
   db.close();
 });
 
-test("오늘 선톡 수는 자리 비움과 틈새 한 줄을 빼고 센다", () => {
-  assert.equal(proactiveCountToday(CHAT, characterId, SINCE), 3);
+test("하루 합계는 자리 비움·틈새 한 줄·달래기를 빼고 센다", () => {
+  // 심어 둔 오늘 선톡은 아침·자리 비움·복귀·틈새·안부·달래기 여섯이고, 합계에 드는 건
+  // 아침과 안부 둘이다(설계 원본 §7).
+  assert.equal(proactiveCountToday(CHAT, characterId, SINCE), 2);
   assert.equal(proactiveKindCountToday(CHAT, characterId, SINCE, "checkin"), 1);
   assert.equal(proactiveKindCountToday(CHAT, characterId, SINCE, "morning"), 1);
 });
@@ -69,6 +72,8 @@ test("틈새 한 줄은 블록별로 하루 한 번인지 찾는다", () => {
 
 test("마지막 유저 말 이후 구간만 본다", () => {
   assert.equal(proactiveSinceLastUser(CHAT, characterId), 2);
+  // 의도 선톡이 보는 셈은 같은 구간에서 달래기를 뺀다 — 안부 한 통만 남는다.
+  assert.equal(budgetedSinceLastUser(CHAT, characterId), 1);
   // 달래기는 상대 상태가 시작된 시각 뒤로만 찾는다
   assert.equal(mendSentSince(CHAT, characterId, "2026-09-06 12:30:00"), true);
   assert.equal(mendSentSince(CHAT, characterId, "2026-09-06 15:30:00"), false);

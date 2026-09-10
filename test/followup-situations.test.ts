@@ -1,8 +1,12 @@
-// 침묵 팔로업(followup.ts)의 상황 문단 넷 — 굿나잇·달래기·점심·근황 — 을 검사한다. 모델은 부르지 않는다.
+// 침묵 팔로업(followup.ts)의 상황 문단 다섯 — 굿나잇·달래기·점심·근황·의도 — 을 검사한다.
+// 모델은 부르지 않는다.
 //
-// 네 문단은 인자가 없고 분기도 없다. 각 문단이 제 머리글과 제 사정(자정 넘긴 침묵·나 때문에 안 좋은
-// 상태·이틀째·네 시간)을 적는지, 굿나잇·달래기는 text만 받고 점심·근황은 send로 접을 수 있는
-// 형식인지, 달래기에 변명·재촉·자러 간다는 말을 막는 줄이 있는지, 넷이 서로 다른지 본다.
+// 각 문단이 제 머리글과 제 사정(자정 넘긴 침묵·나 때문에 안 좋은 상태·이틀째·네 시간·오늘
+// 하려던 것)을 적는지, 굿나잇·달래기는 text만 받고 나머지는 send로 접을 수 있는 형식인지,
+// 달래기에 변명·재촉·자러 간다는 말을 막는 줄이 있는지, 다섯이 서로 다른지 본다.
+//
+// 오늘의 관계 의도를 받는 셋(굿나잇·근황·의도)은 그 줄이 문단에 실제로 들어가는지, 의도 행이
+// 없는 날에도 문단이 제 모양을 지키는지 함께 본다(설계 원본 §4).
 //
 // followup.ts가 DB와 봇 모듈을 함께 읽으므로 DB는 임시 파일로 새로 만들고 토큰은 가짜다.
 import assert from "node:assert/strict";
@@ -10,6 +14,8 @@ import { after, test } from "node:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// 타입만 가져온다 — 값이 아니라 컴파일 뒤 사라지므로 DB 경로를 정하기 전에 적어도 된다.
+import type { RelationshipIntentRow } from "../src/db.js";
 
 process.env.DB_PATH = join(
   mkdtempSync(join(tmpdir(), "companion-test-")),
@@ -21,22 +27,52 @@ process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:1";
 
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다 — 정적 import는 이 줄들보다 먼저 돈다.
 const { db } = await import("../src/db.js");
-const { catchupSituation, goodnightSituation, lunchSituation, mendSituation } =
-  await import("../src/followup.js");
+const {
+  catchupSituation,
+  goodnightSituation,
+  intentSituation,
+  lunchSituation,
+  mendSituation,
+} = await import("../src/followup.js");
 
 const TEXT_ONLY = /JSON으로만 답한다: \{"text":"\.\.\."\}$/;
 const SEND_OR_FOLD =
   /JSON으로만 답한다: \{"send":true,"text":"\.\.\."\} 또는 \{"send":false\}$/;
 
+const intentRow = (
+  over: Partial<RelationshipIntentRow> = {},
+): RelationshipIntentRow => ({
+  id: 1,
+  character_id: 1,
+  date: "2026-09-10",
+  dig: "왜 그 팀을 그만뒀는지",
+  share: "요즘 새벽에 러닝 나가는 얘기",
+  move: null,
+  move_note: null,
+  lead_tone: null,
+  thread: "다음 주 발표 준비",
+  basis_json: null,
+  created_at: "2026-09-10 04:00:00",
+  ...over,
+});
+
 after(() => db.close());
 
 test("굿나잇 문단은 자정 넘긴 침묵을 적고 text만 받는다", () => {
-  const out = goodnightSituation();
+  const out = goodnightSituation(null);
   assert.match(out, /^\[문안 — 지금 보낼 굿나잇 한 통\]/);
   assert.match(out, /자정을 넘겨/);
   assert.match(out, /한 시간쯤 됐다/);
   assert.match(out, TEXT_ONLY);
   assert.doesNotMatch(out, /"send"/);
+});
+
+test("굿나잇 문단은 이어갈 자리 줄만 얹고 나머지 의도 줄은 빼놓는다", () => {
+  const out = goodnightSituation(intentRow());
+  assert.match(out, /다음 주 발표 준비/);
+  assert.doesNotMatch(out, /왜 그 팀을 그만뒀는지/);
+  assert.doesNotMatch(out, /새벽에 러닝/);
+  assert.match(out, TEXT_ONLY);
 });
 
 test("달래기 문단은 상대 상태를 가리키고 변명·재촉·자러 간다는 말을 막는다", () => {
@@ -60,23 +96,53 @@ test("점심 문단은 이틀째 침묵과 아침 한 통을 적고 send로 접�
   assert.match(out, SEND_OR_FOLD);
 });
 
-test("근황 문단은 네 시간 침묵을 적고 send로 접을 수 있다", () => {
-  const out = catchupSituation();
+test("근황 문단은 상대가 전에 한 말을 먼저 보라고 적는다", () => {
+  const out = catchupSituation(null);
   assert.match(out, /^\[문안 — 지금 보낼 근황 한 통\]/);
   assert.match(out, /네 시간 넘게 조용하다/);
+  assert.match(out, /\[상대가 전에 한 말\]/);
   assert.match(out, /재촉하지 않는다/);
   assert.match(out, /억지스러우면 send=false/);
   assert.match(out, SEND_OR_FOLD);
 });
 
-test("네 문단은 서로 다르고 인자 없이 같은 값을 돌려준다", () => {
+test("근황 문단은 흘릴 내 얘기와 파고들 것을 얹고 이어갈 자리는 빼놓는다", () => {
+  const out = catchupSituation(intentRow());
+  assert.match(out, /새벽에 러닝 나가는 얘기/);
+  assert.match(out, /왜 그 팀을 그만뒀는지/);
+  assert.doesNotMatch(out, /다음 주 발표 준비/);
+});
+
+test("의도 행이 빈 날에도 근황·굿나잇 문단은 제 형식을 지킨다", () => {
+  const empty = intentRow({ dig: null, share: null, thread: null });
+  const catchup = catchupSituation(empty);
+  const goodnight = goodnightSituation(empty);
+  assert.match(catchup, SEND_OR_FOLD);
+  assert.match(goodnight, TEXT_ONLY);
+  // 값이 없는 줄은 빈 줄로 남지 않는다 — 응답 형식 앞 한 줄만 비운다.
+  assert.doesNotMatch(catchup.replace(/\n\n[^\n]*$/, ""), /\n\n/);
+  assert.doesNotMatch(goodnight.replace(/\n\n[^\n]*$/, ""), /\n\n/);
+});
+
+test("의도 문단은 고른 줄의 이름과 내용을 적고 그대로 읊지 말라고 한다", () => {
+  const out = intentSituation("dig", "왜 그 팀을 그만뒀는지");
+  assert.match(out, /^\[문안 — 지금 보낼 한 통\]/);
+  assert.match(out, /파고들 것: 왜 그 팀을 그만뒀는지/);
+  assert.match(out, /두 시간 넘게 말이 없다/);
+  assert.match(out, /그대로 읊지 않는다/);
+  assert.match(out, /\[상대가 전에 한 말\]/);
+  assert.match(out, SEND_OR_FOLD);
+});
+
+test("다섯 문단은 서로 다르고 같은 인자에 같은 값을 돌려준다", () => {
   const all = [
-    goodnightSituation(),
+    goodnightSituation(null),
     mendSituation(),
     lunchSituation(),
-    catchupSituation(),
+    catchupSituation(null),
+    intentSituation("thread", "다음 주 발표 준비"),
   ];
-  assert.equal(new Set(all).size, 4);
-  assert.equal(goodnightSituation(), all[0]);
-  assert.equal(catchupSituation(), all[3]);
+  assert.equal(new Set(all).size, 5);
+  assert.equal(goodnightSituation(null), all[0]);
+  assert.equal(catchupSituation(null), all[3]);
 });

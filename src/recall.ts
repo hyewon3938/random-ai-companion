@@ -171,7 +171,7 @@ const renderLine = (r: MemoryRow, owner: boolean): string =>
 
 export const memoryLine = (r: MemoryRow): string => renderLine(r, false);
 
-export const memoryBlock = (rows: MemoryRow[]): string => {
+export const memoryBlock = (rows: MemoryRow[], owner = true): string => {
   const byType = new Map<MemoryItemType, MemoryRow[]>();
   for (const r of rows) {
     const list = byType.get(r.item_type) ?? [];
@@ -182,7 +182,7 @@ export const memoryBlock = (rows: MemoryRow[]): string => {
     .map(
       (t) =>
         `[${MEMORY_ITEM_TYPE_NAME[t]}]\n${(byType.get(t) ?? [])
-          .map((r) => renderLine(r, true))
+          .map((r) => renderLine(r, owner))
           .join("\n")}`,
     )
     .join("\n\n");
@@ -191,6 +191,30 @@ export const memoryBlock = (rows: MemoryRow[]): string => {
 /** 태그로 찾은 기억 절. 넣을 것이 없으면 빈 문자열이라 조립하는 쪽에서 그대로 빠진다. */
 export const memorySection = (rows: MemoryRow[]): string =>
   rows.length ? `[지금 얘기와 관련해 기억나는 것]\n${memoryBlock(rows)}` : "";
+
+/**
+ * 태그 없이 고르는 상대 쪽 기억 — 먼저 거는 말의 사물을 상대가 전에 한 말에서 가져오는 재료다.
+ *
+ * 선톡에는 검색어로 쓸 상대 발화가 없어서 태그 검색이 아예 열리지 않고, 그래서 문안이 캐릭터가
+ * 지금 하는 일에서만 나왔다. 여기서는 태그를 보지 않고 상대 쪽 기억을 최근에 말한 것부터
+ * 자른다. 갱신 시각이 같으면 진행 중인 일을 앞에 둔다.
+ */
+export const pickUserMemories = (
+  candidates: MemoryRow[],
+  cap: number,
+): MemoryRow[] =>
+  candidates
+    .filter((r) => r.owner === "user")
+    .sort(
+      (a, b) =>
+        (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0) ||
+        TYPE_ORDER.indexOf(a.item_type) - TYPE_ORDER.indexOf(b.item_type),
+    )
+    .slice(0, cap);
+
+/** 선톡 문안이 받는 상대 쪽 기억 절. 주인 표시는 빼는데 절 제목이 이미 상대 것이라고 밝힌다. */
+export const userMemorySection = (rows: MemoryRow[]): string =>
+  rows.length ? `[상대가 전에 한 말]\n${memoryBlock(rows, false)}` : "";
 
 export interface DiaryRow {
   date: string;

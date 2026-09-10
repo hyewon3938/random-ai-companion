@@ -268,6 +268,45 @@ export const FIRST_BY_NAME: Record<FirstBy, string> = {
   user: "유저",
 };
 
+/** 오늘의 관계 의도 4줄의 코드. relationship_intents의 컬럼 이름과 같고, 어느 줄을 이미 썼는지는
+ * 메시지 meta_json의 intent_line에 이 코드로 적힌다. */
+export type IntentLine = "dig" | "share" | "move" | "thread";
+
+export const INTENT_LINE_NAME: Record<IntentLine, string> = {
+  dig: "파고들 것",
+  share: "흘릴 내 얘기",
+  move: "시도할 수",
+  thread: "이어갈 자리",
+};
+
+/** 캐릭터가 먼저 거는 연락의 종류. 발송 쪽 이름표(bot.ts의 SendKind)는 여기에 답장과 복구를
+ * 더한 것이고, 하루 예산과 근거 판정(proactive-policy.ts)은 이 목록만 본다. */
+export type ProactiveKind =
+  | "morning"
+  | "checkin"
+  | "intent"
+  | "catchup"
+  | "lunch"
+  | "goodnight"
+  | "mend"
+  | "away"
+  | "promise"
+  | "glance";
+
+/** 선톡 종류의 이름. 슬랙 게시와 로그가 이 이름으로 적는다. */
+export const PROACTIVE_KIND_NAME: Record<ProactiveKind, string> = {
+  morning: "아침 선톡",
+  checkin: "안부 선톡",
+  intent: "의도 선톡",
+  catchup: "근황 선톡",
+  lunch: "점심 선톡",
+  goodnight: "밤 인사 선톡",
+  mend: "달래기 선톡",
+  away: "자리비움 선톡",
+  promise: "약속 연락",
+  glance: "틈새 한 줄",
+};
+
 /** 모델을 부른 자리 — 호출 원본(llm_calls)에 무슨 일로 부른 것인지 적는다. */
 export type CallPurpose =
   | "reply"
@@ -284,6 +323,7 @@ export type CallPurpose =
   | "bible"
   | "morning"
   | "lunch"
+  | "intent"
   | "reconnect"
   | "catchup"
   | "goodnight"
@@ -309,6 +349,7 @@ export const CALL_PURPOSE_NAME: Record<CallPurpose, string> = {
   bible: "옛 랜덤 생성",
   morning: "아침 선톡",
   lunch: "점심 선톡",
+  intent: "의도 선톡",
   reconnect: "안부 선톡",
   catchup: "근황 선톡",
   goodnight: "밤 인사 선톡",

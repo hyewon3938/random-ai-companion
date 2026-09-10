@@ -10,8 +10,19 @@
 // 오늘 쓴 수와 오늘 일정을 말했는지는 캐릭터 답장 행의 meta_json(move·told_plan)에서 읽는다. 답장
 // 신호가 그 값을 적는 자리는 reply-compose.ts와 pending.ts다.
 
-import type { FirstBy, FirstKind, Move, RelationshipStage } from "../labels.js";
-import { FIRST_KIND_NAME, LEAD_TONE_NAME, MOVE_NAME } from "../labels.js";
+import type {
+  FirstBy,
+  FirstKind,
+  IntentLine,
+  Move,
+  RelationshipStage,
+} from "../labels.js";
+import {
+  FIRST_KIND_NAME,
+  INTENT_LINE_NAME,
+  LEAD_TONE_NAME,
+  MOVE_NAME,
+} from "../labels.js";
 import {
   getActiveSchedulesOn,
   getAssistantMetaSince,
@@ -178,22 +189,43 @@ export const readRelationshipInput = (
 const firstLabel = (f: DoneFirst): string =>
   `${FIRST_KIND_NAME[f.kind]}(${monthDay(f.date)}${f.by === "user" ? " · 상대가 먼저" : ""})`;
 
+/**
+ * 오늘의 관계 의도에서 한 줄의 내용만 꺼낸다. 그 줄이 빈 날은 null.
+ *
+ * 답장 프롬프트는 네 줄을 다 내지만 선톡 문안은 한두 줄만 꺼내 쓴다(의도 선톡은 아직 안 쓴 줄
+ * 하나, 근황 선톡은 흘릴 내 얘기와 파고들 것). 두 자리가 같은 문장을 보게 하려고 줄 만들기를
+ * 여기 모았다.
+ */
+export const intentLineText = (
+  i: RelationshipIntentRow | null,
+  line: IntentLine,
+): string | null => {
+  if (!i) return null;
+  if (line === "dig") return i.dig || null;
+  if (line === "share") return i.share || null;
+  if (line === "thread") return i.thread || null;
+  // 수 코드 없이 move_note만 있는 날은 고백 차례다 — 마음 확인은 수 코드가 아니라 자리를 적은
+  // 줄로 온다(relationship-stage.ts). 그 줄을 그대로 시도할 수로 낸다.
+  if (!i.move && !i.move_note) return null;
+  const bits = [i.move ? MOVE_NAME[i.move] : null, i.move_note].filter(Boolean);
+  let s = bits.join(" ");
+  if (i.lead_tone) s += `. 앞세울 결은 ${LEAD_TONE_NAME[i.lead_tone]}`;
+  return s;
+};
+
+const INTENT_ORDER: IntentLine[] = ["dig", "share", "move", "thread"];
+
 /** 오늘의 관계 의도 4줄. 없는 줄은 뺀다. */
 const intentLines = (i: RelationshipIntentRow | null): string[] => {
   if (!i) return [];
   const out: string[] = [];
-  if (i.dig) out.push(`  · 파고들 것: ${i.dig}`);
-  if (i.share) out.push(`  · 흘릴 내 얘기: ${i.share}`);
-  // 수 코드 없이 move_note만 있는 날은 고백 차례다 — 마음 확인은 수 코드가 아니라 자리를 적은
-  // 줄로 온다(relationship-stage.ts). 그 줄을 그대로 시도할 수로 낸다.
-  if (i.move || i.move_note) {
-    const bits = [i.move ? MOVE_NAME[i.move] : null, i.move_note].filter(Boolean);
-    let s = bits.join(" ");
-    if (i.lead_tone) s += `. 앞세울 결은 ${LEAD_TONE_NAME[i.lead_tone]}`;
-    out.push(`  · 시도할 수: ${s}`);
-  } else if (i.lead_tone)
-    out.push(`  · 앞세울 결: ${LEAD_TONE_NAME[i.lead_tone]}`);
-  if (i.thread) out.push(`  · 이어갈 자리: ${i.thread}`);
+  for (const line of INTENT_ORDER) {
+    const text = intentLineText(i, line);
+    if (text) out.push(`  · ${INTENT_LINE_NAME[line]}: ${text}`);
+    // 수 코드도 자리도 없이 앞세울 결만 적힌 날은 그 결만 낸다.
+    else if (line === "move" && i.lead_tone)
+      out.push(`  · 앞세울 결: ${LEAD_TONE_NAME[i.lead_tone]}`);
+  }
   return out;
 };
 

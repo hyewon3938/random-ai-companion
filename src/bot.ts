@@ -45,6 +45,7 @@ import {
   SPEECH_LEVEL_NAME,
   type Flaw,
   type LeadTone,
+  type ProactiveKind,
   type SpeechLevel,
 } from "./labels.js";
 import {
@@ -60,7 +61,7 @@ import {
   recentUserGaps,
   type TimingDecision,
 } from "./reply-timing.js";
-import { awayNoticeSent } from "./proactive-policy.js";
+import { awayNoticeSent, basisLineFromMeta } from "./proactive-policy.js";
 import { composeReply, pendingUserTurn } from "./reply-compose.js";
 import { promiseSlotFor } from "./reply-promise.js";
 import {
@@ -89,6 +90,7 @@ import {
   ARRIVAL_WAIT_MAX_MS,
   ARRIVAL_WAIT_MIN_MS,
   PROACTIVE_RECENT_LINES,
+  PROACTIVE_USER_MEMORY_LINES,
 } from "./thresholds.js";
 import {
   getActiveCharacter,
@@ -113,23 +115,17 @@ import {
 
 // 캐릭터가 보내는 메시지의 종류 — 로그·플래그로 남겨 추적을 쉽게 한다
 // reply=유저 메시지에 대한 답장, recover=배포로 놓친 답장 복구, morning=아침 선톡,
-// checkin=긴 침묵 뒤 안부 선톡, away=자리비움 선톡(나갈 때·돌아왔을 때),
+// checkin=긴 침묵 뒤 안부 선톡, intent=오늘의 관계 의도 한 줄로 거는 선톡(이슈 #357),
+// away=자리비움 선톡(나갈 때·돌아왔을 때),
 // catchup=낮의 근황 선톡, goodnight=밤 인사 선톡, mend=서운해한 뒤 보내는 달래기 선톡,
 // lunch=무응답 이틀째에 아침 선톡과 함께 나가는 점심 선톡(이슈 #314),
 // promise=답장에서 한 연락 약속을 지키는 연락(이슈 #308),
 // glance=불가 구간에 온 확인 말에 지금 하는 일과 끝나는 시각을 알리는 틈새 한 줄(이슈 #339)
-export type SendKind =
-  | "reply"
-  | "recover"
-  | "morning"
-  | "checkin"
-  | "away"
-  | "catchup"
-  | "goodnight"
-  | "mend"
-  | "lunch"
-  | "promise"
-  | "glance";
+//
+// 먼저 거는 연락의 목록은 labels.ts의 ProactiveKind가 갖는다 — 하루 예산과 근거를 정하는
+// 관제탑(proactive-policy.ts)이 그 목록을 봐야 하는데, 여기서 가져가면 발송이 판정을 거꾸로
+// 물게 된다.
+export type SendKind = "reply" | "recover" | ProactiveKind;
 
 // 텔레그램 API 연결 풀.
 //
@@ -330,6 +326,9 @@ export const sendProactive = async (
     text: sent.join("\n"),
     delivered: sent.length,
     total,
+    // 무슨 근거로 나갔는지는 기록에 적은 값에서 나온다 — 근거를 고른 자리와 게시가 떨어져
+    // 있어서, 여기서 다시 판단하지 않고 meta_json에 적힌 것을 그대로 읽는다.
+    basis: basisLineFromMeta(kind, extraMeta ?? {}),
   });
   return { delivered: sent.length, total };
 };
@@ -1295,6 +1294,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
     const draft = await chatJson<{ send: boolean; text?: string }>(
       buildSystemBlocks(row.character_id, chatId, {
         recent: PROACTIVE_RECENT_LINES,
+        userMemories: PROACTIVE_USER_MEMORY_LINES,
         situation: between
           ? betweenSituation(activity, between)
           : returnSituation(activity),
@@ -1478,6 +1478,7 @@ setPromiseHandler(async (row: PendingReplyRow) => {
     const draft = await chatJson<{ send: boolean; text?: string }>(
       buildSystemBlocks(row.character_id, chatId, {
         recent: PROACTIVE_RECENT_LINES,
+        userMemories: PROACTIVE_USER_MEMORY_LINES,
         situation: promiseSituation(promise, activity, false),
       }),
       "위 상황 문단대로 문안을 만들어.",
@@ -1513,8 +1514,10 @@ setPromiseHandler(async (row: PendingReplyRow) => {
         draftMeta.callId,
       );
     } else {
+      // 근거 줄이 어느 약속인지 적을 수 있게 기록 행 번호를 함께 남긴다(설계 원본 §9).
       await sendProactive(chatId, row.character_id, draft.text, "promise", {
         promise,
+        promise_row: row.id,
       });
       console.log(`[promise] 약속 연락 @ ${activity} → ${chatId}`);
       trace("sent", draftLabel, draftMeta.callId);

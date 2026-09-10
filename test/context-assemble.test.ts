@@ -96,6 +96,7 @@ const input = (over: Partial<ContextInput> = {}): ContextInput => ({
   lastTalk: null,
   contactGap: null,
   recent: [],
+  userMemories: [],
   relationship: {
     stage: 1,
     stageSince: "2026-08-30",
