@@ -10,8 +10,12 @@
 // 무엇을 쌓을지는 각 자리가 정한다 — 아침 각본은 trace/morning-plan.ts, 답장 호출은
 // trace/reply-post.ts, 발송 결과와 선톡은 reply-trace.ts, 새벽 정리는 nightly-trace.ts.
 // 문안 표기 도우미는 trace/format.ts에 있다.
+//
+// 쌓을 때 본문은 한 번 redactToken을 거친다 — 예외를 그대로 싣는 자리(traceReplyFault)가
+// 있어서, 라이브러리가 에러에 담은 요청 주소로 봇 토큰이 슬랙까지 나갈 수 있다. 부르는 쪽마다
+// 가리게 하면 새 자리가 늘 때 빠지므로, 밖으로 나가는 길목인 여기서 한 번에 가린다.
 
-import { config } from "./config.js";
+import { config, redactToken } from "./config.js";
 import {
   insertTraceEvent,
   markTraceEventSent,
@@ -61,7 +65,7 @@ export const recordTraceEvent = (e: TraceEventInput): void => {
       dedupeKey: e.dedupeKey ?? null,
       threadKey: e.threadKey ?? null,
       parentKey: e.parentKey ?? null,
-      text: e.text,
+      text: redactToken(e.text),
       createdAt: kstStamp(),
     });
   } catch (err) {

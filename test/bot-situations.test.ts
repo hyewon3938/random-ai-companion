@@ -25,7 +25,7 @@ process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:1";
 
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다 — 정적 import는 이 줄들보다 먼저 돈다.
 const { db, logMessage, saveDayPlan } = await import("../src/db.js");
-const { config } = await import("../src/config.js");
+const { config, redactToken } = await import("../src/config.js");
 const { createFixtureCharacter } =
   await import("../src/eval/fixture-character.js");
 const {
@@ -36,7 +36,6 @@ const {
   gatherSituation,
   pickReturnAction,
   promiseSituation,
-  redactToken,
   returnSituation,
   splitBubbles,
   upcomingAnnouncedAway,

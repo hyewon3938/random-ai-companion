@@ -31,7 +31,7 @@
 import { Bot, InlineKeyboard, type ApiClientOptions } from "grammy";
 import { Agent } from "node:https";
 import { inspect } from "node:util";
-import { config } from "./config.js";
+import { config, redactToken } from "./config.js";
 import {
   CHARACTER_AGE_BANDS,
   CHARACTER_GENDERS,
@@ -203,14 +203,6 @@ const sleep = (ms: number): Promise<void> =>
 
 const clamp = (n: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, n));
-
-// 방어적 로그 위생 — 에러 출력에 봇 토큰 같은 민감 값이 섞여 남지 않도록 로그 직전에 가린다.
-// 외부 라이브러리가 에러에 요청 정보를 담을 수 있어, 만약을 대비해 값 자체 + 토큰 형태 둘 다 마스킹.
-export const redactToken = (s: string): string =>
-  s
-    .split(config.telegramToken)
-    .join("<TOKEN>")
-    .replace(/\d{6,}:[A-Za-z0-9_-]{30,}/g, "<TOKEN>");
 
 // 에러를 안전하게 로그한다 — 어떤 형태의 에러든 깊이 직렬화한 뒤 민감 값을 가리고 출력.
 export const logErr = (prefix: string, e: unknown): void => {

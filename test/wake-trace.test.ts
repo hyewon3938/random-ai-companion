@@ -5,7 +5,8 @@
 // 여기서는 자리마다 행이 쌓이는지, 같은 행의 같은 자리는 한 번만 쌓이는지, 행 번호를 모르는
 // 자리는 블록 단위로 갈리는지, 자정 뒤 표기(24:xx)가 00:xx로 나오는지 본다. 표시를 거두는
 // dropWakeRows가 wake·return 행마다 남기고 promise 행은 건드리지 않는 것, 예외로 끝난 자리가
-// 대화·단계·분 단위로 갈려 쌓이는 것도 함께 본다.
+// 대화·단계·분 단위로 갈려 쌓이는 것도 함께 본다. 예외 본문은 그대로 싣는 자리라, 거기 섞인
+// 봇 토큰이 쌓기 전에 가려지는지도 본다.
 //
 // DB는 임시 파일로 새로 만들고 슬랙 토큰은 가짜다 — 게시함에 쌓기까지만 보므로 밖으로
 // 나가는 것은 없다.
@@ -29,6 +30,7 @@ const { traceWake, traceReplyFault } = await import("../src/reply-trace.js");
 const { db, insertPendingReply, waitingWakeRow } = await import("../src/db.js");
 const { dropWakeRows } = await import("../src/pending.js");
 const { kstLogicalDate } = await import("../src/kst.js");
+const { config } = await import("../src/config.js");
 const { createFixtureCharacter } = await import(
   "../src/eval/fixture-character.js"
 );
@@ -209,4 +211,19 @@ test("답장이 멈춘 자리는 대화·단계·분으로 갈려 쌓인다", ()
   assert.ok(rows[0].text.endsWith("\nTypeError: cannot read x"));
   assert.ok(rows[0].dedupe_key?.startsWith("reply_fault:chat-fault:respond:"));
   assert.ok(rows[2].dedupe_key?.startsWith("reply_fault:chat-fault-2:respond:"));
+});
+
+test("예외 본문에 섞인 봇 토큰은 쌓기 전에 가려진다", () => {
+  const from = lastId();
+  traceReplyFault({
+    characterId,
+    chatId: "chat-fault-token",
+    stage: "bot",
+    // 진짜 토큰이 아니라 모양만 흉내 낸 값과, 이 프로세스가 들고 있는 값 둘 다.
+    detail: `GrammyError: https://api.telegram.org/bot123456789:AAExampleFakeTokenForTestOnly_abcdefghijklmnop/sendMessage 실패 (${config.telegramToken})`,
+  });
+  const [row] = eventsAfter(from);
+  assert.ok(!row.text.includes("AAExampleFakeTokenForTestOnly"));
+  assert.ok(!row.text.includes(config.telegramToken));
+  assert.equal(row.text.match(/<TOKEN>/g)?.length, 2);
 });

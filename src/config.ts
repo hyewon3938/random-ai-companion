@@ -3,6 +3,9 @@
 // 프로세스가 사는 동안 바뀌지 않는 값만 담는다 — 텔레그램 토큰, 모델 API 키, 쓸 모델 이름,
 // DB 경로, 슬랙 채널. 값을 쓰는 쪽이 process.env를 직접 읽지 않게 해서, 이름을 바꿀 때
 // 고칠 자리가 여기 하나가 된다.
+//
+// 토큰을 가리는 함수(redactToken)도 여기 둔다 — 콘솔과 슬랙 두 곳이 같은 규칙으로 가려야
+// 하는데, 규칙을 두 파일에 적어 두면 한쪽만 고쳐진다.
 
 import "dotenv/config";
 
@@ -32,3 +35,12 @@ export const config = {
   slackBotToken: process.env.SLACK_BOT_TOKEN?.trim() || undefined,
   slackTraceChannel: process.env.SLACK_TRACE_CHANNEL?.trim() || undefined,
 };
+
+// 밖으로 나가는 글에서 봇 토큰을 가린다 — 콘솔 로그(bot.ts logErr)와 슬랙 게시(trace.ts)가
+// 쓴다. 외부 라이브러리가 에러에 요청 정보를 담을 수 있어, 값 자체와 토큰 형태 둘 다 가린다.
+// 토큰을 갖고 있는 이 파일에 두어야 두 자리가 같은 규칙을 쓴다.
+export const redactToken = (s: string): string =>
+  s
+    .split(config.telegramToken)
+    .join("<TOKEN>")
+    .replace(/\d{6,}:[A-Za-z0-9_-]{30,}/g, "<TOKEN>");
