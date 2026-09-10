@@ -216,7 +216,7 @@ test("상대 상태는 바뀐 턴에 이전 → 지금으로, 그대로면 지�
   assert.ok(failed.includes("*상대 상태* 판정 실패 · 없음"));
 });
 
-test("관계·열림 줄은 쓴 플러팅과 그 반응을 적는다", () => {
+test("관계·열림 줄은 이 답장이 쓴 플러팅과 그 반응을 적는다", () => {
   const text = renderReply(row(), {
     relationship: { stage: 2, days: 6, move: "nickname" },
     opened: {
@@ -226,16 +226,16 @@ test("관계·열림 줄은 쓴 플러팅과 그 반응을 적는다", () => {
       moveReaction: "accepted",
     },
   });
-  assert.ok(text.includes("*관계* 2단계 6일째 · 쓴 플러팅 별명"));
+  assert.ok(text.includes("*관계* 2단계 6일째 · 플러팅 별명 부르기"));
   assert.ok(
     text.includes(
-      "*열림* 자기 얘기 예 · 근황 물음 아니오 · 호감 아니오 · 플러팅 반응 받음",
+      "*열림* 자기 얘기 O · 근황 물음 X · 호감 X · 플러팅 반응 받음",
     ),
   );
   const none = renderReply(row(), {
     relationship: { stage: 1, days: 2, move: null },
   });
-  assert.ok(none.includes("*관계* 1단계 2일째 · 쓴 플러팅 없음"));
+  assert.ok(none.includes("*관계* 1단계 2일째 · 플러팅 없음"));
 });
 
 test("새 약속이 앞 약속을 거두면 그 건수를 약속 줄 끝에 적는다", () => {

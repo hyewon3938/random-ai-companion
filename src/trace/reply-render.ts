@@ -452,7 +452,7 @@ const outcomeLines = (ctx: CallContext): string[] => {
     const r = ctx.relationship;
     const parts = [
       `${r.stage ?? 1}단계${r.days ? ` ${r.days}일째` : ""}`,
-      r.move ? `쓴 플러팅 ${MOVE_NAME[r.move] ?? r.move}` : "쓴 플러팅 없음",
+      r.move ? `플러팅 ${MOVE_NAME[r.move] ?? r.move}` : "플러팅 없음",
     ];
     if (r.first)
       parts.push(
@@ -464,10 +464,10 @@ const outcomeLines = (ctx: CallContext): string[] => {
   }
   if (ctx.opened) {
     const o = ctx.opened;
-    const yn = (v: boolean | undefined): string => (v ? "예" : "아니오");
+    const ox = (v: boolean | undefined): string => (v ? "O" : "X");
     out.push(
-      `*열림* 자기 얘기 ${yn(o.openedSelf)} · 근황 물음 ${yn(o.askedAboutChar)}` +
-        ` · 호감 ${yn(o.saidAffection)}` +
+      `*열림* 자기 얘기 ${ox(o.openedSelf)} · 근황 물음 ${ox(o.askedAboutChar)}` +
+        ` · 호감 ${ox(o.saidAffection)}` +
         ` · 플러팅 반응 ${MOVE_REACTION_NAME[o.moveReaction ?? "none"]}`,
     );
   }
