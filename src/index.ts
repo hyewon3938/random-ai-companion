@@ -174,8 +174,8 @@ if (process.env.SLACK_VIZ_CHANNEL && !process.env.SLACK_TRACE_CHANNEL)
 console.log("[bot] starting (long polling)...");
 void bot.start();
 
-// 텔레그램 API 연결 보온. 이게 없으면 몇 시간 만에 나가는 선톡이 매번 새 연결을 맺게 되는데,
-// 이 VM에서는 그 '새 연결 수립'이 간헐적으로 죽어 선톡만 골라 유실됐다(bot.ts 참고).
+// 텔레그램 API 연결 보온. 몇 시간 만에 나가는 선톡이 매번 새 연결의 TLS 왕복을 치르지 않게
+// 유휴 소켓 하나를 살려 둔다. 새 연결이 즉시 실패하던 문제는 bot.ts의 agent 설정이 고쳤다(이슈 #363).
 keepConnectionWarm();
 
 // 만들어 두고 기다리던 답장을 이어받는다. 회의가 세 시간이면 답장도 세 시간을 기다리므로,
