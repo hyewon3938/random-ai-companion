@@ -13,6 +13,11 @@
 // 그 시각에 promise 핸들러가 그 사이 온 말에 답하거나 먼저 연락한다(이슈 #308). 약속이 그 뒤
 // 어떻게 됐는지는 단계마다 약속을 한 답장의 슬랙 스레드에 남긴다(tracePromise, 이슈 #312).
 //
+// 깨우기 표시를 걸고 올리고 거두는 자리, 그 표시가 울린 뒤 답장 없이 끝나는 갈래, 답장 경로가
+// 예외로 끝나는 자리는 전부 게시함에 쌓는다(traceWake·traceReplyFault, 이슈 #379). 표시가
+// 울린 뒤 답장 없이 끝나면 pending.ts가 그 행을 보낸 것으로 확정해 재시도도 걸리지 않으므로,
+// 여기서 적지 않으면 답장이 사라진 사실 자체가 어디에도 남지 않는다.
+//
 // 부팅하면 recoverMissedReplies가 놓친 답장을 복구한다. 워터마크로 중복을 막고 최근
 // 3시간 것만 본다 — 더 멀리 보면 자정 경계에서 어제 것까지 딸려 온다.
 //
@@ -26,7 +31,7 @@
 import { Bot, InlineKeyboard, type ApiClientOptions } from "grammy";
 import { Agent } from "node:https";
 import { inspect } from "node:util";
-import { config } from "./config.js";
+import { config, redactToken } from "./config.js";
 import {
   CHARACTER_AGE_BANDS,
   CHARACTER_GENDERS,
@@ -81,7 +86,10 @@ import {
 import {
   traceProactiveSend,
   tracePromise,
+  traceReplyFault,
+  traceWake,
   type PromiseStage,
+  type WakeStage,
 } from "./reply-trace.js";
 import { chatJson, type CallMeta } from "./llm.js";
 import { capBubbles } from "./reply-signal.js";
@@ -103,6 +111,7 @@ import {
   promoteWakeRow,
   setCallContext,
   setRecoveryMark,
+  waitingWakeRow,
   type PendingReplyRow,
 } from "./db.js";
 import {
@@ -194,14 +203,6 @@ const sleep = (ms: number): Promise<void> =>
 
 const clamp = (n: number, lo: number, hi: number): number =>
   Math.max(lo, Math.min(hi, n));
-
-// 방어적 로그 위생 — 에러 출력에 봇 토큰 같은 민감 값이 섞여 남지 않도록 로그 직전에 가린다.
-// 외부 라이브러리가 에러에 요청 정보를 담을 수 있어, 만약을 대비해 값 자체 + 토큰 형태 둘 다 마스킹.
-export const redactToken = (s: string): string =>
-  s
-    .split(config.telegramToken)
-    .join("<TOKEN>")
-    .replace(/\d{6,}:[A-Za-z0-9_-]{30,}/g, "<TOKEN>");
 
 // 에러를 안전하게 로그한다 — 어떤 형태의 에러든 깊이 직렬화한 뒤 민감 값을 가리고 출력.
 export const logErr = (prefix: string, e: unknown): void => {
@@ -978,6 +979,12 @@ const respond = async (
     const turn = pendingUserTurn(chatId, character.id);
     if (!turn) {
       console.warn(`[bot] 답장할 유저 메시지가 없다 — skip (chat=${chatId})`);
+      traceReplyFault({
+        characterId: character.id,
+        chatId,
+        stage: "no_turn",
+        detail: `${kind === "recover" ? "복구" : "답장"} 차례인데 아직 답하지 않은 유저 메시지가 없다`,
+      });
       return;
     }
 
@@ -1002,32 +1009,62 @@ const respond = async (
     // 답장 불가 구간 — 지금 만들지 않는다. 구간 끝에 울릴 깨우기 표시만 걸어 두면
     // 그때 쌓인 메시지를 한 번에 읽고 답한다. 표시가 이미 걸려 있으면 메시지만 쌓는다.
     if (timing.gather) {
-      if (!hasWaitingWakeRow(chatId))
-        scheduleWakeRow({
+      const block = {
+        start: timing.gather.blockStart,
+        end: timing.gather.blockEnd,
+      };
+      const existing = waitingWakeRow(chatId);
+      if (!existing) {
+        const armed = scheduleWakeRow({
           chatId,
           characterId: character.id,
           userMsgAt: turn.at,
           waitMs: timing.waitMs,
           meta: timing.gather,
         });
+        traceWake({
+          characterId: character.id,
+          rowId: armed.id,
+          stage: "armed",
+          activity: timing.gather.activity,
+          block,
+          detail: `${armed.sendAt.slice(11, 16)}에 깨어나 쌓인 말에 몰아 답한다`,
+        });
+      }
       // 이미 걸려 있으면 새로 만들지 않는다 — 한 구간에 행은 하나다. 다만 자리 비움 틱이
       // 걸어 둔 'return' 행이면 답할 말이 생긴 것이라 'wake'로 올린다. 그래야 구간이 끝날 때
       // 복귀 인사가 아니라 몰아 답장으로 간다.
-      else if (promoteWakeRow(chatId, turn.at))
+      else if (promoteWakeRow(chatId, turn.at)) {
         console.log(
           `[pending] 구간 끝 표시를 깨우기로 올림 — 이 구간에 온 말에 답한다 (chat=${chatId})`,
         );
-      else
+        traceWake({
+          characterId: character.id,
+          rowId: existing.id,
+          stage: "promoted",
+          activity: timing.gather.activity,
+          block,
+          detail: "복귀 인사 자리였는데 답할 말이 생겼다",
+        });
+      } else {
         console.log(
           `[pending] 깨우기 이미 걸림 — 메시지만 쌓는다 (chat=${chatId})`,
         );
+        traceWake({
+          characterId: character.id,
+          rowId: existing.id,
+          stage: "merged",
+          activity: timing.gather.activity,
+          block,
+        });
+      }
       // 이 메시지의 답장 책임은 깨우기 행이 진다 — 복구 틱이 다시 답하지 않게 표시한다.
       setRecoveryMark(chatId, turn.at);
       return;
     }
     // 불가 구간이 아닌 길로 답장이 나간다 — 걸려 있던 깨우기 표시가 있으면 거둔다.
     // (붙잡혀 일정을 접었거나 구간이 끝난 경우. 지금 만드는 답장이 쌓인 메시지까지 함께 답한다.)
-    const droppedWake = dropWakeRows(chatId);
+    const droppedWake = dropWakeRows(chatId, "지금 답장이 대신한다");
     if (droppedWake)
       console.log(
         `[pending] 깨우기 ${droppedWake}건 거둠 — 지금 답장이 대신한다 (chat=${chatId})`,
@@ -1159,15 +1196,24 @@ const parseReplyMeta = (raw: string | null): Record<string, unknown> => {
 // 선톡 틱을 전부 막고, 이 자리에서 둘 중 하나만 고른다).
 setWakeHandler(async (row: PendingReplyRow) => {
   const chatId = row.chat_id;
-  // 디바운스·답장 생성이 진행 중이면 그쪽이 답한다(불가 구간은 이미 끝났으니 평범한 길로 나간다).
-  if (pending.has(chatId) || responding.has(chatId)) return;
-  let meta: { activity?: string; blockStart?: string } = {};
-  try {
-    meta = JSON.parse(row.meta_json ?? "{}") as typeof meta;
-  } catch {
-    /* 깨우기 자체는 유효 — 활동 이름 없이 진행한다 */
-  }
+  const meta = parseWakeMeta(row);
   const activity = meta.activity ?? "하던 일";
+  // 이 행이 답장 없이 끝나는 갈래는 전부 여기로 적는다 — pending.ts가 행을 보낸 것으로
+  // 확정해 재시도가 걸리지 않으므로, 안 적으면 사라진 사실 자체가 남지 않는다(이슈 #379).
+  const wake = (stage: WakeStage, detail?: string): void =>
+    traceWake({
+      characterId: row.character_id,
+      rowId: row.id,
+      stage,
+      activity,
+      block: { start: meta.blockStart, end: meta.blockEnd },
+      detail,
+    });
+  // 디바운스·답장 생성이 진행 중이면 그쪽이 답한다(불가 구간은 이미 끝났으니 평범한 길로 나간다).
+  if (pending.has(chatId) || responding.has(chatId)) {
+    wake("yielded", "답장을 만드는 중이라 그쪽이 답한다");
+    return;
+  }
   // 이 구간에 처음 온 메시지가 얼마나 기다렸는지 — 깨우기 표시를 건 그 메시지 시각 기준.
   const firstAt = Date.parse(row.user_msg_at.replace(" ", "T") + "+09:00");
   const waitedMs = Number.isFinite(firstAt)
@@ -1178,7 +1224,10 @@ setWakeHandler(async (row: PendingReplyRow) => {
   // ① 몰아 답장 — 마지막 말이 유저 차례로 남아 있으면 그 사이 온 메시지가 있다는 뜻.
   if (last?.role === "user") {
     const turn = pendingUserTurn(chatId, row.character_id);
-    if (!turn) return;
+    if (!turn) {
+      wake("no_turn", "직전 발화는 유저인데 답할 차례가 잡히지 않는다");
+      return;
+    }
     // 순서는 답장과 같다(reply-compose.ts). 다른 것은 셋 — 방금 돌아왔다는 상황 문단, 구간에
     // 처음 온 메시지에 강제하는 시간 표시(자리를 비운 사이가 한 시간이 안 되면 마커가 안 붙어
     // 나가기 직전 발화와 그 뒤에 온 말이 기록에서 맞붙는다), 텀 대신 어느 구간이 끝나 답하는지를
@@ -1194,7 +1243,10 @@ setWakeHandler(async (row: PendingReplyRow) => {
       },
       logTag: "[wake]",
     });
-    if (!reply) return;
+    if (!reply) {
+      wake("no_reply", "빈 답장이거나 만드는 사이 유저가 말을 더 보냈다");
+      return;
+    }
     const { bubbles, signals } = reply;
     // 바로 보낸다 — 구간이 끝나는 시각이 이미 이 답장의 텀이다.
     const { sent, error } = await sendBubbleList(chatId, bubbles);
@@ -1264,7 +1316,10 @@ setWakeHandler(async (row: PendingReplyRow) => {
   // 예전에는 자리 비움 예고를 보낸 자리에서만 인사했는데, 그 예고는 하루 상한·중복 검사·침묵
   // 검사에 자주 막힌다. 그래서 나갈 때 답장으로 이따 보자고 해 놓고 예고만 막힌 날에는 상대가
   // 그 말을 믿고 기다리는데도 캐릭터가 다음 날 아침까지 아무 말도 하지 않았다.
-  if (!last || last.role !== "assistant") return;
+  if (!last || last.role !== "assistant") {
+    wake("no_last", "복귀 인사를 이어 붙일 직전 발화가 없다");
+    return;
+  }
   // 지금 블록을 보고 갈래를 고른다. 방금 보낸 것이 복귀 인사면 또 하지 않는다 — 불가 구간이
   // 이어지는 날 유저가 답하지 않는 동안 인사가 구간마다 쌓인다. 유저가 한 번 답하면 last.role이
   // 유저가 되어 다시 열린다. 지금 블록도 자리 비움 불가면 돌아왔다고 말하지 않는다 — 그 문안은
@@ -1296,7 +1351,10 @@ setWakeHandler(async (row: PendingReplyRow) => {
   // 이 인사는 선톡과 같은 자리를 쓴다. 답할 말이 있는 'wake' 행과 달리 이 행은 선톡 틱을
   // 막지 않으므로(그래야 구간 안에서 다음 예고와 아침·점심 선톡이 창을 지킨다), 보내는 동안만
   // 자리를 잡아 같은 순간에 도는 자리 비움 예고와 겹치지 않게 한다.
-  if (!acquireProactive(chatId)) return;
+  if (!acquireProactive(chatId)) {
+    wake("busy", "같은 순간에 다른 선톡이 나가는 중이다");
+    return;
+  }
   try {
     const draft = await chatJson<{ send: boolean; text?: string }>(
       buildSystemBlocks(row.character_id, chatId, {
@@ -1414,7 +1472,10 @@ setPromiseHandler(async (row: PendingReplyRow) => {
         `[promise] 만들어 둔 답장 ${droppedReply}건 거둠 (chat=${chatId})`,
       );
     const turn = pendingUserTurn(chatId, row.character_id);
-    if (!turn) return;
+    if (!turn) {
+      trace("skipped", "직전 발화는 유저인데 답할 차례가 잡히지 않는다");
+      return;
+    }
     const reply = await composeReply({
       characterId: row.character_id,
       chatId,
@@ -1425,7 +1486,10 @@ setPromiseHandler(async (row: PendingReplyRow) => {
       },
       logTag: "[promise]",
     });
-    if (!reply) return;
+    if (!reply) {
+      trace("skipped", "빈 답장이거나 만드는 사이 유저가 말을 더 보냈다");
+      return;
+    }
     const { bubbles, signals } = reply;
     const { sent, error } = await sendBubbleList(chatId, bubbles);
     if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
@@ -1473,7 +1537,10 @@ setPromiseHandler(async (row: PendingReplyRow) => {
   }
 
   // ④ 온 말이 없다 — 약속대로 먼저 연락한다.
-  if (!last || last.role !== "assistant") return;
+  if (!last || last.role !== "assistant") {
+    trace("skipped", "약속 연락을 이어 붙일 직전 발화가 없다");
+    return;
+  }
   if (!acquireProactive(chatId))
     throw new Error("선톡 자리가 차 있음 — 잠시 뒤 다시");
   try {
@@ -1546,7 +1613,14 @@ const arm = (chatId: string, waitMs: number): void => {
         arm(chatId, waitMs);
         return;
       }
-      respond(chatId).catch((e) => logErr("[bot] respond error:", e));
+      respond(chatId).catch((e) => {
+        logErr("[bot] respond error:", e);
+        traceReplyFault({
+          chatId,
+          stage: "respond",
+          detail: e instanceof Error ? (e.stack ?? e.message) : String(e),
+        });
+      });
     }, waitMs),
   );
 };
@@ -1633,10 +1707,22 @@ export const recoverMissedReplies = async (): Promise<void> => {
     } catch (e) {
       setRecoveryMark(c.chat_id, prev ?? ""); // 전송 실패 → 되돌려 다음 복구 틱에 재시도
       logErr("[recover] error:", e);
+      traceReplyFault({
+        characterId: c.id,
+        chatId: c.chat_id,
+        stage: "recover",
+        detail: e instanceof Error ? (e.stack ?? e.message) : String(e),
+      });
     }
   }
 };
 
 bot.catch((err) => {
   logErr("[bot] error:", err.error);
+  const e = err.error;
+  traceReplyFault({
+    chatId: err.ctx?.chat?.id ? String(err.ctx.chat.id) : undefined,
+    stage: "bot",
+    detail: e instanceof Error ? (e.stack ?? e.message) : String(e),
+  });
 });

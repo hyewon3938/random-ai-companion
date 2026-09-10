@@ -3,6 +3,9 @@
 // 예약 발송은 새벽 정리가 준비한 선톡 문안을 창 안에서 내보내는 행이고, 대기 중인 답장은
 // 답장을 만들어 두고 정한 시각까지 들고 있는 행이다. 발송 실패 기록도 여기다. 캐릭터를
 // 끝낼 때 두 표에 걸린 행을 함께 거두는 함수도 여기 둔다.
+//
+// 거두거나 걸려 있는 행을 읽는 함수는 행 번호와 meta까지 함께 준다 — 슬랙 게시가 어느 행의
+// 어느 구간인지 적어야 밖에서 표시 하나를 따라갈 수 있다(이슈 #379).
 
 import { db } from "./connection.js";
 import { getKstNow, kstDateString } from "../kst.js";
@@ -232,6 +235,27 @@ export const hasWaitingPromiseRow = (chatId: string): boolean =>
     )
     .get(chatId);
 
+/** 대기 중인 구간 끝 표시 하나. 트레이스가 어느 행의 어느 구간인지 적을 수 있게 활동까지 준다. */
+export interface WaitingWakeRow {
+  id: number;
+  kind: string;
+  meta_json: string | null;
+}
+
+/** 대기 중인 구간 끝 표시를 돌려준다(없으면 null). exceptId는 지금 울리고 있는 행 — 핸들러가
+ *  도는 동안은 아직 waiting이라 스스로를 세지 않게 뺀다. */
+export const waitingWakeRow = (
+  chatId: string,
+  exceptId = 0,
+): WaitingWakeRow | null =>
+  (db
+    .prepare(
+      `SELECT id, kind, meta_json FROM pending_replies
+         WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return') AND id != ?
+         LIMIT 1`,
+    )
+    .get(chatId, exceptId) as WaitingWakeRow | undefined) ?? null;
+
 /** 걸려 있던 'return' 행을 'wake'로 올린다 — 그 구간에 유저가 말을 걸어 답할 말이 생겼다.
  *  기다린 시간을 재는 기준이 되도록 그 첫 메시지 시각도 함께 적는다. 이미 'wake'인 행은
  *  그대로 둔다(먼저 온 메시지가 기준이다). 바꾼 행 수를 돌려준다. */
@@ -267,12 +291,18 @@ export const supersedePendingReplies = (chatId: string): SupersededRow[] => {
 };
 
 // 깨우기 표시를 거둔다 — 불가 구간이 아닌 길로 답장이 나가게 됐을 때(붙잡힘 등).
-export const supersedeWakeRows = (chatId: string): SupersededRow[] => {
+/** 거둔 깨우기 행 — 트레이스가 어느 구간의 표시를 거뒀는지 meta에서 꺼내 쓴다. */
+export interface SupersededWakeRow extends SupersededRow {
+  character_id: number;
+  meta_json: string | null;
+}
+
+export const supersedeWakeRows = (chatId: string): SupersededWakeRow[] => {
   const rows = db
     .prepare(
-      `SELECT id, call_id FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return')`,
+      `SELECT id, call_id, character_id, meta_json FROM pending_replies WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return')`,
     )
-    .all(chatId) as SupersededRow[];
+    .all(chatId) as SupersededWakeRow[];
   if (rows.length)
     db.prepare(
       `UPDATE pending_replies SET status = 'superseded' WHERE chat_id = ? AND status = 'waiting' AND kind IN ('wake','return')`,
