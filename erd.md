@@ -372,7 +372,9 @@ erDiagram
     characters ||--o{ day_seeds : "날짜별"
     characters ||--o{ day_plans : "날짜별"
     characters ||--o{ day_actuals : "블록별 기록"
+    characters ||--o{ work_facts : "작품별 하나"
     day_plans ||..o{ day_actuals : "같은 날짜의 블록"
+    day_plans ||..o{ work_facts : "블록이 가리키는 작품"
 
     characters {
         INTEGER id PK
@@ -393,6 +395,10 @@ erDiagram
         INTEGER id PK
         INTEGER character_id FK
         TEXT date "논리일"
+    }
+    work_facts {
+        INTEGER character_id PK "FK"
+        TEXT title PK "작품 제목"
     }
 ```
 
@@ -423,12 +429,12 @@ erDiagram
 | --- | --- | --- | --- |
 | character_id | INTEGER | O | PK, FK characters.id |
 | date | TEXT | O | PK, 논리일 |
-| plan_json | TEXT | O | 블록 목록. 필수 다섯(시작·종료 시각 · 활동 · 답장 여건 · 미리 아는 일정인지 여부)과 선택 셋(활동 성격 · 출처 · 출처 행 번호) |
+| plan_json | TEXT | O | 블록 목록. 필수 다섯(시작·종료 시각 · 활동 · 답장 여건 · 미리 아는 일정인지 여부)과 선택 넷(활동 성격 · 출처 · 출처 행 번호 · 작품 제목) |
 | made_by | TEXT | O | 만든 경로 — `nightly` · `ondemand` |
 
 plan_json 안 블록의 태그도 영어 식별자로 저장한다. 답장 여건은 `instant` · `intermittent` · `unavailable`, 활동 성격은 `personal` · `social` · `official`, 출처는 `schedule` 예정된 일 · `routine` 매주 루틴이다. JSON 안이라 CHECK가 걸리지 않아 쓰기 코드에서 검사한다. 블록의 `advance_known`은 미리 아는 일정인지를 담는데, 미리 아는 일정이면 시작 10분 전에 자리를 비운다고 예고하고 닥쳐야 아는 일이면 시작한 뒤에 알린다.
 
-활동 성격은 비어 있을 수 있어서, 그런 블록은 읽는 코드가 활동 이름으로 성격을 가려낸다. 회의·시험·발표는 공적, 친구·가족·병원은 사회, 나머지 혼자 하는 일은 개인이다. 출처와 출처 행 번호는 예정된 일이나 매주 루틴을 그날 블록으로 옮겨 적었을 때만 붙어서, 원본이 어느 행인지 가리킨다.
+활동 성격은 비어 있을 수 있어서, 그런 블록은 읽는 코드가 활동 이름으로 성격을 가려낸다. 회의·시험·발표는 공적, 친구·가족·병원은 사회, 나머지 혼자 하는 일은 개인이다. 출처와 출처 행 번호는 예정된 일이나 매주 루틴을 그날 블록으로 옮겨 적었을 때만 붙어서, 원본이 어느 행인지 가리킨다. 작품 제목(`work`)은 영화·드라마·책처럼 이름이 있는 작품을 보거나 읽는 블록에만 붙는다 — 활동 이름이 자유 서술이라 거기서 제목을 다시 뽑아내지 않으려고 따로 적는다.
 
 **day_actuals** — 계획과 다르게 지낸 기록. 각본을 교체해도 남도록 별도 테이블
 
@@ -444,6 +450,19 @@ plan_json 안 블록의 태그도 영어 식별자로 저장한다. 답장 여�
 | recorded_at | TEXT | O | 적힌 시각 |
 
 키·인덱스: PK `id`, 인덱스 `(character_id, date)`
+
+**work_facts** — 캐릭터가 본 작품의 사실 카드. 없는 장면을 말하지 않게 하려고 둔다
+
+| 컬럼 | 타입 | 필수 | 설명 |
+| --- | --- | --- | --- |
+| character_id | INTEGER | O | PK, FK characters.id |
+| title | TEXT | O | PK, 작품 제목. 각본 블록의 `work`와 글자 그대로 같다 |
+| summary | TEXT | O | 무엇에 대한 이야기인지 두세 문장 |
+| scenes | TEXT | O | 기억에 남는 장면 목록의 JSON 배열. 비어 있으면 저장하지 않는다 |
+| differences | TEXT | | 원작과 달라진 점 한 줄 |
+| made_at | TEXT | O | 카드를 만든 시각 |
+
+작품마다 한 번만 만든다. 새벽 정리가 오늘 각본에 든 작품을 회차당 3편까지 찾아 적고, 답장 경로는 오늘 각본이나 진행 중인 일에 그 작품이 있을 때만 읽어 일간층에 싣는다. 카드에 없는 작품은 캐릭터가 줄거리를 아는 척하지 않고 감상으로만 말한다 — 카드가 없는 쪽이 지어내는 쪽보다 낫다는 전제다. 장면 목록은 JSON 배열이라 CHECK가 걸리지 않아 쓰기 코드에서 검사한다.
 
 ## 관계도 3 — 발송과 운영
 
@@ -715,6 +734,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | day_seeds | 월 리듬 | 각본 생성, 새벽 정리 |
 | day_plans | 새벽 정리, 각본 생성(임시) | 답장 파이프라인(텀 결정), 프롬프트 조립, 선톡 모듈, 새벽 정리 |
 | day_actuals | 답장 파이프라인(붙잡기 즉시), 새벽 정리 | 프롬프트 조립(지난 시간은 실제로 읽음), 새벽 정리 |
+| work_facts | 새벽 정리 | 프롬프트 조립(오늘 각본·진행 중인 일에 있는 작품만) |
 | messages | 답장 파이프라인, 선톡 모듈 | 프롬프트 조립(최근 대화), 새벽 정리, 채점·분석 |
 | pending_replies | 답장 파이프라인(답장 · 깨우기 표시 · 연락 약속), 선톡 모듈(자리 비움 틱의 복귀 표시) | 답장 파이프라인(발송 틱·부팅 복구), 선톡 모듈(답장 대기 중이면 선톡 미발송) |
 | scheduled_messages | 새벽 정리 | 선톡 모듈 |
@@ -777,6 +797,7 @@ plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한�
 - **tags의 kind + ref_id** — 기억 · 일기 · 예정된 일 세 테이블을 한 테이블이 가리키므로 FK를 걸 수 없다. 테이블을 셋으로 쪼개면 FK가 생기는 대신, 사람 이름 하나로 인물 · 일정 · 일기를 함께 찾는 검색이 쿼리 세 번이 되어서 한 테이블을 택했다.
 - **schedules의 parent_kind + parent_id** — 일정을 만든 항목이 기억 데이터(memory_items)일 수도, 앞선 일정(schedules)일 수도 있어 tags처럼 종류 열과 id 둘로 가리킨다.
 - **day_actuals.block_start** — day_plans의 plan_json 안 블록을 시각으로 가리킨다. 블록이 JSON 문서 안에 있어 FK 대상이 아니다.
+- **work_facts.title** — day_plans의 plan_json 안 블록 `work` 값과 같은 문자열이다. 블록이 JSON 문서 안에 있어 FK 대상이 아니고, 새벽 정리가 저장할 때 오늘 각본의 제목 목록과 대조해 걸러낸다.
 - **이름 문자열 일치** — memory_items 주변 인물 행의 subject, schedules.with_name, tags.tag는 같은 사람을 같은 문자열로 적는 규칙으로 이어진다. 연결 테이블 대신 이름을 식별자로 쓰는 것이 이 시스템의 설계라, 동명이인은 이름을 늘려 가른다(예: 회사 민수).
 - **영역 이름** — memory_items · schedules의 area는 areas에 있는 이름을 문자열로 적는다. 새벽의 목록 관리가 항목을 다른 영역으로 다시 앉힐 때 여러 테이블을 같이 고치는 자리라, FK 대신 저장할 때의 이름 검사로 지킨다.
 - **firsts · relationship_signals의 message_id와 call_id** — 처음이 일어난 메시지와 그렇게 표시한 호출을 번호로만 가리킨다. 호출 기록은 90일이 지나면 지우는 자리라, 참조를 걸면 그 정리가 관계 기록에 막힌다.

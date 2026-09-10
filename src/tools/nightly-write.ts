@@ -8,7 +8,8 @@
 //                                    "intent":{"dig","share","move","move_note","lead_tone","thread","basis"}|null}?}|null,
 //            "progress": [{"id","value","done"?}]|null,
 //            "plan": {...}|null, "send": {"window_start","window_end","text","kind"?}|null,
-//            "arcs": {...}|null, "rhythm": [...]|null}}
+//            "arcs": {...}|null, "rhythm": [...]|null,
+//            "work_facts": [{"title","summary","scenes":[...],"differences"?}]|null}}
 // 사용: cat out.json | docker exec -i random-ai-companion npx tsx src/tools/nightly-write.ts
 import { getCharacterById } from "../db.js";
 import {

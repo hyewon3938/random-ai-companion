@@ -129,7 +129,7 @@ const rowCount = (table: string): number =>
   (db.prepare(`SELECT count(*) c FROM ${table}`).get() as { c: number }).c;
 
 test("v9 DB가 지금 스키마 버전까지 올라간다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 10);
+  assert.equal(db.pragma("user_version", { simple: true }), 11);
 });
 
 test("수 코드가 든 세 표는 비어 있고 새 코드 notice를 받는다", () => {

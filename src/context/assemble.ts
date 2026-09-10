@@ -5,7 +5,8 @@
 // 캐시에 태운다.
 //   불변층   — 정체성 기억(creation), 유저 프로필, 공통 규칙(태도·대화·표기·말의 결·note 신호),
 //              관계 단계 공통 틀과 지금 단계 블록(단계가 오를 때만 바뀐다)
-//   일간층   — 관계 8컬럼 서술, 주변 인물, 진행 중인 일, 아크, 일정, 최근 일기
+//   일간층   — 관계 8컬럼 서술, 주변 인물, 진행 중인 일, 아크, 일정, 최근 일기,
+//              오늘 각본과 그 각본이 다루는 작품의 사실 카드
 //   실시간   — 검색해 꺼낸 기억, 선톡이 태그 없이 고른 상대 쪽 기억, 주제로 찾은 지난 일기와
 //              일정, 오늘 각본, 오늘 메모, 지금 관계(며칠째·처음·오늘 쓴 수·오늘의 의도),
 //              직전 대화 시점, 오늘 안의 연락 텀, 지금 시각, 말투, 상황 문단, 답장 객체 설명
@@ -25,6 +26,7 @@ import type {
   MessageRow,
   RelationshipRow,
   ScheduleRow,
+  WorkFact,
 } from "../db.js";
 import { orderedIdentity, memoryLine } from "../memory.js";
 // 검색 결과를 프롬프트 절로 옮기는 자리는 recall.ts 하나다 — 관리 대시보드의 태그 검색
@@ -87,6 +89,22 @@ const daySection = (plan: DayPlan | null): string => {
   ]
     .filter(Boolean)
     .join("\n");
+};
+
+// 오늘 다루는 작품의 사실 카드 주입(일간층, #287) — 오늘 각본이나 진행 중인 일에 그 작품이
+// 있는 날만 실린다. 여기는 확인된 사실만 나열하고, 카드에 없는 것을 말하지 말라는 규칙은
+// 규칙층(FACT_CARE)이 갖는다 — 카드가 없는 날에도 그 규칙은 살아 있어야 한다.
+const workSection = (facts: WorkFact[]): string => {
+  if (!facts.length) return "";
+  return [
+    `[작품 — 네가 보거나 읽는 것에서 확인된 사실]`,
+    ...facts.map((f) => {
+      const lines = [`· ${f.title}: ${f.summary}`];
+      if (f.scenes.length) lines.push(`  기억에 남는 장면: ${f.scenes.join(" / ")}`);
+      if (f.differences) lines.push(`  원작과 다른 점: ${f.differences}`);
+      return lines.join("\n");
+    }),
+  ].join("\n");
 };
 
 // 다가오는 일정 슬롯 — 캐릭터의 예정과 유저에게 들은 예정 (하루 각본보다 성긴 층)
@@ -301,6 +319,7 @@ export const assembleSystemBlocks = (
     `[오늘/내일] ${input.workday}.`,
     firstMeeting,
     daySection(input.plan),
+    workSection(input.workFacts),
     scheduleSection(input.upcoming),
     diarySection,
     input.coldStart ? COLD_START_SEED : "",

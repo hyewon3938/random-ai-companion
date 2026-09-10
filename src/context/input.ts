@@ -25,6 +25,9 @@ import {
   type MessageRow,
   getDayActuals,
   listMemoryItems,
+  listWorkFactTitles,
+  getWorkFactsByTitles,
+  type WorkFact,
   type MemoryRow,
   type RelationshipRow,
 } from "../db.js";
@@ -157,7 +160,34 @@ export interface ContextInput {
   userMemories: MemoryRow[];
   /** 지금 관계 — 단계·며칠째·처음·오늘 쓴 수·오늘의 의도(#353). */
   relationship: RelationshipInput;
+  /** 오늘 다루는 작품의 사실 카드(#287). 오늘 각본·진행 중인 일에 없는 작품은 안 싣는다. */
+  workFacts: WorkFact[];
 }
+
+/**
+ * 오늘 프롬프트에 실을 작품 카드 고르기(#287). 두 자리에서 제목을 모은다 — 오늘 각본 블록의
+ * work 값과, 진행 중인 일 줄에 제목이 그대로 들어 있는 작품. 뒤쪽은 카드가 있는 제목 목록을
+ * 먼저 읽고 그 제목이 줄에 있는지 보는 식이라, 없는 작품을 텍스트에서 뽑아내려 하지 않는다.
+ * 카드가 아직 없는 제목은 조회에서 저절로 빠진다.
+ */
+const readWorkFacts = (
+  characterId: number,
+  plan: DayPlan | null,
+  items: MemoryRow[],
+): WorkFact[] => {
+  const fromPlan = (plan?.blocks ?? [])
+    .map((b) => b.work)
+    .filter((t): t is string => !!t);
+  const ongoing = items
+    .filter((m) => m.item_type === "ongoing" && m.owner === "char")
+    .map((m) => `${m.subject} ${m.value}`)
+    .join("\n");
+  const fromOngoing = ongoing
+    ? listWorkFactTitles(characterId).filter((t) => ongoing.includes(t))
+    : [];
+  const titles = [...new Set([...fromPlan, ...fromOngoing])];
+  return getWorkFactsByTitles(characterId, titles);
+};
 
 /**
  * 오늘 각본. 각본의 하루는 새벽 5시에 갈린다 — 자정~04:59에는 어제 각본을 계속 읽고, 지금
@@ -297,6 +327,7 @@ export const readContextInput = (
     diaries,
     coldStart,
     search: { memories: found, oldDiaries, schedules: foundSchedules },
+    workFacts: readWorkFacts(characterId, plan, memoryItems),
     notes: todayNotes(characterId),
     lastTalk: prev ? lastTalkedLabel(prev.sent_at) : null,
     contactGap: gap ? contactGapOf(gap.lastChar, gap.firstUser) : null,

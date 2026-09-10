@@ -254,6 +254,17 @@ const TABLES: Record<string, string> = {
   reason TEXT,
   recorded_at TEXT NOT NULL`,
 
+  // 캐릭터가 본 작품의 사실 카드. 새벽 정리가 작품마다 한 번 적고, 답장 경로는 오늘 각본이나
+  // 진행 중인 일에 그 작품이 있을 때만 읽는다. 제목은 캐릭터 안에서만 유일하다.
+  work_facts: `
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  scenes TEXT NOT NULL,
+  differences TEXT,
+  made_at TEXT NOT NULL,
+  PRIMARY KEY (character_id, title)`,
+
   messages: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id TEXT NOT NULL,
@@ -443,7 +454,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -944,13 +955,24 @@ const migrateToV10 = (): void => {
   console.log(`[db] 스키마를 v10으로 옮겼다`);
 };
 
+// v11: 작품 사실 카드 표 work_facts를 더한다(#287).
+//
+// 새 표라 옮길 행이 없고, 위쪽의 createSchema가 기동 때마다 CREATE TABLE IF NOT EXISTS로
+// 만들어 둔다. 여기서는 버전만 올린다. migrateToV10은 세 표를 지우고 다시 만들므로 v10에
+// 못 박아 두었다 — 그 표들은 이제 행이 차 있어서 다시 돌면 안 된다.
+const migrateToV11 = (): void => {
+  db.pragma(`user_version = 11`);
+  console.log(`[db] 스키마를 v11로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < 5) migrateToV5();
 if (schemaVersion() < 6) migrateToV6();
 if (schemaVersion() < 7) migrateToV7();
 if (schemaVersion() < 8) migrateToV8();
 if (schemaVersion() < 9) migrateToV9();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV10();
+if (schemaVersion() < 10) migrateToV10();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV11();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를

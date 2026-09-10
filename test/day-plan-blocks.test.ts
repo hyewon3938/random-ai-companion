@@ -349,6 +349,45 @@ test("정규화는 날짜와 나머지 칸을 그대로 둔다", () => {
   );
 });
 
+test("작품 제목 칸은 앞뒤 공백을 떼고 남기며 빈 값과 문자열 아닌 값은 버린다", () => {
+  const withWork = (work: unknown): PlanBlock =>
+    ({
+      start: "20:00",
+      end: "22:00",
+      activity: "영화 보기",
+      responsiveness: "intermittent",
+      advance_known: true,
+      work,
+    }) as unknown as PlanBlock;
+  const plan = normalizePlan({
+    date: "2026-09-11",
+    blocks: [
+      withWork("  여름 언덕  "),
+      withWork("   "),
+      withWork(42),
+      withWork(undefined),
+    ],
+  });
+  assert.deepEqual(
+    plan.blocks.map((b) => b.work),
+    ["여름 언덕", undefined, undefined, undefined],
+  );
+  // 없는 칸은 아예 안 실린다 — undefined로라도 적히면 저장된 각본에 빈 칸이 남는다.
+  assert.equal("work" in (plan.blocks[1] ?? {}), false);
+});
+
+test("작품 제목이 너무 길면 잘라서 저장한다", () => {
+  const plan = normalizePlan({
+    date: "2026-09-11",
+    blocks: [
+      block("20:00", "22:00", "영화 보기", "intermittent", {
+        work: "가".repeat(200),
+      }),
+    ],
+  });
+  assert.equal(plan.blocks[0]?.work?.length, 60);
+});
+
 // ── ensureTodayPlan 스킵 분기 (DB) ────────────────────────────────────────
 
 const TODAY_PLAN: DayPlan = {
