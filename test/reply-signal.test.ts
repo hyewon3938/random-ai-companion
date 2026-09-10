@@ -3,6 +3,9 @@
 // 형식이 깨졌을 때 무엇을 건지고 무엇을 버리는지가 전부 여기서 갈린다. 잘못 읽으면 신호가
 // 조용히 사라지거나(답장은 그대로 나가서 실패로 안 잡힌다) JSON 조각이 그대로 말풍선이 되어
 // 상대에게 간다. 어느 길로 읽었는지를 남기는 이름(json·stray·salvage·plain·empty)도 같이 본다.
+//
+// 늘 넣기로 한 칸이 왔는지(slots)도 여기서 본다. 값이 null인 것과 칸을 통째로 뺀 것은 신호로는
+// 똑같이 없음이라, 이 목록이 아니면 형식을 지켰는지 가릴 수 없다(이슈 #385).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -160,4 +163,31 @@ test("관계 신호도 흘린 줄에서 읽고 합칠 때는 앞 것이 남는�
   assert.equal(merged.move, "laugh");
   assert.deepEqual(merged.first, { kind: "first_laugh", by: "user" });
   assert.equal(merged.toldPlan, true);
+});
+
+test("늘 넣기로 한 칸은 값이 null이어도 왔다고 적는다", () => {
+  const all = parseReplyOutput(
+    '{"reply":["응"],"note":null,"move":null,"first":null}',
+  );
+  assert.deepEqual(all.slots, ["note", "move", "first"]);
+
+  // 칸을 뺀 답 — 신호 값은 위와 같지만 형식은 안 지킨 것이다
+  const none = parseReplyOutput('{"reply":["응"]}');
+  assert.deepEqual(none.slots, []);
+
+  const some = parseReplyOutput(
+    '{"reply":["응"],"note":"상대가 내일 이사한다"}',
+  );
+  assert.deepEqual(some.slots, ["note"]);
+});
+
+test("잘린 답에서도 온전히 닫힌 칸은 왔다고 적고 줄글은 아무 칸도 없다", () => {
+  const cut = parseReplyOutput(
+    '{"reply":["앞말풍선"],"note":null,"move":"laugh","first":nu',
+  );
+  assert.equal(cut.parse, "salvage");
+  assert.deepEqual(cut.slots, ["note", "move"]);
+  assert.equal(cut.signals.move, "laugh");
+
+  assert.deepEqual(parseReplyOutput("그냥 줄글로 답함").slots, []);
 });

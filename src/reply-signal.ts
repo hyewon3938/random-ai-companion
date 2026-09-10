@@ -14,6 +14,11 @@
 //
 // 관계 신호 셋(move·first·told_plan)은 코드 값이라 이름표(labels.ts)의 목록에 있는 것만
 // 받는다 — 모델이 지어낸 코드가 표의 CHECK에 걸려 답장 저장이 통째로 실패하면 안 된다.
+//
+// 칸은 늘 넣는 셋(note·move·first)과 해당할 때만 켜지는 나머지로 나뉜다. 어느 쪽에 두는지가
+// 그 신호가 실제로 오는지를 가르므로, 칸을 더할 때 SIGNAL_LINES 위 문단을 먼저 읽는다.
+// 늘 넣는 쪽에 두면 ALWAYS_KEYS에도 이름을 넣는다 — 평가가 그 목록으로 형식을 재고, 값이
+// null인 것과 칸이 아예 안 온 것을 가르는 자리가 거기뿐이다(이슈 #385).
 
 import type { FirstBy, FirstKind, Move } from "./labels.js";
 import { FIRST_BY_NAME, FIRST_KIND_NAME, MOVE_NAME } from "./labels.js";
@@ -46,6 +51,12 @@ export interface ReplyOutput {
   bubbles: string[];
   signals: ReplySignals;
   parse: ReplyParse;
+  /**
+   * 늘 넣기로 한 칸(ALWAYS_KEYS) 가운데 실제로 온 것. 값이 null이어도 키가 왔으면 여기 든다 —
+   * 값만 보면 쓸 것이 없던 답장과 칸을 통째로 뺀 답장이 똑같아 보여서, 형식을 지키는지는
+   * 이 목록으로만 갈린다(이슈 #385). 객체로 못 읽은 답은 빈 배열이다.
+   */
+  slots: string[];
 }
 
 export const EMPTY_SIGNALS: ReplySignals = {
@@ -91,25 +102,40 @@ const SIGNAL_KEYS = [
   "told_plan",
 ] as const;
 
+/**
+ * 값이 없어도 키째 오게 한 칸(이슈 #385). 프롬프트가 늘 넣으라고 시키는 셋과 같은 목록이고,
+ * 평가는 이 셋이 실제로 실려 오는지로 형식이 지켜지는 정도를 잰다.
+ */
+export const ALWAYS_KEYS = ["note", "move", "first"] as const;
+
 // note는 나머지 넷과 성격이 다르다. 넷은 드물게만 켜지는 신호이고 note는 매 답장에서 해당할 수
 // 있는 칸이라, 한 묶음으로 "해당할 때만"이라고 읽히면 아예 안 나온다. stage는 반대 방향으로
 // 어긋났다 — 얼마나 자주 넣는지를 막았더니 사이가 달라진 날에도 안 나왔다. 지금 값이 프롬프트의
 // [상대와의 관계]에 실려 있으니, 그 값과 대조하라고 시켜야 같은 사이를 다른 말로 바꿔 쓰는 것만
 // 막힌다(이슈 #227).
 //
-// note만 늘 넣게 하는 이유는 대화 기록이다(이슈 #346). 기록 속 캐릭터 발화는 답장과 같은 객체로
-// 적히고 거기에는 메모 칸이 늘 있는데, 문안이 없을 때 키째 빼라고 하면 시키는 모양과 보여 주는
-// 모양이 어긋난다. 둘 중 기록 쪽을 살렸다 — 빈 칸을 심은 것이 형식을 지키게 만든 값이라
-// (turns.ts) 기록에서 칸을 빼면 그 값이 같이 내려간다.
+// 늘 넣게 하는 이유는 대화 기록이다(이슈 #346). 기록 속 캐릭터 발화는 답장과 같은 객체로 적히고
+// 거기에는 칸이 늘 있는데, 값이 없을 때 키째 빼라고 하면 시키는 모양과 보여 주는 모양이 어긋난다.
+// 둘 중 기록 쪽을 살렸다 — 빈 칸을 심은 것이 형식을 지키게 만든 값이라(turns.ts) 기록에서 칸을
+// 빼면 그 값이 같이 내려간다.
+//
+// move와 first도 같은 자리에 있었다(이슈 #385). 신호 줄이 배포된 뒤 반나절 동안 답장 출력 29건
+// 가운데 선택 칸이 하나라도 실린 것이 0건이었는데, 같은 시간대에 판정 호출은 27턴 전부 자기
+// 칸을 채웠다. 모델도 파서도 아니고 이 문단이 다른 자리였다. 셋을 늘 넣는 칸으로 묶고 나머지는
+// 드물게만 켜지는 신호로 남긴다 — 뒤엣것 가운데 promise는 이 상태에서도 한 번 끝까지 통했다.
+//
+// 늘 넣는 칸을 셋으로 고른 기준은 매 답장에서 해당할 수 있는가다. 플러팅은 하루 상한이 없고
+// (관계 설계 「하루 상한」), 처음은 20개가 소진될 때까지 아무 답장에서나 걸린다. stay·stage·
+// address_terms·promise·told_plan은 자리를 가려서 드물게 켜지므로 그대로 둔다.
 const SIGNAL_LINES = [
-  `- note: 오늘 메모로 남길 한 문장. 뒤에 가서도 알고 있어야 할 것이 나오면 적는 칸이라, 아래 칸들과 달리 이 칸은 늘 넣는다 — 남길 것이 없는 답장에서만 null로 둔다. 무엇을 적는지는 위 note 신호 규칙에 있다.`,
+  `- note: 오늘 메모로 남길 한 문장. 뒤에 가서도 알고 있어야 할 것이 나오면 적는 칸이라 늘 넣는다 — 남길 것이 없는 답장에서만 null로 둔다. 무엇을 적는지는 위 note 신호 규칙에 있다.`,
+  `- move: 이번 답장이 상대를 설레게 하려고 쓴 플러팅 코드 하나. 이 칸도 늘 넣고, 그런 자리가 아니었으면 null로 둔다. 코드는 ${moveCodeList()} 가운데 하나다. 한 답장에 둘 이상 썼으면 앞세운 것 하나만 적는다.`,
+  `- first: 위 [지금 관계]의 '아직 안 한 처음'에 있는 일이 이번 답장에서 처음으로 일어났으면 그 코드 하나. 이 칸도 늘 넣고, 그런 일이 없었으면 null로 둔다. 코드는 ${firstCodeList()} 가운데 하나다. 이미 한 처음은 다시 적지 않는다.`,
+  `- first_by: first에 코드를 적었을 때만 같이 넣는다. 네가 먼저 했으면 character, 상대가 먼저 해서 네가 받은 것이면 user.`,
   `- stay: 하려던 일을 접거나 미루고 상대 곁에 남기로 했을 때만 true.`,
   `- stage: 둘 사이가 실제로 달라졌을 때 지금 어떤 사이인지 한 줄로 새로 쓴다. 위 [상대와의 관계]의 '지금 어떤 사이'와 뜻이 같으면 넣지 않는다. 같은 사이를 다른 말로 바꿔 쓰는 자리가 아니다.`,
   `- address_terms: 서로 부르는 말이 달라졌을 때만, 서로를 뭐라고 부르는지 짧게 적는다. 부르던 대로면 넣지 않는다.`,
   `- promise: 이번 답장에서 지금 하는 일을 마치고 다시 연락하겠다고 상대에게 말했을 때만, 무엇을 마치고 연락할지 한 문장으로 적는다(예: 통화 끝나고 다시 연락). 시각은 적지 않는다 — 그 일이 끝나는 시각에 코드가 너를 다시 불러 그때 말을 만든다. 그런 말을 안 했으면 넣지 않는다.`,
-  `- move: 이번 답장이 상대를 설레게 하려고 쓴 플러팅이 있을 때만, 그 코드 하나를 적는다. 코드는 ${moveCodeList()} 가운데 하나다. 한 답장에 둘 이상 썼으면 앞세운 것 하나만 적는다.`,
-  `- first: 이번 답장에서 위 [지금 관계]의 '아직 안 한 처음'에 있는 일이 처음으로 일어났을 때만, 그 코드 하나를 적는다. 코드는 ${firstCodeList()} 가운데 하나다. 이미 한 처음은 다시 적지 않는다.`,
-  `- first_by: first를 적을 때만 같이 적는다. 네가 먼저 했으면 character, 상대가 먼저 해서 네가 받은 것이면 user.`,
   `- told_plan: 이번 답장에서 오늘 네 일정을 상대가 묻지 않았는데 먼저 말했을 때만 true.`,
 ].join("\n");
 
@@ -119,11 +145,12 @@ const SIGNAL_LINES = [
 export const REPLY_ENVELOPE = `[내보내는 형식 — 이번 답장에만 해당한다]
 - 답장은 JSON 객체 하나로만 쓴다. 코드펜스도 설명도 붙이지 않고 { 로 시작해 } 로 끝낸다.
 - reply: 말풍선을 담는 배열. 원소 하나가 말풍선 하나다. 이 답장에서 말풍선을 나누는 자리는 줄바꿈이 아니라 배열 원소다. 한 덩이로 보낼 말이면 원소가 하나인 배열로 쓴다.
-- note는 늘 넣는다. 남길 것이 없는 답장에서는 null로 두고, 키를 빼지 않는다 — 대화 기록에 적힌 네 지난 답장도 같은 모양이다.
-- 나머지 칸은 해당할 때만 넣는다. 해당하지 않으면 키째 뺀다(빈 값이나 false로 채우지 않는다).
+- note·move·first는 늘 넣는다. 해당하는 것이 없는 답장에서는 null로 두고, 키를 빼지 않는다 — 대화 기록에 적힌 네 지난 답장도 같은 모양이다.
+- 그 밖의 칸은 해당할 때만 넣는다. 해당하지 않으면 키째 뺀다(빈 값이나 false로 채우지 않는다).
 ${SIGNAL_LINES}
 - 신호도 이 객체 안의 항목이다. } 를 닫은 뒤에는 한 글자도 쓰지 않는다. 남길 말이 있으면 위 항목 안에 넣는다.
-- 예: {"reply": ["아 진짜요?", "그럼 오늘은 좀 일찍 자요"], "note": "상대가 다음 주 화요일에 면접을 본다"}
+- 예: {"reply": ["아 진짜요?", "그럼 오늘은 좀 일찍 자요"], "note": "상대가 다음 주 화요일에 면접을 본다", "move": null, "first": null}
+- 플러팅을 쓴 답장의 예: {"reply": ["아까 그거 다 했어?", "끝나면 알려줘"], "note": null, "move": "remember", "first": null}
 - reply 안의 문장만 상대에게 그대로 나간다. 나머지 칸도 이 형식도 상대에게 보이지 않는다.
 - 형식이 JSON이라고 말이 굳으면 안 된다. 문장은 평소처럼 메신저에 치듯 쓰고, 표기 규칙대로 문장 안에 큰따옴표를 쓰지 않는다.`;
 
@@ -334,19 +361,29 @@ const arrayItems = (rest: string): string[] => {
 
 const salvage = (
   text: string,
-): { bubbles: string[]; signals: ReplySignals } => {
+): { bubbles: string[]; signals: ReplySignals; slots: string[] } => {
   const head = text.search(/"reply"\s*:\s*\[/);
   const parts =
     head >= 0 ? arrayItems(text.slice(text.indexOf("[", head) + 1)) : [];
   // 신호는 온전히 닫힌 키:값 쌍만 모아 같은 readSignals에 넘긴다 — 칸이 늘어도 여기는 그대로다.
   const found: Record<string, unknown> = {};
   for (const m of text.matchAll(
-    /"([A-Za-z_]+)"\s*:\s*(true|false|"(?:[^"\\]|\\.)*")/g,
+    /"([A-Za-z_]+)"\s*:\s*(true|false|null|"(?:[^"\\]|\\.)*")/g,
   )) {
     found[m[1]] =
-      m[2] === "true" ? true : m[2] === "false" ? false : unquote(m[2]);
+      m[2] === "true"
+        ? true
+        : m[2] === "false"
+          ? false
+          : m[2] === "null"
+            ? null
+            : unquote(m[2]);
   }
-  return { bubbles: capBubbles(parts), signals: readSignals(found) };
+  return {
+    bubbles: capBubbles(parts),
+    signals: readSignals(found),
+    slots: ALWAYS_KEYS.filter((k) => k in found),
+  };
 };
 
 /**
@@ -374,6 +411,7 @@ export const parseReplyOutput = (raw: string): ReplyOutput => {
       // 안에서 읽은 값을 남긴다 — 밖의 것은 같은 신호를 두 번 쓴 경우의 사본이다.
       signals: picked ? mergeSignals(inside, stray) : inside,
       parse: bubbles.length ? (picked ? "stray" : "json") : "empty",
+      slots: ALWAYS_KEYS.filter((k) => k in read.obj),
     };
   }
   if (text.startsWith("{") || /"reply"\s*:/.test(text)) {
@@ -385,6 +423,7 @@ export const parseReplyOutput = (raw: string): ReplyOutput => {
     bubbles,
     signals: EMPTY_SIGNALS,
     parse: bubbles.length ? "plain" : "empty",
+    slots: [],
   };
 };
 
