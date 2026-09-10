@@ -14,8 +14,9 @@
 //               답이 끊기면 30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다. 어떤 상태를
 //               보고 나가는 통인지는 문안 호출 행에 남겨 슬랙 문안 게시가 머리에 적는다.
 //
-// 근황·점심·의도는 하루 합계 상한을 함께 쓴다. 밤 인사는 하루를 닫는 인사라, 달래기는 상대
-// 상태가 부르는 한 통이라 합계에서 뺀다(proactive-policy의 OFF_BUDGET).
+// 근황·점심·의도·밤 인사는 하루 합계 상한을 함께 쓴다 — 1단계의 4는 아침 한 통에 이 넷 가운데
+// 셋이 붙는 수다(설계 원본 §7). 달래기만 합계에서 뺀다: 상대 상태가 부르는 한 통이라 그날 몇
+// 통이 나갔든 열려 있어야 한다(proactive-policy의 OFF_BUDGET).
 //
 // 문안은 대화와 같은 3층(buildSystemBlocks)에 상황 문단을 더해 만든다 — 앞 두 층 캐시를
 // 대화와 함께 쓴다. 경과 시간은 Date.now()로 잰다(getKstNow().getTime()은 9시간 어긋난다).
@@ -238,6 +239,9 @@ const followupTickBody = async (): Promise<void> => {
     const today = kstLogicalDate();
     const intent = getRelationshipIntent(c.id, today) ?? null;
 
+    // 오늘 남은 선톡 예산. 아래 넷 가운데 달래기만 이걸 보지 않는다.
+    const budget = proactiveBudget(c.chat_id, c.id, dayStart());
+
     // 밤 인사 선톡: 자정을 넘겨 대화하다 유저가 '잔다'는 말 없이 한 시간 답이 없으면, 잠든 것으로
     // 보고 다정한 인사를 한 번 남긴다(아침에 보면 설렘). 이미 굿나잇을 주고받았으면 보내지 않는다.
     // 자정 전을 경계로 삼으면 그 시간에 자는 사람이 잠깐 딴 일을 한 것뿐인데 잘 자라는 인사를 받아
@@ -254,7 +258,8 @@ const followupTickBody = async (): Promise<void> => {
       afterMidnight &&
       !alreadyGoodnight &&
       minutesSince(lu) >= GOODNIGHT_SILENCE_MS / 60_000 &&
-      proactiveSinceLastUser(c.chat_id, c.id) < 1
+      proactiveSinceLastUser(c.chat_id, c.id) < 1 &&
+      budgetAllows(budget, "goodnight")
     ) {
       await sendProactiveDraft({
         characterId: c.id,
@@ -310,7 +315,6 @@ const followupTickBody = async (): Promise<void> => {
     // 시각의 각본에서 읽어 쓰기 위해서다. 침묵 조건은 걸지 않는다 — 아침 선톡에서 세 시간쯤
     // 지난 자리라 네 시간을 채우지 못하는데, 이 한 통은 그 침묵과 무관하게 그날 몫으로 나간다.
     // 15분 틱이 창 안에 세 번 들어오므로 불가 구간에 걸려 한 번 접혀도 다시 온다.
-    const budget = proactiveBudget(c.chat_id, c.id, dayStart());
     if (
       lunchDueToday(c.chat_id, c.id) &&
       now >= LUNCH_WINDOW.start &&
@@ -395,7 +399,7 @@ const followupTickBody = async (): Promise<void> => {
     // 오늘 미리 만들어 둔 선톡이 아직 안 나갔으면 기다린다. 어제 대화가 끊긴 채 아침을 맞으면
     // 네 시간 조건이 아침 문안의 발송 창보다 먼저 차므로, 이 검사가 없으면 근황이 아침 인사를
     // 앞질러 나간다(이슈 #314).
-    if (hasPendingSendOn(c.id, kstLogicalDate())) continue;
+    if (hasPendingSendOn(c.id, today)) continue;
     // 점심 선톡이 나간 날은 그 통이 그날 낮의 한 통이다. 겹쳐 보내지 않는다.
     if (proactiveKindCountToday(c.chat_id, c.id, dayStart(), "lunch") >= 1) continue;
     // 근황은 하루 한 통. 보낸 뒤에도 답이 없으면 그날은 더 보내지 않고 다음 날 아침으로 넘긴다.
