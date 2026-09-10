@@ -24,6 +24,12 @@
 // 셋 다 문안을 만들어 보내는 일은 proactive-send의 sendProactiveDraft에 맡긴다 — 다른 틱과의
 // 잠금, 발송이 실패한 문안을 다음 틱까지 들고 있는 것, 발송 직전 재확인이 거기 있다. 이 파일은
 // 어느 종류를 언제 보낼지만 정한다.
+//
+// 의도·근황·점심은 문안만 받는 게 아니라 보낼지까지 모델이 정한다. 안 보낸다는 답이 오면 그
+// 판정을 자리별로 기억해 둔다 — 안 기억하면 15분 뒤 틱이 같은 조건을 다시 만족해 같은 물음을
+// 또 던지고, 의도 선톡의 창 09~23시면 하루 최대 56번이다(이슈 #359). 자리는 지금 각본 블록과
+// 마지막 말 둘로 잡는다. 블록이 바뀌거나 누가 말을 하면 물어볼 상황 자체가 달라져서 다시 묻고,
+// 그 사이에는 접은 채로 둔다. 틈새 한 줄이 쓰는 방법과 같다(glance.ts의 judged).
 
 import {
   getActiveCharacter,
@@ -100,6 +106,46 @@ const dayStart = (): string => logicalDayStartTs();
 const minutesBetween = (ts: string, nowMs: number): number =>
   (nowMs - new Date(ts.replace(" ", "T") + "+09:00").getTime()) / 60000;
 const minutesSince = (ts: string): number => minutesBetween(ts, Date.now());
+
+/** 모델이 안 보낸다고 답한 자리를 기억한다 — 키는 chatId와 종류, 값은 그때의 자리 이름. */
+const declined = new Map<string, string>();
+
+/** 안 보낸다는 판정을 기억하는 종류 — 보낼지까지 모델이 정하는 선톡들. */
+type DeclineKind = "intent" | "catchup";
+
+/** 자리 이름 — 각본 블록과 마지막 말이 둘 다 같으면 물어볼 상황이 그대로라는 뜻이다. */
+export const declineSpot = (blockStart: string, lastSentAt: string): string =>
+  `${blockStart}|${lastSentAt}`;
+
+/** 이 자리에서 이미 안 보낸다고 답했는지. */
+export const declinedHere = (
+  chatId: string,
+  kind: DeclineKind,
+  spot: string,
+): boolean => declined.get(`${chatId}:${kind}`) === spot;
+
+/** 안 보낸다는 답을 기억한다. 자리마다 하나라 다음 자리가 오면 덮어쓴다. */
+export const rememberDecline = (
+  chatId: string,
+  kind: DeclineKind,
+  spot: string,
+): void => {
+  declined.set(`${chatId}:${kind}`, spot);
+};
+
+/**
+ * 안 보낸다는 답을 기억하는 read. 문안을 못 받았으면 그 자리를 적어 두고 접은 것을 로그에 남긴다.
+ */
+export const readSendTextOnce =
+  (chatId: string, kind: DeclineKind, spot: string) =>
+  (d: { send: boolean; text?: string }): string | null => {
+    const text = readSendText(d);
+    if (!text) {
+      rememberDecline(chatId, kind, spot);
+      console.log(`[followup] ${kind} ${chatId} 접음 — 지금은 보낼 자리가 아니다 (${spot})`);
+    }
+    return text;
+  };
 
 // 근황 선톡의 침묵 조건 — 유저의 마지막 말도, 캐릭터의 마지막 말도 네 시간은 지났어야 한다.
 //
@@ -367,11 +413,17 @@ const followupTickBody = async (): Promise<void> => {
       );
       const text = line ? intentLineText(intent, line) : null;
       const intentBlock = currentBlock(c.id);
+      const intentSpot = intentBlock
+        ? declineSpot(intentBlock.start, last.sent_at)
+        : null;
       if (
         line &&
         text &&
         intentBlock &&
-        intentBlock.responsiveness !== "unavailable"
+        intentSpot &&
+        intentBlock.responsiveness !== "unavailable" &&
+        // 이 블록에서 이미 안 보낸다고 답했으면 같은 물음을 다시 던지지 않는다(이슈 #359).
+        !declinedHere(c.chat_id, "intent", intentSpot)
       ) {
         await sendProactiveDraft({
           characterId: c.id,
@@ -380,7 +432,7 @@ const followupTickBody = async (): Promise<void> => {
           lastSentAt: last.sent_at,
           situation: intentSituation(line, text),
           maxTokens: 500,
-          read: readSendText,
+          read: readSendTextOnce(c.chat_id, "intent", intentSpot),
           // 어느 줄을 썼는지는 발송 기록의 intent_line으로 센다(usedIntentLines).
           extraMeta: { intent_line: line },
           label: "[followup] 의도",
@@ -409,6 +461,9 @@ const followupTickBody = async (): Promise<void> => {
 
     const block = currentBlock(c.id);
     if (!block || block.responsiveness === "unavailable") continue; // 운전·잠 등엔 못 보냄
+    // 이 블록에서 이미 안 보낸다고 답했으면 같은 물음을 다시 던지지 않는다(이슈 #359).
+    const catchupSpot = declineSpot(block.start, last.sent_at);
+    if (declinedHere(c.chat_id, "catchup", catchupSpot)) continue;
 
     await sendProactiveDraft({
       characterId: c.id,
@@ -417,7 +472,7 @@ const followupTickBody = async (): Promise<void> => {
       lastSentAt: last.sent_at,
       situation: catchupSituation(intent),
       maxTokens: 500,
-      read: readSendText,
+      read: readSendTextOnce(c.chat_id, "catchup", catchupSpot),
       label: "[followup]",
       sentLog: `[followup] sent to ${c.chat_id} @ ${block.activity}`,
     });
