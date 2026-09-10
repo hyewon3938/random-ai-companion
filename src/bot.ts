@@ -130,21 +130,26 @@ export type SendKind = "reply" | "recover" | ProactiveKind;
 
 // 텔레그램 API 연결 풀.
 //
-// 이 VM에서 선톡이 조용히 유실되던 실제 원인이 여기였다. long polling(getUpdates)은 96시간 동안
-// 한 번도 안 깨졌는데 sendMessage만 반복 실패했다 — 경로가 죽은 게 아니라 '새 연결 수립'이
-// 간헐적으로 죽는다(같은 순간에 이미 맺힌 연결로는 성공, 새 연결은 ETIMEDOUT).
-// getUpdates가 소켓 하나를 30초 주기로 거의 항상 점유하므로, 몇 시간 만에 나가는 선톡은
-// 재사용할 유휴 소켓이 없어 매번 새 연결이 됐다. 대화 중 답장이 멀쩡했던 건 몇 초 전에
-// 반납된 소켓을 재사용했기 때문.
+// 이 서버에서 텔레그램으로 가는 '새 연결'은 기본 설정으로는 매번 ETIMEDOUT으로 끝난다(이슈 #363).
+// Node는 주소 자동 선택(autoSelectFamily, 이른바 Happy Eyeballs)이 켜져 있어 IPv4·IPv6를 번갈아
+// 시도하는데, 한 시도에 주는 시간이 기본 250ms다. 이 서버에서 텔레그램 IPv4 접속은 맺히기까지
+// 약 260ms가 걸려 그 안에 못 붙고, IPv6는 경로가 없어 즉시 실패한다. 그래서 새 연결은 250ms 만에
+// 묶음 에러(AggregateError, code ETIMEDOUT)로 거절된다. grammY가 쓰는 node-fetch는 그 안쪽
+// 에러를 버려서 로그에는 reason이 빈 ETIMEDOUT만 남는다. 모델 API와 슬랙은 접속이 몇십 ms라
+// 이 경계에 걸리지 않고, long polling(getUpdates)은 이미 맺힌 소켓을 재사용해서 멀쩡했다.
+// '새 연결 수립이 간헐적으로 죽는다'고 보였던 건 왕복 시간이 250ms 언저리에서 흔들린 탓이다.
 //
-// grammY 기본 agent도 이미 keepAlive는 켜져 있다(platform.node.js). 빠졌던 건 '살려둘 유휴
-// 소켓' 자체다 — 폴링이 유일한 소켓을 계속 붙잡고 있으니 풀이 늘 비어 있었다. 그래서 실제 해법은
-// 아래 agent 설정이 아니라 keepConnectionWarm()이고, 여기서는 그 유휴 소켓이 오래 살아남게 돕는다.
+// 그래서 한 시도에 주는 시간을 넉넉히 준다. 자동 선택 자체는 그대로 두어 IPv6 경로가 생겨도
+// 동작이 같다. 컨테이너 안에서 잰 값은 기본 설정으로 9번 전부 실패, 시도 시간을 늘리면 9번 전부
+// 약 265ms에 성공이었다.
+const CONNECT_ATTEMPT_TIMEOUT_MS = 3_000;
+
 const apiAgent = new Agent({
   keepAlive: true,
   keepAliveMsecs: 15_000, // TCP keepalive 프로브 — 중간 NAT이 유휴 연결을 끊지 않게
   maxSockets: 8,
   scheduling: "lifo", // 가장 최근에 쓴(=살아 있을 가능성이 높은) 소켓부터 재사용
+  autoSelectFamilyAttemptTimeout: CONNECT_ATTEMPT_TIMEOUT_MS,
 });
 
 // grammY(node)는 내부적으로 node-fetch를 쓰므로 agent 옵션이 실제로 먹지만,
@@ -170,10 +175,11 @@ type ApiSignal = NonNullable<Parameters<typeof bot.api.getMe>[0]>;
 const sendTimeout = (): ApiSignal =>
   AbortSignal.timeout(SEND_TIMEOUT_MS) as unknown as ApiSignal;
 
-// 연결 보온 — 선톡 유실의 실제 해법. 가장 가벼운 API를 주기적으로 두드려, 폴링이 쓰는 소켓과
-// 별개로 유휴 소켓 한 개가 항상 풀에 놀고 있게 만든다. 선톡은 그걸 재사용하므로 '새 연결 수립'을
-// 건너뛴다(그 수립이 이 VM에서 간헐적으로 죽는다).
-// 주기는 텔레그램 쪽 idle timeout보다 짧게 — 안 두드리면 유휴 소켓이 서버에서 닫혀 도로 원점이다.
+// 연결 보온. 가장 가벼운 API를 주기적으로 두드려, 폴링이 쓰는 소켓과 별개로 유휴 소켓 한 개가
+// 항상 풀에 놀고 있게 만든다. 선톡은 그걸 재사용하므로 새 연결의 TLS 왕복을 건너뛴다.
+// 새 연결이 죽던 문제의 해법은 위 agent의 접속 시도 시간이고(이슈 #363), 보온은 그 위에서
+// 발송을 빠르게 하는 용도다 — 유휴 소켓이 서버 쪽에서 닫힌 직후에는 어차피 새 연결이 필요하다.
+// 주기는 텔레그램 쪽 idle timeout보다 짧게 — 안 두드리면 유휴 소켓이 서버에서 닫혀 매번 새 연결이다.
 // 실패는 무시한다(다음 주기에 다시 시도하고, 실제 발송은 sendWithRetry가 따로 버틴다).
 export const keepConnectionWarm = (intervalMs = 30_000): void => {
   setInterval(() => {
