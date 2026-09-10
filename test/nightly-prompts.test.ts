@@ -7,9 +7,12 @@ import {
   arcLinesOf,
   careSituation,
   diaryPrompt,
+  extractPrompt,
+  intentSummary,
   morningSituation,
   quietDayPrompt,
   reconnectSituation,
+  relationSection,
 } from "../src/prompts/nightly.js";
 
 const gathered = (over: Partial<NightlyGathered> = {}): NightlyGathered => ({
@@ -30,6 +33,20 @@ const gathered = (over: Partial<NightlyGathered> = {}): NightlyGathered => ({
   ongoingTouched: [],
   touchedUserFacts: [],
   relationship: "말투: 반말",
+  relation: {
+    stageNo: 1,
+    stageSince: "2026-09-05",
+    stayDays: 0,
+    threshold: { from: 1, to: 2, met: false, conditions: [] },
+    firstsDone: [],
+    firstsOpen: [],
+    firstsPending: [],
+    moveCandidates: [],
+    rapportMoves: [],
+    yesterdayIntent: null,
+    yesterdayMoves: [],
+    confessionDue: false,
+  },
   userState: "",
   userProfile: "(없음)",
   todayNotes: ["러닝 5km"],
@@ -129,4 +146,94 @@ test("careSituation과 reconnectSituation은 침묵 일수를 적는다", () => 
   assert.ok(reconnect.includes("[문안 준비 — 오늘 저녁에 보낼 안부 한 통]"));
   assert.ok(reconnect.includes("마지막으로 연락이 오간 지 5일쯤 됐다."));
   assert.ok(reconnect.includes('{"text":"..."}'));
+});
+
+test("intentSummary는 있는 줄만 잇고 수 코드와 결 코드는 이름으로 바꾼다", () => {
+  assert.equal(intentSummary(null), "");
+  assert.equal(
+    intentSummary({
+      dig: "러닝 얘기",
+      share: null,
+      move: "remember",
+      move_note: "저녁에",
+      lead_tone: "silent_care",
+      thread: "책 이야기",
+    }),
+    "파고들 것: 러닝 얘기 / 시도할 수: 기억해서 챙기기 저녁에, 앞세울 결은 말없이 챙김 / 이어갈 자리: 책 이야기",
+  );
+  // 고백 차례는 수 코드 없이 자리만 온다 — 그 줄도 시도할 수로 낸다.
+  assert.equal(
+    intentSummary({ move: null, move_note: "밤에 마음을 묻는다" }),
+    "시도할 수: 밤에 마음을 묻는다",
+  );
+  // 모르는 코드는 이름으로 못 바꾸니 뺀다.
+  assert.equal(intentSummary({ move: "unknown_move", lead_tone: "nope" }), "");
+});
+
+test("morningSituation은 오늘의 관계 의도 한 줄을 받고 없으면 (없음)으로 적는다", () => {
+  const p = morningSituation(gathered(), "아침 (여유로운 시간대)", [], {
+    dig: "러닝 얘기",
+    thread: "책 이야기",
+  });
+  assert.ok(p.includes("- 오늘의 관계 의도: 파고들 것: 러닝 얘기 / 이어갈 자리: 책 이야기"));
+  assert.ok(p.includes("관계 의도의 흘릴 내 얘기와 시도할 수는 낮 대화의 몫"));
+  const none = morningSituation(gathered(), "아침 (여유로운 시간대)", []);
+  assert.ok(none.includes("- 오늘의 관계 의도: (없음)"));
+});
+
+test("relationSection은 문턱 조건·처음·추천 수를 이름 붙여 적고 extractPrompt에 그 절과 relation 규칙이 붙는다", () => {
+  const g = gathered({
+    relation: {
+      stageNo: 1,
+      stageSince: "2026-09-01",
+      stayDays: 4,
+      threshold: {
+        from: 1,
+        to: 2,
+        met: false,
+        conditions: [
+          { key: "stayDays", name: "머문 날", value: 4, need: 5, met: false },
+          { key: "selfStoryDays", name: "자기 얘기를 연 날", value: null, need: 2, met: false },
+        ],
+      },
+      firstsDone: [{ kind: "first_laugh", by: "character", date: "2026-09-03" }],
+      firstsOpen: ["first_remember"],
+      firstsPending: [
+        { id: 7, kind: "first_self_story", by: "character", happenedAt: "2026-09-05 21:10:00" },
+      ],
+      moveCandidates: ["remember", "laugh"],
+      rapportMoves: [],
+      yesterdayIntent: {
+        id: 1,
+        character_id: 1,
+        date: "2026-09-05",
+        dig: "러닝 얘기",
+        share: null,
+        move: null,
+        move_note: null,
+        lead_tone: null,
+        thread: null,
+        basis_json: null,
+        created_at: "2026-09-05 05:00:00",
+      },
+      yesterdayMoves: [{ move: "laugh", reaction: "accepted" }],
+      confessionDue: false,
+    },
+  });
+  const s = relationSection(g.relation);
+  assert.ok(s.includes("1단계, 2026-09-01부터 4일 지남"));
+  assert.ok(s.includes("1→2, 안 찼음 — 머문 날 4/5 안 찼음, 자기 얘기를 연 날 표본 없음/2 안 찼음"));
+  assert.ok(s.includes("firsts_done(이미 한 처음): 웃기기(캐릭터, 9/3)"));
+  assert.ok(s.includes("first_remember=기억해서 챙기기"));
+  assert.ok(s.includes("first_self_story=자기 얘기(캐릭터, 21:10)"));
+  assert.ok(s.includes("remember=기억해서 챙기기 · laugh=웃기기"));
+  assert.ok(s.includes("웃기기 → 받음"));
+  assert.ok(s.includes("yesterday_intent(어제 의도): 파고들 것: 러닝 얘기"));
+  assert.ok(s.includes("confession_due(고백 차례): 아니오"));
+
+  const p = extractPrompt(g);
+  assert.ok(p.includes("[관계 단계 — 코드가 센 값]\n" + s));
+  assert.ok(p.includes('"relation":{"advance":{"go":true,"basis":"근거 한 줄"}|null'));
+  assert.ok(p.includes("relation 규칙 — [관계 단계]를 읽고 적는다"));
+  assert.ok(p.includes("단계를 내리거나 두 단계를 한 번에 올리는 출력은 반영되지 않는다"));
 });

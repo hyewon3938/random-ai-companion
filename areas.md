@@ -15,7 +15,7 @@
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
 | 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, context/*, prompts/reply, prompts/relationship, turns, reply-signal, reply-ask, reply-compose, reply-promise, user-state, relationship-update, speech-level, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 4개, 크론표 | index, bot, pending, presence, glance, followup, dispatch, proactive-send |
-| 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
+| 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, relationship-stage, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
 | 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, trace/*, reply-trace, feedback, tools/*, eval/* |
 
 7번에는 `src/` 밖의 `test/`·`scripts/`·`.github/`도 들어간다. 4번에 reply-timing과 proactive-policy를 넣은 이유는 둘 다 보낼지와 언제 보낼지를 정하는 판단이고 실제로 보내는 코드가 아니어서다. 이렇게 두면 5번과 6번이 4번을 같이 쓰면서 서로는 import하지 않는다.
@@ -26,7 +26,7 @@
 
 > 이 색인은 `node scripts/gen-modules.mjs`가 위 영역 표와 각 파일 맨 위 주석의 첫 줄에서 만든다. 손으로 고치지 않는다. 줄 수는 영역에 든 파일의 합이다.
 
-### 1. 기반과 저장 · 5,100줄
+### 1. 기반과 저장 · 5,140줄
 
 - `src/config.ts` — 환경변수를 한 번 읽어 두는 자리.
 - `src/kst.ts` — 시각을 다루는 자리 — 한국 시간과 논리일 경계.
@@ -60,7 +60,7 @@
 - `src/day-plan.ts` — 하루 각본 — 캐릭터가 그날 무엇을 하는지 블록으로 만든다.
 - `src/schedule-dedupe.ts` — 같은 일정인지 가리는 자리 — 공백·기호를 지운 내용으로 견준다.
 
-### 4. 대화 생성 · 3,751줄
+### 4. 대화 생성 · 3,755줄
 
 - `src/context.ts` — 프롬프트를 조립하는 자리 — 읽기와 조립을 잇는 앞문.
 - `src/prompts/reply.ts` — 답장 프롬프트의 고정 문안 — 캐릭터를 가리지 않고 매번 같은 글자가 들어가는 층이다.
@@ -91,12 +91,13 @@
 - `src/dispatch.ts` — 아침·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 - `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
-### 6. 새벽 정리 · 2,160줄
+### 6. 새벽 정리 · 3,284줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
+- `src/relationship-stage.ts` — 관계 단계 전이 — 어제까지의 값을 세어 문턱을 재고, 모델의 결정을 받아 단계·처음·의도를 저장한다.
 - `src/prompts/nightly.ts` — 새벽 정리가 모델에 넘기는 문안 — 일기·기억 정리·진행 반영 프롬프트와 선톡 상황 문단을 한 파일에 둔다.
 - `src/nightly-trace.ts` — 새벽 정리 트레이스 — 하루를 닫은 새벽 정리가 무엇을 바꿨는지 게시함에 쌓는다.
-- `src/tools/nightly-read.ts` — 새벽 정리 수집 도구: 활성 캐릭터의 새벽 정리 입력(어제 대화·기억·관계·각본·아크 등)을 JSON으로 출력한다.
+- `src/tools/nightly-read.ts` — 새벽 정리 수집 도구: 활성 캐릭터의 새벽 정리 입력(어제 대화·기억·관계·관계 단계·각본·아크 등)을 JSON으로 출력한다.
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
@@ -268,11 +269,11 @@ V3(관계를 쌓는 캐릭터, 이슈 #326)의 새 파일과 고치는 파일이
 | 영역 | 새 파일 | 고치는 파일 |
 | --- | --- | --- |
 | 1. 기반과 저장 | | thresholds.ts에 자리 비움 하루 2 |
-| 2. 기억 | reaction-score.ts (표본 계산, 갱신, 추천 목록, 잘 통하는 수 목록) | |
+| 2. 기억 | reaction-score.ts (표본 계산, 갱신) | |
 | 3. 캐릭터의 삶 | | |
 | 4. 대화 생성 | | proactive-policy.ts 근거 종류와 단계별 상한 |
 | 5. 실행과 발송 | glance.ts (틈새 한 줄, 이슈 #339로 먼저 만듦) | followup.ts 의도 선톡, presence.ts 복귀 문안 |
-| 6. 새벽 정리 | | nightly.ts 관계 수집과 저장, prompts/nightly.ts 관계 절, nightly-trace.ts 관계 절 게시, tools/nightly-read.ts와 tools/nightly-write.ts 입출력 |
+| 6. 새벽 정리 | | relationship-stage.ts 반응 점수 저장, nightly-trace.ts 관계 절에 점수 줄 |
 | 7. 관측과 운영 | tools/relationship-view.ts (단계·처음·점수 확인) | |
 
-db/relationship.ts는 저장 함수만 갖고 정책은 갖지 않는다. 단계를 줄이는 저장을 거부하는 검사는 origin=creation 행의 수정 거부와 같은 자리이므로 저장 함수 안에 둔다. 반응 점수의 계산은 2번 영역이 맡고, 6번의 새벽 정리가 그 함수를 불러 쓴다.
+db/relationship.ts는 저장 함수만 갖고 정책은 갖지 않는다. 단계를 줄이는 저장을 거부하는 검사는 origin=creation 행의 수정 거부와 같은 자리이므로 저장 함수 안에 둔다. 반응 점수의 계산은 2번 영역이 맡고, 6번의 새벽 정리가 그 함수를 불러 쓴다. 시도할 수 추천 목록과 잘 통하는 수 목록은 단계마다 열리는 수의 표를 읽어야 해서 6번의 relationship-stage.ts에 두었다.

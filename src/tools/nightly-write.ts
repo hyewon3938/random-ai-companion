@@ -2,7 +2,10 @@
 // 입력 형식: {"characterId": n, "output": {"entry": {...},
 //            "extract": {"memories":[...], "relationship":{...}|null,
 //                        "user_profile":{"job"?,"region"?}|null, "schedules":[...],
-//                        "schedule_updates":[{"id","time_hint"}]?}|null,
+//                        "schedule_updates":[{"id","time_hint","user_knows"?}]?,
+//                        "relation":{"advance":{"go","basis"}|null,
+//                                    "firsts":[{"kind","keep","by"?}],
+//                                    "intent":{"dig","share","move","move_note","lead_tone","thread","basis"}|null}?}|null,
 //            "progress": [{"id","value","done"?}]|null,
 //            "plan": {...}|null, "send": {"window_start","window_end","text","kind"?}|null,
 //            "arcs": {...}|null, "rhythm": [...]|null}}
