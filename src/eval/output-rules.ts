@@ -58,6 +58,10 @@
 // 위반이고, 상대를 보내는 말은 마지막 말풍선에서만 위반이다. 앞 말풍선의 연락 예고는 뒤에 물음이
 // 이어지면 괜찮다고 두었는데, 앞 말풍선에 ~인데로 이유가 붙으면 그 물음이 형식만 남는다.
 //
+// 말머리 오도 케이스를 가리지 않는다(이슈 #373). 규칙층이 말풍선을 오로 열지 말라고 하는데
+// 모델이 습관처럼 쓰던 자리라, 골든셋 기록의 캐릭터 발화에서도 같은 말머리를 뺐다 — 기록의
+// 모양을 모델이 따라가므로 케이스가 위반을 가르치고 있었다.
+//
 // 이 파일은 DB도 API도 열지 않는다. 케이스를 실제로 태우는 자리는 run.ts다.
 
 import type { ChatTurn } from "../llm.js";
@@ -171,6 +175,9 @@ const TAIL = /[\s.~!ㅋㅎ]+$/;
 // 문장 끝의 냐. 뭐하냐·궁금하냐처럼 끝에 오는 것만 걸고, 냐고·냐는처럼 문장 중간의 것과 라자냐처럼
 // 낱말 안의 것은 안 건다(규칙층 SPEECH의 냐 금지, 이슈 #353). 물음표는 TAIL이 안 떼므로 따로 뗀다.
 const NYA_END = /(?<!라자)냐$/;
+// 말풍선을 여는 감탄사 오. 오 진짜?·오~·오ㅋㅋㅋ처럼 뒤가 끊기는 것만 걸고, 오늘·오랜만·오케이는
+// 뒤에 오는 글자로 갈라 안 건다(규칙층 SPEECH의 말머리 오 금지, 이슈 #373).
+const OH_OPENER = /^오+(?=[\s,.!?~ㅋㅎ]|$)/;
 // 1단계에서 아직 안 하는 말. 좋아해·보고 싶다는 사물을 두고도 쓰는 말이라 상대를 가리키는 말이
 // 앞에 올 때만 걸고, 네가 좋아하는 노래·네가 보고 싶다는 영화·네가 좋아 보여는 통과다.
 const YOU = "(?:너|널|네가|니가|너를|너가)\\s?(?:진짜|정말|좀|많이|되게|엄청|너무|자꾸)?\\s?";
@@ -307,6 +314,10 @@ export const nyaEndings = (bubbles: string[]): string[] =>
     .map((l) => l.replace(/[?\s.~!ㅋㅎ]+$/, ""))
     .filter((l) => NYA_END.test(l));
 
+/** 오로 여는 줄. 오늘·오랜만처럼 오로 시작하는 낱말은 걸리지 않는다. */
+export const ohOpeners = (bubbles: string[]): string[] =>
+  toLines(bubbles).filter((l) => OH_OPENER.test(l));
+
 /** 생각났다는 말이 있는가. 생각났어·생각이 나더라·생각 났다를 다 받는다. */
 export const hasThought = (bubbles: string[]): boolean =>
   /생각(?:이|도|은)?\s?(?:났|나)/.test(bubbles.join("\n"));
@@ -331,10 +342,10 @@ export const sameEndings = (bubbles: string[]): string[] | null => {
 
 /**
  * 말풍선을 규칙에 대본다. 케이스를 가리지 않는 규칙(이모지·큰따옴표·리스트·웃음 표기 일관성·
- * 웃음 표기 개수·의문 종결어미의 물음표·말풍선 끝 어미 반복·추측형 말끝 겹침·하루 은유·문장 끝 냐)과,
- * 케이스가 켤 때만 보는 웃음 금지 자리·질문의 말 되풀이·좋아하는 이유·1단계에서 아직 안 하는 말·
- * 근거 없이 치켜세우는 말·나중에 연락하겠다는 말·상대를 보내는 말로 닫음·상대 말 되돌려주기다.
- * 빈 배열이면 통과.
+ * 웃음 표기 개수·의문 종결어미의 물음표·말풍선 끝 어미 반복·추측형 말끝 겹침·하루 은유·문장 끝 냐·
+ * 말머리 오)와, 케이스가 켤 때만 보는 웃음 금지 자리·질문의 말 되풀이·좋아하는 이유·
+ * 1단계에서 아직 안 하는 말·근거 없이 치켜세우는 말·나중에 연락하겠다는 말·상대를 보내는 말로
+ * 닫음·상대 말 되돌려주기다. 빈 배열이면 통과.
  */
 export const checkOutputRules = (
   bubbles: string[],
@@ -359,6 +370,9 @@ export const checkOutputRules = (
 
   const nya = nyaEndings(bubbles);
   if (nya.length) out.push({ rule: "문장 끝 냐", found: nya[0] });
+
+  const oh = ohOpeners(bubbles);
+  if (oh.length) out.push({ rule: "말머리 오", found: oh[0] });
 
   const notYet = kase.stage1 ? firstMatch(text, STAGE1_NOT_YET) : null;
   if (notYet) out.push({ rule: "1단계에서 아직 안 하는 말", found: notYet });
@@ -541,7 +555,7 @@ export const CASES: EvalCase[] = [
     wantsNote: true,
     turns: [
       heard("오늘 집 정리 좀 했어"),
-      said("오 대청소했네", "뭐 특별한 일 있어?"),
+      said("대청소했네", "뭐 특별한 일 있어?"),
       heard("내일 친구가 집에 놀러 와서 자고 가기로 했거든"),
     ],
   },
@@ -591,7 +605,7 @@ export const CASES: EvalCase[] = [
       heard("아침도 못 먹고 나왔어"),
       said("그럼 점심은 제대로 챙겨 먹어"),
       heard("회사 앞에 새로 생긴 김밥집 가봤어"),
-      said("오 어땠어"),
+      said("어땠어"),
       heard("생각보다 괜찮더라"),
       said("다음에 나도 가보고 싶다"),
       heard("오후에 회의 두 개 있어서 정신없었어"),
@@ -623,7 +637,7 @@ export const CASES: EvalCase[] = [
       heard("진짜 그래서 야식 먹었잖아"),
       said("ㅋㅋㅋ 그럴 줄 알았어"),
       heard("오늘 집 정리 좀 했어"),
-      said("오 대청소했네", "뭐 특별한 일 있어?"),
+      said("대청소했네", "뭐 특별한 일 있어?"),
       heard("내일 친구가 집에 놀러 와서 자고 가기로 했거든"),
     ],
   },
@@ -681,7 +695,7 @@ export const CASES: EvalCase[] = [
       heard("나 다음 달에 사촌 결혼식 가"),
       noted(
         "상대가 다음 달에 사촌 결혼식에 간다고 했다",
-        "오 어디서 하는데?",
+        "어디서 하는데?",
         "나는 이제 도면 좀 보다가 올게",
       ),
       heard(
