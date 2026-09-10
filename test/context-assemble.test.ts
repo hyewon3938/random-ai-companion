@@ -92,6 +92,7 @@ const input = (over: Partial<ContextInput> = {}): ContextInput => ({
   diaries: [{ date: "2026-09-05", entry_json: '{"summary":"조용한 하루"}' }],
   coldStart: false,
   search: { memories: [], oldDiaries: [], schedules: [] },
+  workFacts: [],
   notes: [],
   lastTalk: null,
   contactGap: null,
@@ -167,6 +168,43 @@ test("3층은 안정도 순이고 앞 두 층만 캐시한다", () => {
   assert.ok(!daily.text.includes("집에서 쉼"), "당일에 닥치는 일은 미리 아는 흐름에 넣지 않는다");
   assert.ok(daily.text.includes('[너의 최근 일기 — 기억의 원본]\n2026-09-05: {"summary":"조용한 하루"}'));
   assert.ok(!daily.text.includes(COLD_START_SEED));
+});
+
+const WORK_HEAD = "[작품 — 네가 보거나 읽는 것에서 확인된 사실]";
+
+test("작품 사실 카드는 카드가 있을 때만 일간층에 붙는다", () => {
+  const facts = [
+    {
+      title: "여름 언덕",
+      summary: "이사 온 소년이 한 계절을 보내는 이야기.",
+      scenes: ["둑길에서 자전거가 멈추는 장면"],
+      differences: "원작 소설과 결말이 다르다",
+    },
+  ];
+  const [stable, daily, live] = assembleSystemBlocks(input({ workFacts: facts }));
+  assert.ok(daily.text.includes(WORK_HEAD));
+  assert.ok(daily.text.includes("· 여름 언덕: 이사 온 소년이 한 계절을 보내는 이야기."));
+  assert.ok(daily.text.includes("  기억에 남는 장면: 둑길에서 자전거가 멈추는 장면"));
+  assert.ok(daily.text.includes("  원작과 다른 점: 원작 소설과 결말이 다르다"));
+  // 규칙층의 "[작품] 절에 적힌 것만" 문안은 불변층에 있다 — 절 머리로 자리를 가른다.
+  assert.ok(!stable.text.includes(WORK_HEAD));
+  assert.ok(!live.text.includes(WORK_HEAD));
+
+  const [, empty] = assembleSystemBlocks(input());
+  assert.ok(!empty.text.includes(WORK_HEAD), "카드가 없으면 절 자체가 안 나온다");
+});
+
+test("장면과 다른 점이 비면 그 줄은 안 적는다", () => {
+  const [, daily] = assembleSystemBlocks(
+    input({
+      workFacts: [
+        { title: "빈 카드", summary: "줄거리만 있다.", scenes: [], differences: null },
+      ],
+    }),
+  );
+  assert.ok(daily.text.includes("· 빈 카드: 줄거리만 있다."));
+  assert.ok(!daily.text.includes("기억에 남는 장면:"));
+  assert.ok(!daily.text.includes("원작과 다른 점:"));
 });
 
 test("공통 규칙 덩이는 불변층에 한 번만 들어간다", () => {
