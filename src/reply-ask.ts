@@ -33,6 +33,12 @@ export interface ReplyDraft {
   bubbles: string[];
   signals: ReplySignals;
   parse: ReplyParse;
+  /**
+   * 늘 넣기로 한 칸 가운데 실제로 온 것(이슈 #385). 쓴 답 쪽의 것을 그대로 넘긴다 —
+   * 트레이스가 이 목록으로 형식이 지켜졌는지를 적고, 값이 다 null인 답장이 안 쓴 것인지
+   * 칸을 뺀 것인지 여기서만 갈린다.
+   */
+  slots: string[];
   /** 다시 부른 호출의 기록 id. 안 불렀으면 null이다. */
   retryCallId: number | null;
 }
@@ -61,6 +67,7 @@ export const askReply = async (once: AskOnce): Promise<ReplyDraft> => {
     // 두 답이 같은 말에 대한 답이라 어느 쪽에서 나온 신호든 이 대화의 것이다.
     signals: mergeSignals(first.signals, retry.signals),
     parse: take.parse,
+    slots: take.slots,
     retryCallId: retryCall.callId,
   };
 };

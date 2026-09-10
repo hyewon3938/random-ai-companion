@@ -5,6 +5,8 @@
 //   yarn eval --pass=0.9   표기 통과율 하한 (기본 1.0, 미달이면 종료 코드 1)
 //   yarn eval --json-pass=0.9   형식 유지율 하한 (기본 0.8)
 //   yarn eval --note-pass=0.8   메모 통과율 하한 (기본 0 — 아래 설명)
+//   yarn eval --move-pass=0.5   플러팅 태그율 하한 (기본 0 — 아래 설명)
+//   yarn eval --slot-pass=0.9   늘 넣는 칸 통과율 하한 (기본 0.9)
 //   yarn eval --only=메모   이름에 그 글자가 든 케이스만 (고치는 자리를 반복해 잴 때)
 //   yarn eval --note="웃음 규칙 고친 뒤"   결과 기록에 남길 메모
 //   yarn eval --no-log     이번 실행은 eval-runs.jsonl에 남기지 않는다
@@ -21,6 +23,7 @@ import { buildSystemBlocks } from "../context.js";
 import { chat } from "../llm.js";
 import { config } from "../config.js";
 import {
+  ALWAYS_KEYS,
   parseReplyOutput,
   PARSE_NAME,
   REPLY_MAX_TOKENS,
@@ -65,6 +68,14 @@ const jsonLine = numArg("json-pass", 0.8);
 // 것이라, 하한을 걸면 형식이 흔들릴 때마다 메모 이름으로 걸린다. 형식이 자리를 잡으면 그때
 // 올린다. 그 전까지 회귀는 화면의 메모 ○/✕와 eval-runs.jsonl의 noteHits로 본다.
 const noteLine = numArg("note-pass", 0);
+// 플러팅 하한도 기본이 0이다. 플러팅을 쓸 자리에서 안 쓴 답이 규칙을 어긴 것은 아니라
+// (output-rules.ts의 케이스 설명), 태그가 안 온 회차를 실패로 세면 프롬프트를 안 고친 날에도
+// 숫자가 흔들린다. 회귀는 화면의 플러팅 ○/✕와 eval-runs.jsonl의 moveHits로 본다.
+const moveLine = numArg("move-pass", 0);
+// 칸 하한은 다르다. 늘 넣기로 한 셋은 답장의 내용과 상관없이 값이 없어도 키째 오는 것이라,
+// 안 오면 형식 설명이 무너진 것이다(이슈 #385). 객체로 못 읽은 회차는 세는 쪽에서 빠지므로
+// 형식 하한과 겹쳐 걸리지 않는다.
+const slotLine = numArg("slot-pass", 0.9);
 
 // 케이스를 골라 돌리면 통과율은 고른 것만의 값이라 기준선과 나란히 두면 안 된다 — 기록에
 // 남기지 않고, 어느 케이스를 골랐는지 화면에 적는다.
@@ -113,6 +124,13 @@ interface Result {
    * 메모를 만드는 자리가 답장 호출 밖으로 옮겨 가면 이 값을 채우는 줄만 바꾼다(이슈 #257).
    */
   gotNote?: string | null;
+  /** 플러팅을 재는 케이스에서 move 신호가 실려 왔는지. 재지 않는 케이스는 undefined다. */
+  gotMove?: string | null;
+  /**
+   * 늘 넣기로 한 칸 가운데 실제로 온 것. 객체로 못 읽은 회차는 실을 칸이 없어서 undefined로
+   * 두고 세는 쪽에서 뺀다.
+   */
+  slots?: string[];
   /** 물음표가 빠진 것 같은데 확실하지 않은 줄. 점수에 넣지 않고 사람이 본다. */
   suspects: string[];
 }
@@ -151,6 +169,10 @@ for (const kase of cases) {
       violations: checkOutputRules(out.bubbles, kase),
       missed: missing.length ? `  ${missing.join(" · ")}(못 잼)` : "",
       ...(kase.wantsNote ? { gotNote: out.signals.note } : {}),
+      ...(kase.wantsMove ? { gotMove: out.signals.move } : {}),
+      ...(out.parse === "plain" || out.parse === "empty"
+        ? {}
+        : { slots: out.slots }),
       suspects: suspectQuestions(out.bubbles),
     });
   }
@@ -170,16 +192,34 @@ for (const r of results) {
   // 보이면, 고치려는 자리가 리포트에서 사라진다.
   const noteMark =
     r.gotNote === undefined ? "" : r.gotNote ? "  메모 ○" : "  메모 ✕";
+  const moveMark =
+    r.gotMove === undefined
+      ? ""
+      : r.gotMove
+        ? `  플러팅 ${r.gotMove}`
+        : "  플러팅 ✕";
+  // 칸은 안 온 것만 적는다 — 다 오는 것이 기본이라, 전부 적으면 줄마다 같은 표시가 붙는다.
+  const slotMark =
+    r.slots && r.slots.length < ALWAYS_KEYS.length
+      ? `  칸 빠짐(${ALWAYS_KEYS.filter((k) => !r.slots?.includes(k)).join("·")})`
+      : "";
   console.log(
     `  ${ok ? "○" : "✕"} ${pad(r.caseId, width)}  ${r.parse}` +
       (ok
         ? ""
         : `  ${r.violations.map((v) => `${v.rule}(${v.found})`).join(" · ")}`) +
       noteMark +
+      moveMark +
+      slotMark +
       r.missed,
   );
-  // 못 잰 줄과 메모가 안 온 줄도 답을 보여준다 — 노린 말이 왜 안 나왔는지는 답을 봐야 안다.
-  if (!ok || r.missed || (r.gotNote !== undefined && !r.gotNote))
+  // 못 잰 줄과 메모·플러팅이 안 온 줄도 답을 보여준다 — 노린 말이 왜 안 나왔는지는 답을 봐야 안다.
+  if (
+    !ok ||
+    r.missed ||
+    (r.gotNote !== undefined && !r.gotNote) ||
+    (r.gotMove !== undefined && !r.gotMove)
+  )
     console.log(`      ${r.bubbles.join(" / ")}`);
   if (r.gotNote) console.log(`      메모: ${r.gotNote}`);
   for (const line of r.suspects)
@@ -196,11 +236,28 @@ const noteCases = results.filter((r) => r.gotNote !== undefined);
 const noteHits = noteCases.filter((r) => r.gotNote).length;
 const noteRate = noteCases.length ? noteHits / noteCases.length : 1;
 
+const moveCases = results.filter((r) => r.gotMove !== undefined);
+const moveHits = moveCases.filter((r) => r.gotMove).length;
+const moveRate = moveCases.length ? moveHits / moveCases.length : 1;
+
+// 칸은 케이스를 안 가리고 전부가 함께 잰다. 객체로 못 읽은 회차만 빠진다.
+const slotCases = results.filter((r) => r.slots !== undefined);
+const slotHits = slotCases.filter(
+  (r) => r.slots?.length === ALWAYS_KEYS.length,
+).length;
+const slotRate = slotCases.length ? slotHits / slotCases.length : 1;
+
 console.log(
   `\n표기 통과 ${passed}/${results.length} (${(rate * 100).toFixed(1)}%)` +
     `  ·  형식 JSON ${asJson}/${results.length} (${(jsonRate * 100).toFixed(1)}%)` +
     (noteCases.length
       ? `  ·  메모 ${noteHits}/${noteCases.length} (${(noteRate * 100).toFixed(1)}%)`
+      : "") +
+    (moveCases.length
+      ? `  ·  플러팅 ${moveHits}/${moveCases.length} (${(moveRate * 100).toFixed(1)}%)`
+      : "") +
+    (slotCases.length
+      ? `  ·  칸 ${slotHits}/${slotCases.length} (${(slotRate * 100).toFixed(1)}%)`
       : ""),
 );
 
@@ -234,6 +291,10 @@ if (!process.argv.includes("--no-log") && !only) {
     missed: results.filter((r) => r.missed).length,
     noteHits,
     noteTotal: noteCases.length,
+    moveHits,
+    moveTotal: moveCases.length,
+    slotHits,
+    slotTotal: slotCases.length,
     ...(strArg("note") ? { note: strArg("note") } : {}),
   });
   console.log(
@@ -247,6 +308,9 @@ if (jsonRate < jsonLine)
   under.push(`형식 하한 ${(jsonLine * 100).toFixed(1)}%`);
 if (noteRate < noteLine)
   under.push(`메모 하한 ${(noteLine * 100).toFixed(1)}%`);
+if (moveRate < moveLine)
+  under.push(`플러팅 하한 ${(moveLine * 100).toFixed(1)}%`);
+if (slotRate < slotLine) under.push(`칸 하한 ${(slotLine * 100).toFixed(1)}%`);
 if (under.length) {
   console.log(`${under.join(" · ")} 미달`);
   process.exit(1);

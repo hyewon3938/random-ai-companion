@@ -6,6 +6,9 @@
 //
 // 메모 칸도 같은 자리에 있다(이슈 #346). 그 턴에 적은 메모가 칸에 안 실리면 기록이 다시
 // 전부 null이 되고, 모델은 남길 것이 뚜렷한 자리에서도 메모를 안 낸다.
+//
+// 플러팅·처음 칸도 같은 이유로 늘 적는다(이슈 #385). 기록에 그 칸이 아예 없으면 모델은
+// 칸이 없는 모양을 따라가 답장에서도 키를 빼고, 태그가 하나도 안 남는다.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -36,9 +39,9 @@ test("연달아 보낸 말은 한 턴으로 합친다", () => {
   ]);
 });
 
-// 빈 note 칸까지 적는다 — 칸이 없는 답장이 스무 턴 이어지면 모델이 그 모양을 따라가
-// 남길 것이 있어도 메모를 안 채운다(이슈 #259).
-test("캐릭터 발화는 답장과 같은 객체로, 메모 칸까지 적는다", () => {
+// 늘 넣는 칸 셋(note·move·first)을 빈 값으로라도 적는다 — 칸이 없는 답장이 스무 턴
+// 이어지면 모델이 그 모양을 따라가 채울 것이 있어도 칸을 안 채운다(이슈 #259·#385).
+test("캐릭터 발화는 답장과 같은 객체로, 늘 넣는 칸까지 적는다", () => {
   const got = turns([
     row("user", "안녕", at("09:00:00")),
     row("assistant", "안녕!", at("09:01:00")),
@@ -46,7 +49,10 @@ test("캐릭터 발화는 답장과 같은 객체로, 메모 칸까지 적는다
   ]);
   assert.equal(got.length, 2);
   assert.equal(got[1]?.role, "assistant");
-  assert.equal(got[1]?.content, '{"reply":["안녕!","밥 먹었어?"],"note":null}');
+  assert.equal(
+    got[1]?.content,
+    '{"reply":["안녕!","밥 먹었어?"],"note":null,"move":null,"first":null}',
+  );
 });
 
 test("캐릭터가 먼저 말한 기록은 유저 자리를 앞에 채운다", () => {
@@ -75,7 +81,7 @@ test("캐릭터 발화도 시간 표시가 붙으면 객체를 나눈다", () =>
   ]);
   assert.equal(
     got[1]?.content,
-    '{"reply":["잘 다녀와"],"note":null}\n[21:00] {"reply":["오늘 어땠어?"],"note":null}',
+    '{"reply":["잘 다녀와"],"note":null,"move":null,"first":null}\n[21:00] {"reply":["오늘 어땠어?"],"note":null,"move":null,"first":null}',
   );
 });
 
@@ -111,7 +117,7 @@ test("그 턴에 적은 메모는 답장 객체의 메모 칸에 그대로 들�
   );
   assert.equal(
     got[1]?.content,
-    '{"reply":["몇 시에 시작해?"],"note":"상대가 내일 이사한다고 했다"}',
+    '{"reply":["몇 시에 시작해?"],"note":"상대가 내일 이사한다고 했다","move":null,"first":null}',
   );
 });
 
@@ -128,8 +134,8 @@ test("메모가 둘이면 한 객체에 담지 않고 나눈다", () => {
   );
   assert.equal(
     got[1]?.content,
-    '[09:00] {"reply":["그렇구나"],"note":"상대가 내일 이사한다고 했다"}\n' +
-      '{"reply":["그날 저녁은 비워둘게"],"note":"내일 저녁에 시간을 비워두기로 했다"}',
+    '[09:00] {"reply":["그렇구나"],"note":"상대가 내일 이사한다고 했다","move":null,"first":null}\n' +
+      '{"reply":["그날 저녁은 비워둘게"],"note":"내일 저녁에 시간을 비워두기로 했다","move":null,"first":null}',
   );
 });
 

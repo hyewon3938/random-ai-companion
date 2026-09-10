@@ -34,6 +34,15 @@ export interface RunRecord {
   /** 오늘 메모가 실려 온 횟수와, 그것을 잰 실행 횟수. 메모 케이스가 붙기 전 기록에는 없다. */
   noteHits?: number;
   noteTotal?: number;
+  /** 플러팅 코드가 실려 온 횟수와, 그것을 잰 실행 횟수(이슈 #385). */
+  moveHits?: number;
+  moveTotal?: number;
+  /**
+   * 늘 넣기로 한 칸 셋이 다 실려 온 횟수와, 그것을 잰 실행 횟수. 객체로 못 읽은 답은 실을 칸
+   * 자체가 없어서 세는 쪽에서 뺀다 — 그런 회차는 json 수로 따로 본다.
+   */
+  slotHits?: number;
+  slotTotal?: number;
   /** --note=로 남기는 메모. 무엇을 고치고 잰 것인지. */
   note?: string;
 }
