@@ -13,6 +13,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "../config.js";
+import { CULTURE_SCRIPTS } from "./culture-scripts.js";
 import {
   toResponsiveness,
   toActivityCategory,
@@ -20,6 +21,7 @@ import {
   LEAD_TONE_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
+  SCHEDULE_PARENT_KIND_NAME,
 } from "../labels.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
@@ -222,7 +224,7 @@ const TABLES: Record<string, string> = {
   area TEXT,
   user_knows TEXT NOT NULL DEFAULT 'unknown' CHECK (user_knows IN ('unknown','known','waiting')),
   origin TEXT NOT NULL DEFAULT 'conversation' CHECK (origin IN ('conversation','rhythm','ongoing')),
-  parent_kind TEXT CHECK (parent_kind IN ('memory','schedule')),
+  parent_kind TEXT CHECK (parent_kind IN (${inList(SCHEDULE_PARENT_KIND_NAME)})),
   parent_id INTEGER,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','cancelled','deferred')),
   created_at TEXT NOT NULL`,
@@ -264,6 +266,22 @@ const TABLES: Record<string, string> = {
   differences TEXT,
   made_at TEXT NOT NULL,
   PRIMARY KEY (character_id, title)`,
+
+  // 한국 일상 이벤트의 절차. 캐릭터에 속하지 않는 공통 자산이라 character_id가 없다 — 모든
+  // 캐릭터가 같은 표를 본다. 월 리듬은 이 달에 그 이벤트가 있을 때만 해당 줄을 꺼내 넣는다.
+  // 같은 결혼식이라도 본인이냐 형제자매냐 친구냐에 따라 하는 일이 갈려서 역할도 키에 넣는다.
+  // days_before는 이벤트 당일에서 거꾸로 센 날 수다. 당일이 0이고, 당일보다 뒤에 오는 단계
+  // (이사 뒤 전입신고 같은 것)는 음수로 적는다.
+  // locale은 나중에 국적별로 나눌 자리다. 지금은 KR 한 갈래뿐이다.
+  // 행은 코드에 적힌 원본(db/culture-scripts.ts)의 사본이라 기동할 때마다 다시 넣는다.
+  culture_scripts: `
+  locale TEXT NOT NULL,
+  event TEXT NOT NULL,
+  role TEXT NOT NULL,
+  step_no INTEGER NOT NULL,
+  days_before INTEGER NOT NULL,
+  step TEXT NOT NULL,
+  PRIMARY KEY (locale, event, role, step_no)`,
 
   messages: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -461,7 +479,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -813,9 +831,9 @@ const migrateToV5 = (): void => {
 // 쓰는 자리도 없어진 채 남아 있었다.
 const migrateToV6 = (): void => {
   const hasColumn = (table: string, column: string): boolean =>
-    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(
-      (c) => c.name === column,
-    );
+    (
+      db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+    ).some((c) => c.name === column);
 
   db.pragma("foreign_keys = OFF");
 
@@ -955,7 +973,8 @@ const migrateToV10 = (): void => {
       db.exec(`DROP TABLE IF EXISTS ${name}`);
       db.exec(`CREATE TABLE ${name} (${TABLES[name]}\n)`);
     }
-    for (const sql of INDEXES) if (sql.includes("relationship_signals")) db.exec(sql);
+    for (const sql of INDEXES)
+      if (sql.includes("relationship_signals")) db.exec(sql);
     db.pragma(`user_version = 10`);
   })();
 
@@ -997,6 +1016,15 @@ const migrateToV12 = (): void => {
   console.log(`[db] 스키마를 v12로 옮겼다`);
 };
 
+// v13: 문화 스크립트 표 culture_scripts를 더한다(#405).
+//
+// 새 표라 옮길 행이 없다. 위쪽 createSchema가 기동 때마다 CREATE TABLE IF NOT EXISTS로 만들고
+// 아래 seedCultureScripts가 코드에 적힌 원본을 넣는다. 여기서는 버전만 올린다 — v11이 같은 꼴이다.
+const migrateToV13 = (): void => {
+  db.pragma(`user_version = 13`);
+  console.log(`[db] 스키마를 v13으로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < 5) migrateToV5();
 if (schemaVersion() < 6) migrateToV6();
@@ -1005,7 +1033,8 @@ if (schemaVersion() < 8) migrateToV8();
 if (schemaVersion() < 9) migrateToV9();
 if (schemaVersion() < 10) migrateToV10();
 if (schemaVersion() < 11) migrateToV11();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV12();
+if (schemaVersion() < 12) migrateToV12();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV13();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를
@@ -1176,5 +1205,34 @@ rebuildSendFailures("lunch");
 rebuildSendFailures("glance");
 rebuildSendFailures("intent");
 rebuildSendFailures("care");
+
+// 문화 스크립트는 코드에 적힌 원본이 단일 소스이고 표는 그 사본이다. 그래서 기동할 때마다
+// 통째로 다시 넣는다 — 원본에서 지운 단계가 표에 남지 않고, 표를 손으로 고쳐도 다음 기동에
+// 원본으로 돌아온다. 고칠 자리를 한 곳으로 묶으려는 것이고, 줄이 수백 개라 비용은 없다.
+// 국적(locale)마다 따로 지우고 넣어서, 원본에 없는 국적의 줄은 건드리지 않는다.
+// 기동할 때 한 번 도는 자리라 부르는 쪽은 없고, 여러 번 불러도 같은 표가 되는지를 테스트가 본다.
+export const seedCultureScripts = (): void => {
+  const wipe = db.prepare(`DELETE FROM culture_scripts WHERE locale = ?`);
+  const insert = db.prepare(
+    `INSERT INTO culture_scripts (locale, event, role, step_no, days_before, step)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  db.transaction(() => {
+    for (const locale of new Set(CULTURE_SCRIPTS.map((s) => s.locale)))
+      wipe.run(locale);
+    for (const s of CULTURE_SCRIPTS)
+      s.steps.forEach((step, i) =>
+        insert.run(
+          s.locale,
+          s.event,
+          s.role,
+          i + 1,
+          step.daysBefore,
+          step.step,
+        ),
+      );
+  })();
+};
+seedCultureScripts();
 
 db.pragma("foreign_keys = ON");

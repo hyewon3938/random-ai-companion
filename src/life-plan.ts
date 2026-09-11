@@ -8,14 +8,21 @@
 //
 // 유저와는 메시지로만 이어진 사이라 유저와 만나는 이벤트는 만들지 않는다. 대화에서 잡힌 약속은
 // 일정 표로 들어오지만 여기서 지어내지는 않는다(이슈 #322).
+//
+// 문화 스크립트를 펼치는 자리도 여기 하나다(이슈 #405). 결혼·장례·명절처럼 절차가 정해진 일은
+// 이 달 재료에 그 이름이 걸렸을 때만 해당 이벤트의 단계를 프롬프트에 넣는다. 하루 각본이 같은
+// 표를 읽으면 매일 같은 절차를 다시 보게 되어 단계 순서가 튄다.
 
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
 import {
   addSchedule,
+  findCultureEvents,
   getArcs,
+  getCultureEvent,
   getRecentDiaries,
   getSchedulesInMonth,
+  listMemoryItems,
   monthHasSeeds,
   saveDaySeed,
 } from "./db.js";
@@ -30,7 +37,13 @@ import { dayLabel, kstStamp } from "./kst.js";
 // 하루 각본이 어제 일기를 읽어 이 시드를 덮어쓴다. 생성은 밤 정리 배치(구독 Opus)가 한 달에 한 번.
 
 export interface MonthPlan {
-  events: { date: string; time_hint: string | null; content: string }[];
+  events: {
+    date: string;
+    time_hint: string | null;
+    content: string;
+    // 문화 스크립트를 펼쳐 나온 단계면 그 원본인 진행 중인 일의 번호. 아니면 없거나 null이다.
+    from_ongoing?: number | null;
+  }[];
   days: {
     date: string;
     energy: string;
@@ -62,6 +75,44 @@ const daysLeftInMonth = (today: string): number => {
   return new Date(Date.UTC(y, m, 0)).getUTCDate() - d;
 };
 
+const dayMark = (daysBefore: number): string =>
+  daysBefore === 0
+    ? "당일"
+    : daysBefore > 0
+      ? `D-${daysBefore}`
+      : `D+${-daysBefore}`;
+
+/**
+ * 이 달 재료에 이름이 걸린 이벤트의 절차만 문안으로 만든다. 하나도 안 걸리면 빈 문자열이라
+ * 그 달 프롬프트에는 이 블록이 아예 없다.
+ *
+ * 표를 통째로 실으면 이 달과 상관없는 절차가 한 달 내내 프롬프트에 앉아 있게 되고, 모델은
+ * 자리를 채우려고 없는 이벤트를 만든다. 걸린 이벤트는 역할을 전부 싣는다 — 형제의 결혼인지
+ * 친구의 결혼인지는 재료 문장을 봐야 갈리는 일이라 고르는 건 모델 몫이다.
+ */
+export const culturePrompt = (material: string): string =>
+  findCultureEvents(material)
+    .map((event) => {
+      const byRole = new Map<string, string[]>();
+      for (const r of getCultureEvent(event)) {
+        const lines = byRole.get(r.role) ?? [];
+        lines.push(`${dayMark(r.days_before)} ${r.step}`);
+        byRole.set(r.role, lines);
+      }
+      return [...byRole]
+        .map(([role, lines]) => `### ${event} — ${role}\n${lines.join("\n")}`)
+        .join("\n\n");
+    })
+    .join("\n\n");
+
+// 진행 중인 일 — 문화 스크립트가 펼쳐 나온 일정이 어느 줄에서 나왔는지 되짚을 수 있게 번호를
+// 같이 적는다. 상대 쪽 진행 중인 일은 상대의 일이라 캐릭터의 이벤트로 펼치지 않는다.
+const ongoingLines = (characterId: number): string =>
+  listMemoryItems(characterId, "ongoing")
+    .filter((r) => r.owner === "char")
+    .map((r) => `- [${r.id}] ${r.area} · ${r.subject}: ${r.value}`)
+    .join("\n");
+
 const MONTH_SYSTEM = `너는 한 인물의 한 달을 미리 설계하는 작가다. 실제 그 사람의 삶처럼, 이벤트와 그 여파가 인과로 이어지는 흐름을 짠다. 기력은 급변하지 않고 며칠에 걸친 파도처럼 오르내린다.`;
 
 const monthPrompt = (
@@ -72,6 +123,8 @@ const monthPrompt = (
   diaries: string,
   existingChar: string,
   existingUser: string,
+  ongoing: string,
+  culture: string,
 ): string => `아래 인물의 ${ym} 한 달을 미리 설계해줘. 두 가지를 만든다: (1) 이 달의 이벤트 몇 개, (2) 매일의 컨디션 시드.
 
 [인물 — 같은 항목이 두 줄이면 아래쪽이 최신]
@@ -90,10 +143,24 @@ ${days.map((d) => `${d.date} ${d.label}`).join("\n")}
 본인(char): ${existingChar || "(없음)"}
 상대(user): ${existingUser || "(없음)"}
 
+[진행 중인 일 — 대괄호 안 번호는 아래 events의 from_ongoing에 그대로 적는다]
+${ongoing || "(없음)"}
+${
+  culture
+    ? `
+[이 달에 걸린 일의 절차 — 걸린 것만 실었다]
+한국에서 이 일이 실제로 지나가는 순서다. D-숫자는 그 일이 있는 날에서 거꾸로 센 날, 당일은 그날, D+숫자는 그 뒤다. 한 이벤트에 역할이 여럿이면 이 인물이 선 자리를 위 재료에서 골라 그 역할의 단계만 쓴다.
+
+${culture}
+`
+    : ""
+}
 [이벤트 만들기 — events]
 - 이 달에 3~7개. 실제 그 직업·성격의 사람이 겪을 법한 것으로: 저녁 모임, 주말 약속, 가족 연락이나 방문, 일이 몰리는 주의 중요한 일정, 문화생활, 친구 만남, 병원, 경조사 등. 위 [인물]의 생활·취향과 위 아크에서 뽑아 쓰고, 인물과 무관한 이벤트는 만들지 않는다.
 - 날짜는 요일에 맞게(회식·야근은 평일, 나들이·모임은 주로 주말). 위 [인물]의 직업 상식에 어긋나는 날에 일 일정을 넣지 않는다. time_hint는 "저녁"/"오전"/"점심" 등, 종일 일이면 null.
 - 상대(user)와는 메시지로만 이어진 사이라 실제로 만날 수 없다. 상대와 만나는 이벤트(같이 가기·데이트·방문·상대가 오는 자리)는 만들지 않는다. 상대가 이 달에 들어오는 자리는 메시지를 주고받는 시간뿐이다.
+- 위 [절차]에 실린 일이 이 인물에게 실제로 걸려 있으면(그 일이 있는 날이 재료에 적혀 있거나 이 달 안에 잡혀 있으면) 그 역할의 단계 가운데 날짜가 이 달 안에 떨어지는 것을 이벤트로 만든다. 날짜는 그 일이 있는 날에서 D-숫자만큼 앞으로, D+숫자만큼 뒤로 센 날이다. 이 달 밖으로 떨어지는 단계와, 재료에 걸려 있지 않은 일의 단계는 만들지 않는다. 이렇게 만든 단계는 위 3~7개에 넣지 않는다.
+- 그 단계가 위 [진행 중인 일]의 한 줄에서 나왔으면 from_ongoing에 그 번호를 적는다. 아니면 null.
 
 [컨디션 시드 만들기 — days: 이 달 '모든 날짜'에 하나씩]
 - energy: 낮음 | 보통 | 높음 / wake_hint: 이른 | 보통 | 늦잠 / mood: 짧은 구 / note: 왜 이런지 한 줄(특별한 이유 없으면 "")
@@ -101,7 +168,7 @@ ${days.map((d) => `${d.date} ${d.label}`).join("\n")}
 - **급변 금지.** 어제 '높음'이 오늘 갑자기 '낮음'이 되지 않게, 완만하게 오르내리게. 사람의 기력은 흐름을 탄다.
 - 평범한 날(보통/보통)이 대부분이어도 좋다. 굴곡은 이벤트와 주기(주말·업무 몰림)에서 자연히 나오게 한다.
 
-JSON: {"events":[{"date":"YYYY-MM-DD","time_hint":"저녁|오전|점심|null","content":"..."}],"days":[{"date":"YYYY-MM-DD","energy":"보통","wake_hint":"보통","mood":"...","note":""}]}
+JSON: {"events":[{"date":"YYYY-MM-DD","time_hint":"저녁|오전|점심|null","content":"...","from_ongoing":null}],"days":[{"date":"YYYY-MM-DD","energy":"보통","wake_hint":"보통","mood":"...","note":""}]}
 days에는 위 '이 달의 날짜'를 하나도 빠짐없이 전부 포함한다.`;
 
 // 한 달치 리듬을 생성해 DB에 반영한다(이미 있으면 스킵). API 폴백·수동 도구가 직접 호출.
@@ -131,6 +198,11 @@ export const ensureMonthPlan = async (
         (s) => `${s.date}${s.time_hint ? ` ${s.time_hint}` : ""} ${s.content}`,
       )
       .join(" / ");
+  const ongoing = ongoingLines(characterId);
+  const existingChar = fmt(getSchedulesInMonth(characterId, ym, "char"));
+  // 절차를 찾을 재료는 앞일이 적힌 곳만 본다 — 아크·진행 중인 일·이 달에 이미 잡힌 일정.
+  // 일기는 지나간 일이라 지난달에 다녀온 결혼식이 이 달 절차를 불러온다.
+  const culture = culturePrompt([arcs, ongoing, existingChar].join("\n"));
   const plan = await chatJson<MonthPlan>(
     MONTH_SYSTEM,
     monthPrompt(
@@ -139,8 +211,10 @@ export const ensureMonthPlan = async (
       monthDays(ym),
       arcs,
       diaries,
-      fmt(getSchedulesInMonth(characterId, ym, "char")),
+      existingChar,
       fmt(getSchedulesInMonth(characterId, ym, "user")),
+      ongoing,
+      culture,
     ),
     6000,
     config.modelDeep,
@@ -158,6 +232,11 @@ export const applyMonthPlan = (
 ): void => {
   if (monthHasSeeds(characterId, ym)) return;
   const ts = kstStamp();
+  // 모델이 적어 온 번호가 이 캐릭터의 진행 중인 일인지 확인하고 넣는다. 없는 행을 가리키는
+  // 번호를 그대로 적으면 나중에 원본을 되짚을 때 빈손이 되고, 그게 링크가 없는 것보다 나쁘다.
+  const ongoingIds = new Set(
+    listMemoryItems(characterId, "ongoing").map((r) => r.id),
+  );
   for (const e of plan.events ?? [])
     if (e.date && e.content)
       addSchedule(
@@ -168,6 +247,10 @@ export const applyMonthPlan = (
         e.content,
         ts,
         "rhythm",
+        "unknown",
+        e.from_ongoing && ongoingIds.has(e.from_ongoing)
+          ? { kind: "memory", id: e.from_ongoing }
+          : null,
       );
   for (const s of plan.days ?? [])
     if (s.date)
