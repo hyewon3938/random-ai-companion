@@ -4,6 +4,7 @@
 // 뗀 표시는 지우지 않고 뗀 시각만 적는지, 같은 표시를 다시 읽어도 행이 늘지 않는지 본다.
 // 우리가 올린 글은 게시함(trace_events)에 행을 넣고 보낸 것으로 표시해 흉내 낸다.
 // 슬랙을 읽어 오는 틱(runFeedbackTick)은 돌리지 않는다.
+// 처리 표시(resolved_at·issue_no·resolution)는 사람이 찍는 값이라 저장 함수를 직접 부른다.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -18,8 +19,16 @@ process.env.DB_PATH = join(
 process.env.TELEGRAM_BOT_TOKEN ??= "test-token";
 process.env.ANTHROPIC_API_KEY ??= "test-key";
 
-const { db, recordLlmCall, insertTraceEvent, markTraceEventSent } =
-  await import("../src/db.js");
+const {
+  db,
+  recordLlmCall,
+  insertTraceEvent,
+  markTraceEventSent,
+  openFeedback,
+  feedbackByIds,
+  resolveFeedback,
+  unresolveFeedback,
+} = await import("../src/db.js");
 const { syncReactions, recordThreadReplies } = await import(
   "../src/feedback.js"
 );
@@ -236,4 +245,105 @@ test("스레드 답글은 적힌 시각으로 쌓이고 빈 글과 이미 모은
     removed: 0,
   });
   assert.equal(rowsOf(ts)[0].removed_at, null);
+});
+
+// ── 처리 표시 ──────────────────────────────────────────────────────────
+//
+// 여기서부터는 앞 테스트가 쌓아 둔 행을 함께 본다 — 남은 것만 보여주는 함수라 표 전체가 대상이다.
+
+const idsOf = (slackTs: string): number[] => rowsOf(slackTs).map((r) => r.id);
+
+test("처리 표시를 찍으면 남은 목록에서 빠지고 이슈 번호가 함께 적힌다", () => {
+  const callId = newCall();
+  const ts = "1757100010.000100";
+  posted(`call:${callId}`, "reply", ts);
+  syncReactions(ts, [{ kind: "fact", user: "U1" }]);
+  const [id] = idsOf(ts);
+
+  assert.ok(openFeedback().some((r) => r.id === id));
+
+  assert.equal(resolveFeedback([id], "fixed", 400, "2025-09-11 12:00:00"), 1);
+
+  const [row] = feedbackByIds([id]);
+  assert.equal(row.resolved_at, "2025-09-11 12:00:00");
+  assert.equal(row.resolution, "fixed");
+  assert.equal(row.issue_no, 400);
+  assert.equal(
+    openFeedback().some((r) => r.id === id),
+    false,
+  );
+});
+
+test("이미 찍힌 표시는 다시 찍어도 처음 적은 값이 남는다", () => {
+  const callId = newCall();
+  const ts = "1757100011.000100";
+  posted(`call:${callId}`, "reply", ts);
+  syncReactions(ts, [{ kind: "tone", user: "U1" }]);
+  const [id] = idsOf(ts);
+
+  resolveFeedback([id], "fixed", 400, "2025-09-11 12:00:00");
+  assert.equal(resolveFeedback([id], "wontfix", 401, "2025-09-11 13:00:00"), 0);
+
+  const [row] = feedbackByIds([id]);
+  assert.equal(row.resolution, "fixed");
+  assert.equal(row.issue_no, 400);
+});
+
+test("잘못 찍은 표시를 되돌리면 남은 목록으로 돌아온다", () => {
+  const callId = newCall();
+  const ts = "1757100012.000100";
+  posted(`call:${callId}`, "reply", ts);
+  syncReactions(ts, [{ kind: "timing", user: "U1" }]);
+  const [id] = idsOf(ts);
+
+  resolveFeedback([id], "dup", null, "2025-09-11 12:00:00");
+  assert.equal(unresolveFeedback([id]), 1);
+
+  const [row] = feedbackByIds([id]);
+  assert.equal(row.resolved_at, null);
+  assert.equal(row.resolution, null);
+  assert.equal(row.issue_no, null);
+  assert.ok(openFeedback().some((r) => r.id === id));
+});
+
+test("슬랙에서 뗀 표시는 처리 표시를 찍지 않아도 남은 목록에 없다", () => {
+  const callId = newCall();
+  const ts = "1757100013.000100";
+  posted(`call:${callId}`, "reply", ts);
+  syncReactions(ts, [{ kind: "good", user: "U1" }]);
+  const [id] = idsOf(ts);
+
+  syncReactions(ts, []);
+  assert.equal(
+    openFeedback().some((r) => r.id === id),
+    false,
+  );
+});
+
+test("이슈 없이 넘긴 표시도 찍히고 빈 목록은 아무것도 바꾸지 않는다", () => {
+  const callId = newCall();
+  const ts = "1757100014.000100";
+  posted(`call:${callId}`, "reply", ts);
+  syncReactions(ts, [{ kind: "fact", user: "U9" }]);
+  const [id] = idsOf(ts);
+
+  assert.equal(resolveFeedback([], "fixed", 400, "2025-09-11 12:00:00"), 0);
+  assert.equal(unresolveFeedback([]), 0);
+  assert.deepEqual(feedbackByIds([]), []);
+
+  assert.equal(
+    resolveFeedback([id], "wontfix", null, "2025-09-11 12:00:00"),
+    1,
+  );
+  const [row] = feedbackByIds([id]);
+  assert.equal(row.issue_no, null);
+  assert.equal(row.resolution, "wontfix");
+});
+
+test("남은 목록은 쌓인 순서로 나온다", () => {
+  const rows = openFeedback();
+  const stamps = rows.map(
+    (r) => `${r.created_at}:${String(r.id).padStart(6, "0")}`,
+  );
+  assert.deepEqual(stamps, [...stamps].sort());
 });

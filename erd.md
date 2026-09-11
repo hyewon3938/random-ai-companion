@@ -704,10 +704,15 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | dedupe_key | TEXT | O | 같은 표시를 두 번 쌓지 않게 하는 키, UNIQUE |
 | created_at | TEXT | O | 표시를 확인한 시각. 이유는 슬랙에 적힌 시각이고, 리액션은 누른 시각을 슬랙이 주지 않아 처음 읽은 시각이다 |
 | removed_at | TEXT | | 리액션을 뗀 것을 확인한 시각. 행은 지우지 않는다 |
+| resolved_at | TEXT | | 사람이 그 지적을 다뤘다고 적은 시각 |
+| issue_no | INTEGER | | 그 지적을 다룬 깃허브 이슈 번호. 이슈 없이 넘긴 표시는 비어 있다 |
+| resolution | TEXT | | 어떻게 다뤘는지 — `fixed` 고침 · `wontfix` 안 고침 · `dup` 겹침 |
 
 키·인덱스: PK `id`, UNIQUE `dedupe_key`, 인덱스 `(call_id)`, 인덱스 `(slack_ts, source)`
 
 10분 간격으로 채널을 다시 읽어 지금 붙어 있는 리액션과 이 표를 맞춘다. 없어진 리액션은 행을 지우지 않고 removed_at에 시각을 적어서, 무엇이 있다가 없어졌는지가 남는다. 이유 쪽은 새로 적힌 것만 넣고 고치거나 지우지 않는다.
+
+처리 여부 세 칸은 코드가 채우지 않고 `src/tools/feedback.ts`로 사람이 찍는다. 지적이 하루에 10건 가까이 쌓이는데 무엇을 고쳤는지는 닫힌 이슈에만 있어서, 채널을 처음부터 다시 읽지 않고 남은 것만 보려면 표 안에 표시가 있어야 한다. 이슈가 다시 열리거나 닫혀도 이 값은 따라 바뀌지 않는다 — 깃허브를 매번 물어보는 대신 찍은 시점의 판단을 그대로 남긴다.
 
 표시가 붙은 호출은 90일 정리에서 뺀다. 답장이 왜 그렇게 나왔는지 사람이 판단한 기록이라, 프롬프트와 출력이 함께 있어야 나중에 채점표의 정답지로 쓸 수 있다. 리액션을 뗀 호출은 다시 정리 대상이 된다.
 
@@ -784,6 +789,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | trace_events.status | `pending` 대기 · `sent` 게시 · `failed` 실패 · `skipped` 건너뜀 |
 | call_feedback.source 표시를 남긴 방법 | `reaction` 리액션으로 고른 분류 · `reply` 스레드에 적은 이유 |
 | call_feedback.kind 분류 | `fact` 사실 오류 · `tone` 말투 · `timing` 타이밍 · `good` 좋음 |
+| call_feedback.resolution 처리 결과 | `fixed` 고침 · `wontfix` 안 고침 · `dup` 겹침 |
 | messages 메타의 발송 종류, send_failures.kind | `reply` 답장 · `recover` 복구 · `morning` 아침 · `checkin` 안부 · `away` 자리비움 · `catchup` 근황 · `goodnight` 밤 인사 · `mend` 달래기 · `care` 살피기 · `promise` 약속 연락 · `intent` 의도 선톡 · `glance` 틈새 한 줄 (send_failures는 예약 발송 표를 거치지 않는 종류만) |
 
 영역 이름은 캐릭터마다 목록이 달라서 CHECK 대신 areas 테이블로 관리한다. 각본 블록의 세 태그는 plan_json 안에 있어 CHECK가 걸리지 않으므로 쓰기 코드에서 검사한다. llm_calls.purpose는 값이 목록으로 정해져 있는데도 CHECK를 걸지 않는다. 호출하는 자리가 늘 때마다 제약을 다시 만들어야 하고 제약에 걸린 INSERT는 기록을 통째로 잃어서, 코드의 타입으로 막는 쪽을 택했다.
