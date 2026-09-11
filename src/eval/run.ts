@@ -8,6 +8,7 @@
 //   yarn eval --move-pass=0.5   플러팅 태그율 하한 (기본 0 — 아래 설명)
 //   yarn eval --slot-pass=0.9   늘 넣는 칸 통과율 하한 (기본 0.9)
 //   yarn eval --only=메모   이름에 그 글자가 든 케이스만 (고치는 자리를 반복해 잴 때)
+//   yarn eval --lane=format   형식 레인만 (PR마다 도는 케이스 5개, 이슈 #391)
 //   yarn eval --note="웃음 규칙 고친 뒤"   결과 기록에 남길 메모
 //   yarn eval --no-log     이번 실행은 eval-runs.jsonl에 남기지 않는다
 //
@@ -31,6 +32,7 @@ import {
 import { appendRun, gitState } from "./log.js";
 import {
   CASES,
+  FORMAT_LANE_IDS,
   checkOutputRules,
   hasQuestion,
   hasThought,
@@ -80,9 +82,31 @@ const slotLine = numArg("slot-pass", 0.9);
 // 케이스를 골라 돌리면 통과율은 고른 것만의 값이라 기준선과 나란히 두면 안 된다 — 기록에
 // 남기지 않고, 어느 케이스를 골랐는지 화면에 적는다.
 const only = strArg("only");
-const cases = only ? CASES.filter((c) => c.id.includes(only)) : CASES;
+// 형식 레인은 PR마다 도는 자리다 — 케이스 26개를 다 태우면 호출이 케이스 수 × 반복 횟수만큼
+// 나가서, 말투 규칙 한 줄을 고치는 PR도 한 번에 130건을 쓴다(이슈 #391). 레인이 재는 형식
+// 유지율과 칸 통과율은 케이스가 무엇을 물고 있는지와 무관하게 모든 케이스에서 재므로, 형식이
+// 가장 잘 흘리는 5개만 태워도 같은 것을 잰다. 고른 까닭은 output-rules.ts의 FORMAT_LANE_IDS에 있다.
+const lane = strArg("lane");
+if (lane && lane !== "format") {
+  console.log(`--lane은 format만 받는다. 받은 값: ${lane}`);
+  process.exit(1);
+}
+const formatLane = lane === "format";
+const cases = formatLane
+  ? CASES.filter((c) => (FORMAT_LANE_IDS as readonly string[]).includes(c.id))
+  : only
+    ? CASES.filter((c) => c.id.includes(only))
+    : CASES;
 if (!cases.length) {
   console.log(`--only=${only}에 걸리는 케이스가 없다.`);
+  process.exit(1);
+}
+// 케이스 이름을 바꾸면 레인에서 조용히 빠진다 — 개수가 모자라면 그 자리에서 멈춘다.
+if (formatLane && cases.length !== FORMAT_LANE_IDS.length) {
+  const missing = FORMAT_LANE_IDS.filter(
+    (id) => !cases.some((c) => c.id === id),
+  );
+  console.log(`형식 레인의 케이스 이름이 CASES에 없다: ${missing.join(", ")}`);
   process.exit(1);
 }
 
@@ -143,7 +167,9 @@ const blocks = buildSystemBlocks(character.id, character.chatId, {
 
 console.log(
   `표기 규칙 평가 — 케이스 ${cases.length} × ${runs}회 · ${config.model}` +
-    (only ? ` · --only=${only} (기록 안 남김)\n` : "\n"),
+    (formatLane ? " · 형식 레인 (형식·칸만 본다, 기록 안 남김)\n" : "") +
+    (only ? ` · --only=${only} (기록 안 남김)\n` : "") +
+    (formatLane || only ? "" : "\n"),
 );
 
 const results: Result[] = [];
@@ -261,7 +287,7 @@ console.log(
       : ""),
 );
 
-if (!process.argv.includes("--no-log") && !only) {
+if (!process.argv.includes("--no-log") && !only && !formatLane) {
   const byCase: Record<string, string> = {};
   for (const kase of cases) {
     const mine = results.filter((r) => r.caseId === kase.id);
@@ -302,13 +328,17 @@ if (!process.argv.includes("--no-log") && !only) {
   );
 }
 
+// 형식 레인은 형식과 칸만 종료 코드로 가른다. 표기·메모·플러팅 통과율은 고른 케이스만의
+// 값이라 전체 기준선과 나란히 둘 수 없고, 그날 모델 답에 따라 흔들려서 PR 합격 판정에 쓸
+// 자리가 아니다. 값 자체는 위에 찍히므로 사람이 본다.
 const under: string[] = [];
-if (rate < passLine) under.push(`표기 하한 ${(passLine * 100).toFixed(1)}%`);
+if (!formatLane && rate < passLine)
+  under.push(`표기 하한 ${(passLine * 100).toFixed(1)}%`);
 if (jsonRate < jsonLine)
   under.push(`형식 하한 ${(jsonLine * 100).toFixed(1)}%`);
-if (noteRate < noteLine)
+if (!formatLane && noteRate < noteLine)
   under.push(`메모 하한 ${(noteLine * 100).toFixed(1)}%`);
-if (moveRate < moveLine)
+if (!formatLane && moveRate < moveLine)
   under.push(`플러팅 하한 ${(moveLine * 100).toFixed(1)}%`);
 if (slotRate < slotLine) under.push(`칸 하한 ${(slotLine * 100).toFixed(1)}%`);
 if (under.length) {
