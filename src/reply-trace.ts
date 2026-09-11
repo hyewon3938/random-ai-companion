@@ -52,6 +52,27 @@ export const traceReplyOutcome = (p: {
 };
 
 /**
+ * 발송 직전에 깨진 글자(U+FFFD·짝 없는 서러게이트)를 걸러낸 자리(bot.ts sendBubbleList,
+ * 이슈 #395). 원인이 모델 응답 쪽이라 코드로 막을 수 없어, 실제로 얼마나 자주 나는지는 여기
+ * 쌓이는 줄 수로 센다 — DB에는 거른 뒤 글자만 남으므로 원문은 이 게시함에만 남는다.
+ */
+export const traceGarbledFilter = (p: {
+  characterId?: number;
+  raw: string;
+  filtered: string;
+}): void => {
+  if (!traceEnabled()) return;
+  recordTraceEvent({
+    characterId: p.characterId,
+    kind: "garbled_filtered",
+    text:
+      `:warning: *깨진 글자 걸러냄* · ${clock()}\n` +
+      `원문 ${quote(clip(esc(p.raw), 200))}\n` +
+      `거른 뒤 ${quote(clip(esc(p.filtered), 200))}`,
+  });
+};
+
+/**
  * 선톡이 실제로 나간 자리(bot.ts sendProactive).
  * 아침·안부는 전날 밤에 만든 문안이라 문안 호출과 발송이 몇 시간 떨어져 있다 —
  * 스레드로 잇지 않고 독립 행으로 둔다.
@@ -229,7 +250,9 @@ export const tracePromise = (p: {
   const head =
     `${PROMISE_STAGE_ICON[p.stage]} *약속* ${PROMISE_STAGE_NAME[p.stage]} · ${clock()}` +
     `${p.detail ? ` — ${esc(p.detail)}` : ""}\n${quote(clip(p.promise, 300))}`;
-  const parents = [...new Set([p.callId, p.draftCallId].filter((id): id is number => !!id))];
+  const parents = [
+    ...new Set([p.callId, p.draftCallId].filter((id): id is number => !!id)),
+  ];
   if (!parents.length) {
     recordTraceEvent({
       characterId: p.characterId,
