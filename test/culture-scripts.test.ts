@@ -8,12 +8,18 @@
 // 짝지어 있는지. 이벤트를 새로 더하면서 별칭을 빠뜨리면 이름이 그대로 적힌 문장만 걸리고
 // 추석·부고처럼 실제로 쓰는 말은 하나도 안 걸린다.
 //
+// 운영의 월 리듬은 봇이 아니라 봇 밖 생성 경로가 만든다. 절차가 새벽 정리 수집 결과에 안 실려
+// 나가면 표는 있는데 실제 캐릭터에는 아무것도 안 걸리므로(이슈 #411), 수집 결과가 달마다 그 달에
+// 걸린 절차와 번호 붙은 진행 중인 일을 들고 나가는지도 같은 무게로 본다.
+//
 // DB는 임시 파일로 새로 만든다. 모델도 텔레그램도 부르지 않아 값이 안 든다.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import type { CharacterRow } from "../src/db.js";
 
 process.env.DB_PATH = join(
   mkdtempSync(join(tmpdir(), "companion-test-")),
@@ -53,11 +59,18 @@ const { createFixtureCharacter } =
   await import("../src/eval/fixture-character.js");
 const { saveMemory } = await import("../src/memory.js");
 const { applyMonthPlan, culturePrompt } = await import("../src/life-plan.js");
+const { gatherNightlyInput } = await import("../src/nightly.js");
 
 let char = 0;
 let other = 0;
 let ongoingId = 0;
 let otherOngoingId = 0;
+// 수집 결과를 보는 캐릭터 둘 — 하나는 결혼·이사가 걸렸고 하나는 아무것도 안 걸렸다. 앞의
+// 캐릭터들과 나눠 두는 까닭은 위 테스트가 그쪽에 월 리듬을 이미 깔아서, 실행하는 달에 따라
+// 생성할 달이 없어질 수 있기 때문이다.
+let gatherChar = 0;
+let plainChar = 0;
+let gatherOngoingId = 0;
 
 before(() => {
   char = createFixtureCharacter("chat-culture");
@@ -78,6 +91,30 @@ before(() => {
     subject: "동생 결혼",
     value: "동생이 10월 말에 결혼한다",
   });
+
+  // 고정 캐릭터는 이사 준비를 갖고 시작한다. 결혼을 하나 더 얹어 둘이 걸린 캐릭터로 만든다.
+  // userKnows를 안 주면 상대는 모르는 일이라 ongoingForPlan에서 빠진다 — 번호 붙은 목록을
+  // 따로 싣는 까닭이 그것이라, 이 캐릭터로 두 목록의 차이를 본다.
+  gatherChar = createFixtureCharacter("chat-culture-gather");
+  gatherOngoingId = saveMemory({
+    characterId: gatherChar,
+    itemType: "ongoing",
+    owner: "char",
+    area: "가족",
+    subject: "동생 결혼",
+    value: "동생이 다음 달에 결혼한다",
+  });
+
+  // 아무것도 안 걸린 캐릭터. 고정 캐릭터의 이사 준비를 이름이 안 걸리는 값으로 바꾼다.
+  plainChar = createFixtureCharacter("chat-culture-plain");
+  db.prepare(
+    `UPDATE memory_items SET subject = ?, value = ? WHERE character_id = ? AND subject = ?`,
+  ).run(
+    "집 계약",
+    "지금 원룸 계약이 끝나가서 근처 매물을 틈틈이 본다",
+    plainChar,
+    "이사 준비",
+  );
 });
 after(() => {
   db.close();
@@ -248,4 +285,53 @@ test("이 캐릭터 것이 아닌 번호는 링크 없이 들어간다", () => {
     { parent_kind: null, parent_id: null },
     { parent_kind: null, parent_id: null },
   ]);
+});
+
+// ── 봇 밖 생성 경로로 넘기는 재료 ──────────────────────────────────────────
+
+const rowOf = (id: number): CharacterRow =>
+  db.prepare(`SELECT * FROM characters WHERE id = ?`).get(id) as CharacterRow;
+
+test("수집 결과의 달마다 걸린 일의 절차가 실린다", () => {
+  const g = gatherNightlyInput(rowOf(gatherChar));
+  assert.ok(
+    g.rhythmNeeded.length > 0,
+    "시드가 하나도 없는 캐릭터인데 생성할 달이 없다",
+  );
+  for (const m of g.rhythmNeeded) {
+    for (const role of ["본인", "형제자매", "친구"])
+      assert.ok(
+        m.culture.includes(`### 결혼 — ${role}`),
+        `${m.ym}에 결혼 ${role} 역할이 빠졌다`,
+      );
+    assert.ok(m.culture.includes("### 이사 —"), `${m.ym}에 이사가 빠졌다`);
+    for (const event of eventsInTable())
+      if (event !== "결혼" && event !== "이사")
+        assert.ok(
+          !m.culture.includes(`### ${event} —`),
+          `${m.ym}에 안 걸린 ${event}가 실렸다`,
+        );
+  }
+});
+
+test("걸린 것이 없으면 절차 자리가 빈 문자열이라 크기가 그대로다", () => {
+  const g = gatherNightlyInput(rowOf(plainChar));
+  assert.ok(g.rhythmNeeded.length > 0, "생성할 달이 없어 아무것도 못 본다");
+  for (const m of g.rhythmNeeded)
+    assert.equal(m.culture, "", `${m.ym}에 안 걸린 절차가 실렸다`);
+});
+
+test("번호 붙은 진행 중인 일은 상대가 모르는 것까지 담는다", () => {
+  const g = gatherNightlyInput(rowOf(gatherChar));
+  // ongoingForPlan은 상대가 이미 아는 것만 담아 이 일이 빠진다. 그 목록만 주면 상대가 모르는
+  // 일에서 펼쳐 나온 일정에 원본 링크가 안 붙는다.
+  assert.ok(
+    !g.ongoingForPlan.includes(`[${gatherOngoingId}]`),
+    "상대가 모르는 일이 각본 목록에 들어 있다 — 이 검사의 전제가 깨졌다",
+  );
+  for (const m of g.rhythmNeeded)
+    assert.ok(
+      m.ongoing.includes(`[${gatherOngoingId}]`),
+      `${m.ym}에 그 일의 행 번호가 없다`,
+    );
 });

@@ -12,6 +12,10 @@
 // 문화 스크립트를 펼치는 자리도 여기 하나다(이슈 #405). 결혼·장례·명절처럼 절차가 정해진 일은
 // 이 달 재료에 그 이름이 걸렸을 때만 해당 이벤트의 단계를 프롬프트에 넣는다. 하루 각본이 같은
 // 표를 읽으면 매일 같은 절차를 다시 보게 되어 단계 순서가 튄다.
+//
+// 운영의 월 리듬은 봇 밖 생성 경로가 만든다. 그쪽도 같은 절차를 봐야 해서 새벽 정리 수집이
+// rhythmMaterial을 불러 그 결과를 넘긴다(이슈 #411) — 절차를 외부 문서에 옮겨 적으면 사본이
+// 하나 더 생겨 원본과 어긋나기 시작한다.
 
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
@@ -113,6 +117,43 @@ const ongoingLines = (characterId: number): string =>
     .map((r) => `- [${r.id}] ${r.area} · ${r.subject}: ${r.value}`)
     .join("\n");
 
+const arcLines = (characterId: number): string =>
+  Object.entries(getArcs(characterId))
+    .map(([h, c]) => `${h}: ${c}`)
+    .join(" / ");
+
+const scheduleLines = (
+  rows: { date: string; time_hint: string | null; content: string }[],
+): string =>
+  rows
+    .map((s) => `${s.date}${s.time_hint ? ` ${s.time_hint}` : ""} ${s.content}`)
+    .join(" / ");
+
+/**
+ * 월 리듬 프롬프트의 재료 가운데 절차를 찾는 데 쓰는 것들. 봇 안 경로와 봇 밖 생성 경로가
+ * 이 함수 하나를 불러 같은 문장을 받는다(이슈 #411). 절차 문장을 외부 문서에 옮겨 적어 두면
+ * culture_scripts 원본과 어긋나기 시작해서, 표를 읽는 자리를 여기 하나로 둔다.
+ *
+ * 절차를 찾을 재료는 앞일이 적힌 곳만 본다 — 아크·진행 중인 일·이 달에 이미 잡힌 일정.
+ * 일기는 지나간 일이라 지난달에 다녀온 결혼식이 이 달 절차를 불러온다.
+ */
+export const rhythmMaterial = (
+  characterId: number,
+  ym: string,
+): { arcs: string; ongoing: string; existingChar: string; culture: string } => {
+  const arcs = arcLines(characterId);
+  const ongoing = ongoingLines(characterId);
+  const existingChar = scheduleLines(
+    getSchedulesInMonth(characterId, ym, "char"),
+  );
+  return {
+    arcs,
+    ongoing,
+    existingChar,
+    culture: culturePrompt([arcs, ongoing, existingChar].join("\n")),
+  };
+};
+
 const MONTH_SYSTEM = `너는 한 인물의 한 달을 미리 설계하는 작가다. 실제 그 사람의 삶처럼, 이벤트와 그 여파가 인과로 이어지는 흐름을 짠다. 기력은 급변하지 않고 며칠에 걸친 파도처럼 오르내린다.`;
 
 const monthPrompt = (
@@ -177,9 +218,6 @@ export const ensureMonthPlan = async (
   ym: string,
 ): Promise<boolean> => {
   if (monthHasSeeds(characterId, ym)) return false;
-  const arcs = Object.entries(getArcs(characterId))
-    .map(([h, c]) => `${h}: ${c}`)
-    .join(" / ");
   const diaries = getRecentDiaries(characterId, 3)
     .map((d) => {
       try {
@@ -190,19 +228,10 @@ export const ensureMonthPlan = async (
     })
     .filter(Boolean)
     .join("\n");
-  const fmt = (
-    rows: { date: string; time_hint: string | null; content: string }[],
-  ) =>
-    rows
-      .map(
-        (s) => `${s.date}${s.time_hint ? ` ${s.time_hint}` : ""} ${s.content}`,
-      )
-      .join(" / ");
-  const ongoing = ongoingLines(characterId);
-  const existingChar = fmt(getSchedulesInMonth(characterId, ym, "char"));
-  // 절차를 찾을 재료는 앞일이 적힌 곳만 본다 — 아크·진행 중인 일·이 달에 이미 잡힌 일정.
-  // 일기는 지나간 일이라 지난달에 다녀온 결혼식이 이 달 절차를 불러온다.
-  const culture = culturePrompt([arcs, ongoing, existingChar].join("\n"));
+  const { arcs, ongoing, existingChar, culture } = rhythmMaterial(
+    characterId,
+    ym,
+  );
   const plan = await chatJson<MonthPlan>(
     MONTH_SYSTEM,
     monthPrompt(
@@ -212,7 +241,7 @@ export const ensureMonthPlan = async (
       arcs,
       diaries,
       existingChar,
-      fmt(getSchedulesInMonth(characterId, ym, "user")),
+      scheduleLines(getSchedulesInMonth(characterId, ym, "user")),
       ongoing,
       culture,
     ),
