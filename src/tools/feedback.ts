@@ -114,19 +114,26 @@ interface SlackResult {
 
 /** 그 글에 체크를 단다. 이미 달려 있으면 성공으로 본다. */
 const addCheck = async (slackTs: string): Promise<string | null> => {
-  const res = await fetch("https://slack.com/api/reactions.add", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      Authorization: `Bearer ${config.slackBotToken}`,
-    },
-    body: JSON.stringify({
-      channel: config.slackTraceChannel,
-      timestamp: slackTs,
-      name: DONE_EMOJI,
-    }),
-  });
-  const json = (await res.json()) as SlackResult;
+  let json: SlackResult;
+  // 여기 오는 시점에는 처리 표시가 이미 DB에 찍혀 있다. 슬랙이 안 되거나 JSON이 아닌 답을
+  // 주면 던지지 않고 한 줄로 알린다 — 던지면 표시까지 못 찍은 것처럼 읽힌다.
+  try {
+    const res = await fetch("https://slack.com/api/reactions.add", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        Authorization: `Bearer ${config.slackBotToken}`,
+      },
+      body: JSON.stringify({
+        channel: config.slackTraceChannel,
+        timestamp: slackTs,
+        name: DONE_EMOJI,
+      }),
+    });
+    json = (await res.json()) as SlackResult;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
   if (json.ok || json.error === "already_reacted") return null;
   // 권한이 없으면 무엇을 고쳐야 하는지까지 적는다 — 체크만 안 달릴 뿐 표시는 이미 찍혔다.
   if (json.error === "missing_scope")
@@ -146,6 +153,8 @@ const mirrorToSlack = async (rows: FeedbackRow[]): Promise<void> => {
     const error = await addCheck(ts);
     if (error) console.error(`  슬랙 ${ts}: ${error}`);
     else done += 1;
+    // reactions.add는 분당 한도가 있다 — 여러 건을 한꺼번에 찍을 때 천천히 단다.
+    await new Promise((r) => setTimeout(r, 150));
   }
   console.log(`슬랙 글 ${done}/${targets.length}개에 체크를 달았다.`);
 };
