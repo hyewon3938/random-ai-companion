@@ -100,6 +100,18 @@ export const SCHEDULE_STATUS_NAME: Record<ScheduleStatus, string> = {
   deferred: "미룸",
 };
 
+/**
+ * 이 일정이 어디서 펼쳐 나왔는가. 문화 스크립트가 진행 중인 일 한 줄을 단계별 일정으로 펼칠 때
+ * 그 원본을 가리킨다(이슈 #405) — memory면 memory_items의 행, schedule이면 schedules의 행.
+ * 원본을 적어 두면 나중에 그 일이 끝났을 때 딸려 나온 일정을 함께 찾을 수 있다.
+ */
+export type ScheduleParentKind = "memory" | "schedule";
+
+export const SCHEDULE_PARENT_KIND_NAME: Record<ScheduleParentKind, string> = {
+  memory: "기억",
+  schedule: "일정",
+};
+
 /** 유저가 이 주제에 보이는 관심 수준 — 캐릭터 쪽 기억에만 쓴다. */
 export type Interest = "high" | "medium" | "low";
 

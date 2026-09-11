@@ -1,11 +1,19 @@
-// 아크·월 리듬·일정·하루 각본·일기·작품 사실 카드 표의 저장 함수.
+// 아크·월 리듬·일정·하루 각본·일기·작품 사실 카드·문화 스크립트 표의 저장 함수.
 //
 // 캐릭터의 삶을 이루는 표들이다. 아크와 월 리듬은 미리 만들어 두고, 일정은 대화와 새벽
 // 정리가 넣고 시각과 상대가 아는지를 고치며, 각본은 하루에 하나, 일기는 새벽 정리가
 // 하루에 하나 쓴다. 작품 사실 카드는 각본에 실제 작품이 들어갈 때 작품마다 한 번 쌓인다.
+// 문화 스크립트만 캐릭터에 속하지 않는 공통 자산이라 읽기만 한다 — 넣는 자리는 connection.ts고
+// 원본은 db/culture-scripts.ts다.
 
 import { db } from "./connection.js";
-import type { UserKnows, ScheduleOrigin, ScheduleStatus } from "../labels.js";
+import type {
+  UserKnows,
+  ScheduleOrigin,
+  ScheduleParentKind,
+  ScheduleStatus,
+} from "../labels.js";
+import { DEFAULT_LOCALE } from "./culture-scripts.js";
 
 // 삶의 큰 흐름: 연/계절/월/주 단위 이벤트 아크. 하루 각본이 이를 참고한다
 export const getArcs = (characterId: number): Record<string, string> => {
@@ -143,6 +151,14 @@ export const hasUserScheduleOn = (characterId: number, date: string): boolean =>
 // userKnows도 부르는 쪽이 넣는다. 넣지 않던 동안 모든 행이 기본값 unknown으로 들어가서,
 // 답장 텀 판정의 '상대가 안다' 갈래에 닿는 일정이 하나도 없었다(이슈 #345). 상대 쪽 일정은
 // 상대가 제 일정을 모를 리 없으니 기억 표와 같게 known으로 고정한다.
+// parent는 이 일정이 펼쳐 나온 원본이다. 문화 스크립트가 진행 중인 일 한 줄을 단계별 일정으로
+// 펼칠 때 그 기억 행을 가리킨다(이슈 #405). 둘 중 하나만 적히면 원본을 되찾을 수 없어서 종류와
+// 번호를 한 값으로 묶어 받는다.
+export interface ScheduleParent {
+  kind: ScheduleParentKind;
+  id: number;
+}
+
 export const addSchedule = (
   characterId: number,
   owner: "char" | "user",
@@ -152,18 +168,28 @@ export const addSchedule = (
   now: string,
   origin: ScheduleOrigin,
   userKnows: UserKnows = "unknown",
+  parent: ScheduleParent | null = null,
 ): number => {
   const dup = db
     .prepare(
-      `SELECT id FROM schedules
+      `SELECT id, parent_kind FROM schedules
        WHERE character_id = ? AND owner = ? AND date = ? AND content = ? LIMIT 1`,
     )
-    .get(characterId, owner, date, content) as { id: number } | undefined;
-  if (dup) return dup.id;
+    .get(characterId, owner, date, content) as
+    { id: number; parent_kind: string | null } | undefined;
+  // 이미 있는 줄에 원본이 안 적혀 있으면 이번에 받은 값으로 채운다. 안 채우면 같은 일정을
+  // 먼저 다른 경로가 넣어 둔 날 원본 링크만 조용히 사라진다. 이미 적힌 값은 덮지 않는다.
+  if (dup) {
+    if (parent && !dup.parent_kind)
+      db.prepare(
+        `UPDATE schedules SET parent_kind = ?, parent_id = ? WHERE id = ?`,
+      ).run(parent.kind, parent.id, dup.id);
+    return dup.id;
+  }
   return Number(
     db
       .prepare(
-        `INSERT INTO schedules (character_id, owner, date, time_hint, content, origin, user_knows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO schedules (character_id, owner, date, time_hint, content, origin, user_knows, parent_kind, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         characterId,
@@ -173,9 +199,10 @@ export const addSchedule = (
         content,
         origin,
         owner === "user" ? "known" : userKnows,
+        parent?.kind ?? null,
+        parent?.id ?? null,
         now,
-      )
-      .lastInsertRowid,
+      ).lastInsertRowid,
   );
 };
 
@@ -340,7 +367,8 @@ export const listWorkFactTitles = (characterId: number): string[] =>
 const parseScenes = (raw: string): string[] => {
   try {
     const v: unknown = JSON.parse(raw);
-    if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
+    if (Array.isArray(v))
+      return v.filter((x): x is string => typeof x === "string");
   } catch {
     /* 옛 행이나 깨진 값은 통째로 한 장면으로 본다 */
   }
@@ -390,6 +418,51 @@ export const saveWorkFact = (
     now,
   );
 };
+
+/**
+ * 문화 스크립트(#405) — 한국 일상 이벤트의 절차를 단계로 풀어 둔 공통 표. 캐릭터에 속하지 않아
+ * 여기서는 읽기만 한다. 원본은 db/culture-scripts.ts이고 표는 그 사본이라, 값을 고칠 일이
+ * 생기면 표가 아니라 그 파일을 고친다.
+ */
+export interface CultureStepRow {
+  step_no: number;
+  days_before: number; // 이벤트 당일에서 거꾸로 센 날 수. 당일이 0이고 당일보다 뒤면 음수
+  step: string;
+}
+
+/** 이벤트 이름과 역할로 단계를 순서대로. 표에 없는 조합이면 빈 배열이다. */
+export const getCultureScript = (
+  event: string,
+  role: string,
+  locale: string = DEFAULT_LOCALE,
+): CultureStepRow[] =>
+  db
+    .prepare(
+      `SELECT step_no, days_before, step FROM culture_scripts
+       WHERE locale = ? AND event = ? AND role = ? ORDER BY step_no`,
+    )
+    .all(locale, event, role) as CultureStepRow[];
+
+export interface CultureRoleStepRow extends CultureStepRow {
+  role: string;
+}
+
+/**
+ * 한 이벤트의 역할 전부와 그 단계를 적힌 순서대로.
+ *
+ * 역할은 코드가 안 고른다 — 형제의 결혼인지 친구의 결혼인지는 문장을 봐야 갈리는 일이라,
+ * 걸린 이벤트의 역할을 전부 프롬프트에 싣고 어느 자리인지는 모델이 고른다.
+ */
+export const getCultureEvent = (
+  event: string,
+  locale: string = DEFAULT_LOCALE,
+): CultureRoleStepRow[] =>
+  db
+    .prepare(
+      `SELECT role, step_no, days_before, step FROM culture_scripts
+       WHERE locale = ? AND event = ? ORDER BY rowid`,
+    )
+    .all(locale, event) as CultureRoleStepRow[];
 
 export const hasDiaryOn = (characterId: number, date: string): boolean =>
   !!db
