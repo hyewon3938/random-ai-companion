@@ -78,7 +78,7 @@ const insert = (chatId: string, kind: string, sendAt: string): number =>
     characterId,
     userMsgAt: AT,
     bubbles: ["다녀왔어요"],
-    noteToSave: null,
+    notesToSave: [],
     sendAt,
     kind,
     metaJson: null,
@@ -171,7 +171,7 @@ test("답장을 걸어 두면 행의 종류·말풍선·호출 번호가 입력�
     characterId,
     userMsgAt: AT,
     bubbles: ["안녕", "잘 지냈어요?"],
-    noteToSave: "메모 한 줄",
+    notesToSave: ["메모 한 줄"],
     waitMs,
     kind: "reply",
     callId: 42,
@@ -224,7 +224,7 @@ test("보낸 답장의 메모는 그 답장을 적은 기록 행 번호와 함�
     characterId,
     userMsgAt: AT,
     bubbles: ["다녀왔어요"],
-    noteToSave: "상대가 내일 이사한다고 했다",
+    notesToSave: ["상대가 내일 이사한다고 했다"],
     waitMs: 50,
     kind: "reply",
   });
@@ -239,6 +239,36 @@ test("보낸 답장의 메모는 그 답장을 적은 기록 행 번호와 함�
     note: "상대가 내일 이사한다고 했다",
     message_id: 777,
   });
+});
+
+// 한 답장이 메모를 여럿 남긴다(이슈 #399). 컬럼은 한 칸이라 걸 때 줄바꿈으로 잇고 보낼 때
+// 되돌리는데, 그 왕복에서 한 건이 새면 그날 알게 된 사실이 사라진다.
+test("한 답장에 메모가 여럿이면 같은 기록 행 번호로 여러 줄이 남는다", async () => {
+  const chat = "chat-note-many";
+  setPendingSender(async () => 778);
+  const { id } = schedulePendingReply({
+    chatId: chat,
+    characterId,
+    userMsgAt: AT,
+    bubbles: ["나도 대전에서 컸어"],
+    notesToSave: [
+      "상대가 중학교까지 대전에서 살았다",
+      "내가 자란 동네를 둔산동이라고 말했다",
+    ],
+    waitMs: 50,
+    kind: "reply",
+  });
+  await waitUntil(() => statusOf(id) === "sent");
+
+  const rows = db
+    .prepare(
+      `SELECT note, message_id FROM today_notes WHERE character_id = ? AND message_id = 778 ORDER BY id`,
+    )
+    .all(characterId) as { note: string; message_id: number }[];
+  assert.deepEqual(rows, [
+    { note: "상대가 중학교까지 대전에서 살았다", message_id: 778 },
+    { note: "내가 자란 동네를 둔산동이라고 말했다", message_id: 778 },
+  ]);
 });
 
 test("구간 끝 표시는 지금 블록이 끝나는 시각에 return 행으로 걸린다", () => {

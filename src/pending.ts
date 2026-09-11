@@ -30,6 +30,8 @@
 // 넣어 준다 — 여기서 bot.ts를 부르면 순환 참조가 된다.
 
 import {
+  decodeNotes,
+  encodeNotes,
   insertPendingReply,
   getWaitingPendingReplies,
   getPendingReply,
@@ -268,8 +270,7 @@ const fire = async (id: number): Promise<void> => {
     // 남길 내용은 답장을 만들 때 같이 나온다. 보낸 뒤에 오늘 메모로 옮긴다 —
     // 못 보낸 답장의 내용이 오늘 있었던 일로 남지 않게. 어느 답장에 적은 메모인지도 함께
     // 남긴다: 대화 기록을 모델에 넘길 때 그 턴의 메모 칸을 이 번호로 찾는다(이슈 #346).
-    if (row.note_to_save)
-      saveTodayNote(row.character_id, row.note_to_save, messageId);
+    saveTodayNote(row.character_id, decodeNotes(row.note_to_save), messageId);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     bumpPendingAttempt(row.id, msg);
@@ -317,7 +318,7 @@ export const schedulePendingReply = (p: {
   characterId: number;
   userMsgAt: string;
   bubbles: string[];
-  noteToSave: string | null;
+  notesToSave: string[];
   waitMs: number;
   kind: string;
   /** 이 답장을 만든 모델 호출 번호. 발송·폐기 결과를 그 호출의 트레이스에 잇는다. */
@@ -338,7 +339,7 @@ export const schedulePendingReply = (p: {
     characterId: p.characterId,
     userMsgAt: p.userMsgAt,
     bubbles: p.bubbles,
-    noteToSave: p.noteToSave,
+    notesToSave: p.notesToSave,
     sendAt,
     kind: p.kind,
     metaJson,
@@ -351,7 +352,7 @@ export const schedulePendingReply = (p: {
     character_id: p.characterId,
     user_msg_at: p.userMsgAt,
     bubbles_json: JSON.stringify(p.bubbles),
-    note_to_save: p.noteToSave,
+    note_to_save: encodeNotes(p.notesToSave),
     send_at: sendAt,
     kind: p.kind,
     meta_json: metaJson,
@@ -415,7 +416,7 @@ export const scheduleWakeRow = (p: {
     characterId: p.characterId,
     userMsgAt: p.userMsgAt,
     bubbles: [],
-    noteToSave: null,
+    notesToSave: [],
     sendAt,
     kind,
     metaJson,

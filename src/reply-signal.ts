@@ -9,8 +9,9 @@
 // 신호를 늘릴 때 고칠 자리는 이 파일 안 일곱이다: ReplySignals(칸) · EMPTY_SIGNALS(빈 값)
 // · SIGNAL_KEYS(키 이름) · SIGNAL_LINES(프롬프트 한 줄) · readSignals(값 읽기)
 // · mergeSignals(두 답 합치기) · hasSignal(신호가 하나라도 있는지).
-// 잘린 답에서 건져 올리는 자리와 객체 밖에서 주워 오는 자리는 앞의 것들을 그대로 쓰므로
-// 따로 손대지 않는다.
+// 객체 밖에서 주워 오는 자리는 앞의 것들을 그대로 쓰므로 따로 손대지 않는다. 잘린 답에서
+// 건져 올리는 자리(salvage)도 값이 스칼라인 칸은 그대로 타지만, 값이 배열인 칸은 키:값
+// 정규식에 안 걸려 한 줄을 따로 쓴다 — note가 그렇다.
 //
 // 관계 신호 셋(move·first·told_plan)은 코드 값이라 이름표(labels.ts)의 목록에 있는 것만
 // 받는다 — 모델이 지어낸 코드가 표의 CHECK에 걸려 답장 저장이 통째로 실패하면 안 된다.
@@ -27,8 +28,14 @@ import { FIRST_BY_NAME, FIRST_KIND_NAME, MOVE_NAME } from "./labels.js";
 export interface ReplySignals {
   /** 조정 가능한 자기 일정을 접거나 미루고 남기로 했다(옛 [남음]). */
   stay: boolean;
-  /** 오늘 메모로 남길 한 줄(옛 [메모]). */
-  note: string | null;
+  /**
+   * 오늘 메모로 남길 줄들(옛 [메모]). 남길 것이 없으면 빈 배열이다.
+   *
+   * 배열인 이유는 한 턴에 남길 사실이 둘 이상일 수 있어서다(이슈 #399) — 칸이 한 줄이던
+   * 동안에는 상대가 말해 준 사실과 캐릭터가 처음 꺼낸 자기 이야기가 같은 턴에 나오면 한쪽이
+   * 그 자리에서 사라졌다. 저장은 줄마다 한 행이다(memory.ts saveTodayNote).
+   */
+  note: string[];
   /** 사이가 달라졌을 때 새로 쓴 한 줄(관계 stage). */
   stage: string | null;
   /** 서로 부르는 말이 달라졌을 때 새 호칭(관계 address_terms). */
@@ -61,7 +68,7 @@ export interface ReplyOutput {
 
 export const EMPTY_SIGNALS: ReplySignals = {
   stay: false,
-  note: null,
+  note: [],
   stage: null,
   addressTerms: null,
   promise: null,
@@ -128,7 +135,7 @@ export const ALWAYS_KEYS = ["note", "move", "first"] as const;
 // (관계 설계 「하루 상한」), 처음은 20개가 소진될 때까지 아무 답장에서나 걸린다. stay·stage·
 // address_terms·promise·told_plan은 자리를 가려서 드물게 켜지므로 그대로 둔다.
 const SIGNAL_LINES = [
-  `- note: 오늘 메모로 남길 한 문장. 뒤에 가서도 알고 있어야 할 것이 나오면 적는 칸이라 늘 넣는다 — 남길 것이 없는 답장에서만 null로 둔다. 무엇을 적는지는 위 note 신호 규칙에 있다.`,
+  `- note: 오늘 메모로 남길 문장들의 배열. 원소 하나가 메모 한 줄이다. 뒤에 가서도 알고 있어야 할 것이 나오면 적는 칸이라 늘 넣는다 — 적을 것이 여럿이면 원소를 여러 개 두고, 남길 것이 없는 답장에서만 빈 배열([])로 둔다. 무엇을 적는지는 위 note 신호 규칙에 있다.`,
   `- move: 이번 답장이 상대를 설레게 하려고 쓴 플러팅 코드 하나. 이 칸도 늘 넣고, 그런 자리가 아니었으면 null로 둔다. 코드는 ${moveCodeList()} 가운데 하나다. 한 답장에 둘 이상 썼으면 앞세운 것 하나만 적는다.`,
   `- first: 위 [지금 관계]의 '아직 안 한 처음'에 있는 일이 이번 답장에서 처음으로 일어났으면 그 코드 하나. 이 칸도 늘 넣고, 그런 일이 없었으면 null로 둔다. 코드는 ${firstCodeList()} 가운데 하나다. 이미 한 처음은 다시 적지 않는다.`,
   `- first_by: first에 코드를 적었을 때만 같이 넣는다. 네가 먼저 했으면 character, 상대가 먼저 해서 네가 받은 것이면 user.`,
@@ -145,12 +152,13 @@ const SIGNAL_LINES = [
 export const REPLY_ENVELOPE = `[내보내는 형식 — 이번 답장에만 해당한다]
 - 답장은 JSON 객체 하나로만 쓴다. 코드펜스도 설명도 붙이지 않고 { 로 시작해 } 로 끝낸다.
 - reply: 말풍선을 담는 배열. 원소 하나가 말풍선 하나다. 이 답장에서 말풍선을 나누는 자리는 줄바꿈이 아니라 배열 원소다. 한 덩이로 보낼 말이면 원소가 하나인 배열로 쓴다.
-- note·move·first는 늘 넣는다. 해당하는 것이 없는 답장에서는 null로 두고, 키를 빼지 않는다 — 대화 기록에 적힌 네 지난 답장도 같은 모양이다.
+- note·move·first는 늘 넣는다. 해당하는 것이 없는 답장에서는 note는 빈 배열([])로, move·first는 null로 두고 키를 빼지 않는다 — 대화 기록에 적힌 네 지난 답장도 같은 모양이다.
 - 그 밖의 칸은 해당할 때만 넣는다. 해당하지 않으면 키째 뺀다(빈 값이나 false로 채우지 않는다).
 ${SIGNAL_LINES}
 - 신호도 이 객체 안의 항목이다. } 를 닫은 뒤에는 한 글자도 쓰지 않는다. 남길 말이 있으면 위 항목 안에 넣는다.
-- 예: {"reply": ["아 진짜요?", "그럼 오늘은 좀 일찍 자요"], "note": "상대가 다음 주 화요일에 면접을 본다", "move": null, "first": null}
-- 플러팅을 쓴 답장의 예: {"reply": ["아까 그거 다 했어?", "끝나면 알려줘"], "note": null, "move": "remember", "first": null}
+- 예: {"reply": ["아 진짜요?", "그럼 오늘은 좀 일찍 자요"], "note": ["상대가 다음 주 화요일에 면접을 본다"], "move": null, "first": null}
+- 남길 것이 둘인 예: {"reply": ["나도 대전에서 컸어", "무슨 중학교 나왔어?"], "note": ["상대가 중학교까지 대전에서 살았다", "내가 자란 동네를 둔산동이라고 말했다"], "move": null, "first": null}
+- 플러팅을 쓴 답장의 예: {"reply": ["아까 그거 다 했어?", "끝나면 알려줘"], "note": [], "move": "remember", "first": null}
 - reply 안의 문장만 상대에게 그대로 나간다. 나머지 칸도 이 형식도 상대에게 보이지 않는다.
 - 형식이 JSON이라고 말이 굳으면 안 된다. 문장은 평소처럼 메신저에 치듯 쓰고, 표기 규칙대로 문장 안에 큰따옴표를 쓰지 않는다.`;
 
@@ -192,6 +200,18 @@ const asText = (v: unknown): string | null => {
   return s ? s : null;
 };
 
+// 메모 칸은 배열이 정식이되 문자열 하나로 와도 한 줄로 받는다 — 형식이 흔들려도 적어 온 사실을
+// 버리지 않는다. 줄 안의 줄바꿈으로도 나눈다: 저장이 줄바꿈으로 이어 붙이는 자리를 쓰므로
+// (db/sends.ts) 값에 줄바꿈이 남으면 뒤에서 한 줄이 둘로 읽힌다. 글자까지 같은 줄은 한 번만.
+const asNotes = (v: unknown): string[] => {
+  const raw: unknown[] = Array.isArray(v) ? v : [v];
+  const out = raw.flatMap((el) => {
+    const s = asText(el);
+    return s ? s.split("\n").map((t) => t.trim()).filter(Boolean) : [];
+  });
+  return [...new Set(out)];
+};
+
 // 참으로 읽는 값을 좁게 잡는다 — 형식이 흔들려도 신호는 명시적으로 켠 것만 켠다.
 const asFlag = (v: unknown): boolean => v === true || v === "true";
 
@@ -215,7 +235,7 @@ const asFirst = (
 
 const readSignals = (o: Record<string, unknown>): ReplySignals => ({
   stay: asFlag(o.stay),
-  note: asText(o.note),
+  note: asNotes(o.note),
   stage: asText(o.stage),
   addressTerms: asText(o.address_terms),
   promise: asText(o.promise),
@@ -230,7 +250,9 @@ export const mergeSignals = (
   b: ReplySignals,
 ): ReplySignals => ({
   stay: a.stay || b.stay,
-  note: a.note ?? b.note,
+  // 메모는 두 답에서 온 줄을 한 묶음으로 잇는다 — 하나만 남기면 다시 부른 답에만 적힌 줄이
+  // 사라진다. 글자까지 같은 줄은 한 번만 남긴다(같은 답을 두 번 쓴 경우).
+  note: [...new Set([...a.note, ...b.note])],
   stage: a.stage ?? b.stage,
   addressTerms: a.addressTerms ?? b.addressTerms,
   promise: a.promise ?? b.promise,
@@ -327,7 +349,7 @@ const strayObject = (outside: string): Record<string, unknown> => {
 
 const hasSignal = (s: ReplySignals): boolean =>
   s.stay ||
-  s.note !== null ||
+  s.note.length > 0 ||
   s.stage !== null ||
   s.addressTerms !== null ||
   s.promise !== null ||
@@ -379,6 +401,12 @@ const salvage = (
             ? null
             : unquote(m[2]);
   }
+  // 값이 배열인 칸은 위 정규식에 걸리지 않는다 — 열린 대괄호에서 멈춘다. note가 그래서
+  // 말풍선과 같은 방법으로 한 번 더 훑는다(이슈 #399). 잘린 답에서 메모가 통째로 사라지면
+  // 그 턴의 사실이 하루 안에서 되찾을 길이 없다.
+  const noteAt = text.search(/"note"\s*:\s*\[/);
+  if (noteAt >= 0)
+    found.note = arrayItems(text.slice(text.indexOf("[", noteAt) + 1));
   return {
     bubbles: capBubbles(parts),
     signals: readSignals(found),

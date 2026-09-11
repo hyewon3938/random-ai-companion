@@ -24,11 +24,39 @@ test("객체를 제대로 쓰면 그대로 읽는다", () => {
 
 test("같은 객체 안의 신호를 읽는다", () => {
   const got = parseReplyOutput(
-    '{"reply":["오 축하해"],"note":"상대가 자격증에 붙었다","stay":true}',
+    '{"reply":["오 축하해"],"note":["상대가 자격증에 붙었다"],"stay":true}',
   );
   assert.equal(got.parse, "json");
-  assert.equal(got.signals.note, "상대가 자격증에 붙었다");
+  assert.deepEqual(got.signals.note, ["상대가 자격증에 붙었다"]);
   assert.equal(got.signals.stay, true);
+});
+
+// 메모 칸은 배열로 받기로 했지만(이슈 #399) 모델이 한 문장을 그냥 넣는 회차가 남는다.
+// 그 값을 버리면 그날 알게 된 사실이 사라지므로 한 건짜리 목록으로 읽는다.
+test("메모 칸이 문장 하나로 와도 한 건짜리 목록으로 읽는다", () => {
+  const got = parseReplyOutput(
+    '{"reply":["오 축하해"],"note":"상대가 자격증에 붙었다"}',
+  );
+  assert.deepEqual(got.signals.note, ["상대가 자격증에 붙었다"]);
+});
+
+test("메모 칸의 여러 건은 순서대로 읽고 같은 문장은 한 번만 남긴다", () => {
+  const got = parseReplyOutput(
+    '{"reply":["나도 대전에서 컸어"],"note":["상대가 대전에서 살았다","내 동네는 둔산동이라고 말했다","상대가 대전에서 살았다"]}',
+  );
+  assert.deepEqual(got.signals.note, [
+    "상대가 대전에서 살았다",
+    "내 동네는 둔산동이라고 말했다",
+  ]);
+});
+
+// 잘린 답장에서도 메모를 건진다 — 키:값 정규식은 배열 값을 못 잡아서 이 칸만 따로 본다.
+test("잘린 답에서도 메모 배열은 건진다", () => {
+  const got = parseReplyOutput(
+    '{"reply":["오 축하해","진짜 잘됐다"],"note":["상대가 자격증에 붙었다"],"mo',
+  );
+  assert.equal(got.parse, "salvage");
+  assert.deepEqual(got.signals.note, ["상대가 자격증에 붙었다"]);
 });
 
 test("객체 밖으로 흘린 신호도 주워 온다", () => {
@@ -38,7 +66,7 @@ test("객체 밖으로 흘린 신호도 주워 온다", () => {
   // 주웠다는 것을 이름에 남긴다 — 형식 설명을 고쳐도 계속 새는지 보려는 것이다
   assert.equal(got.parse, "stray");
   assert.deepEqual(got.bubbles, ["오 축하해"]);
-  assert.equal(got.signals.note, "상대가 자격증에 붙었다");
+  assert.deepEqual(got.signals.note, ["상대가 자격증에 붙었다"]);
 });
 
 test("코드펜스를 둘러도 읽는다", () => {
@@ -93,11 +121,23 @@ test("참으로 읽는 값은 좁게 잡는다", () => {
 });
 
 test("두 답의 신호를 합칠 때는 먼저 나온 값을 남긴다", () => {
-  const a = { ...EMPTY_SIGNALS, note: "먼저", stay: false };
-  const b = { ...EMPTY_SIGNALS, note: "나중", stay: true };
+  const a = { ...EMPTY_SIGNALS, stay: false, move: "laugh" as const };
+  const b = { ...EMPTY_SIGNALS, stay: true, move: "nickname" as const };
   const got = mergeSignals(a, b);
-  assert.equal(got.note, "먼저");
+  assert.equal(got.move, "laugh");
   assert.equal(got.stay, true);
+});
+
+// 메모만 예외다 — 형식이 깨져 한 번 더 부른 자리에서 먼저 나온 값만 남기면 나중 답이 적은
+// 사실이 사라진다. 같은 문장은 한 번만 남긴다(이슈 #399).
+test("두 답의 메모는 순서대로 이어 붙인다", () => {
+  const a = { ...EMPTY_SIGNALS, note: ["먼저 알게 된 것", "같은 것"] };
+  const b = { ...EMPTY_SIGNALS, note: ["같은 것", "나중에 알게 된 것"] };
+  assert.deepEqual(mergeSignals(a, b).note, [
+    "먼저 알게 된 것",
+    "같은 것",
+    "나중에 알게 된 것",
+  ]);
 });
 
 test("연락 약속은 객체 안에서도 흘린 줄에서도 읽는다", () => {

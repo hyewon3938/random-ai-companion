@@ -293,23 +293,37 @@ test("저장된 영역이 하나도 없어도 기본 갈래는 목록에 나온�
 
 test("오늘 메모는 앞뒤 공백과 겹친 공백을 정리해 남긴다", () => {
   const id = makeCharacter("chat-note-tidy");
-  saveTodayNote(id, "  러닝   5km \n");
+  saveTodayNote(id, ["  러닝   5km \n"]);
   assert.deepEqual(todayNotes(id), ["러닝 5km"]);
 });
 
 test("공백뿐인 메모는 남기지 않는다", () => {
   const id = makeCharacter("chat-note-empty");
-  saveTodayNote(id, "   \n ");
+  saveTodayNote(id, ["   \n ", ""]);
   assert.deepEqual(todayNotes(id), []);
 });
 
 test("메모 두 건은 적은 순서대로 나온다", () => {
   const id = makeCharacter("chat-note-order");
-  saveTodayNote(id, "점심에 김밥을 먹었다고 했다");
-  saveTodayNote(id, "저녁에 달리기를 간다고 했다");
+  saveTodayNote(id, ["점심에 김밥을 먹었다고 했다"]);
+  saveTodayNote(id, ["저녁에 달리기를 간다고 했다"]);
   assert.deepEqual(todayNotes(id), [
     "점심에 김밥을 먹었다고 했다",
     "저녁에 달리기를 간다고 했다",
+  ]);
+});
+
+// 한 턴에 상대가 말해 준 사실과 캐릭터가 처음 꺼낸 자기 이야기가 같이 나오는 자리(이슈 #399).
+// 한 줄로 몰아 쓰면 새벽 정리가 기억으로 옮길 때 한 줄이 두 주제에 걸친다.
+test("한 번에 넘긴 메모 여러 건은 건마다 한 줄로 남는다", () => {
+  const id = makeCharacter("chat-note-batch");
+  saveTodayNote(id, [
+    "상대가 중학교까지 대전에서 살았다",
+    "내가 자란 동네를 둔산동이라고 말했다",
+  ]);
+  assert.deepEqual(todayNotes(id), [
+    "상대가 중학교까지 대전에서 살았다",
+    "내가 자란 동네를 둔산동이라고 말했다",
   ]);
 });
 
@@ -317,11 +331,27 @@ test("메모 두 건은 적은 순서대로 나온다", () => {
 // 한다(이슈 #346). 번호 없이 적은 메모는 이을 자리가 없으므로 이 표에서 빠진다.
 test("발화 번호와 함께 적은 메모만 번호로 찾는 표에 들어간다", () => {
   const id = makeCharacter("chat-note-by-message");
-  saveTodayNote(id, "상대가 내일 이사한다고 했다", 11);
-  saveTodayNote(id, "어느 답장인지 모르는 메모");
+  saveTodayNote(id, ["상대가 내일 이사한다고 했다"], 11);
+  saveTodayNote(id, ["어느 답장인지 모르는 메모"]);
   assert.deepEqual(
     todayNotesByMessage(id),
-    new Map([[11, "상대가 내일 이사한다고 했다"]]),
+    new Map([[11, ["상대가 내일 이사한다고 했다"]]]),
+  );
+});
+
+// 같은 발화에 달린 둘째 줄이 표에서 빠지면 대화 기록의 그 턴이 한 건만 적은 것처럼 보인다.
+test("같은 발화에 달린 메모 여러 건은 한 번호 아래 모두 들어간다", () => {
+  const id = makeCharacter("chat-note-by-message-many");
+  saveTodayNote(id, ["상대가 중학교까지 대전에서 살았다"], 12);
+  saveTodayNote(id, ["내가 자란 동네를 둔산동이라고 말했다"], 12);
+  assert.deepEqual(
+    todayNotesByMessage(id),
+    new Map([
+      [
+        12,
+        ["상대가 중학교까지 대전에서 살았다", "내가 자란 동네를 둔산동이라고 말했다"],
+      ],
+    ]),
   );
 });
 

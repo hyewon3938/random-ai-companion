@@ -134,6 +134,16 @@ export const recordSendFailure = (
 // 답장을 미리 만들어 두고 정한 시각에 보낸다. 몇 시간짜리 대기가 생기므로 행으로 남겨
 // 프로세스가 다시 떠도 이어간다.
 
+// 오늘 메모는 답장 한 통에 여러 건이 달릴 수 있다(이슈 #399). 컬럼은 그대로 한 칸이고 줄바꿈으로
+// 잇는다 — memory.ts의 tidy가 저장 직전에 공백을 한 칸으로 줄여서 메모 한 건 안에는 줄바꿈이
+// 남지 않으므로, 이 글자로 자르면 경계가 갈릴 일이 없다. 컬럼을 늘리지 않는 덕에 이 판을 올릴 때
+// 이미 걸려 있는 행도 한 건짜리 목록으로 그대로 읽힌다.
+export const encodeNotes = (notes: string[]): string | null =>
+  notes.length ? notes.join("\n") : null;
+
+export const decodeNotes = (v: string | null): string[] =>
+  v ? v.split("\n").filter(Boolean) : [];
+
 export interface PendingReplyRow {
   id: number;
   chat_id: string;
@@ -155,7 +165,7 @@ export const insertPendingReply = (p: {
   characterId: number;
   userMsgAt: string;
   bubbles: string[];
-  noteToSave: string | null;
+  notesToSave: string[];
   sendAt: string;
   kind: string;
   metaJson?: string | null;
@@ -174,7 +184,7 @@ export const insertPendingReply = (p: {
         p.characterId,
         p.userMsgAt,
         JSON.stringify(p.bubbles),
-        p.noteToSave,
+        encodeNotes(p.notesToSave),
         p.sendAt,
         p.kind,
         p.metaJson ?? null,

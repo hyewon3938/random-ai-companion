@@ -10,7 +10,7 @@ import { askReply } from "../src/reply-ask.js";
 import type { ReplyParse } from "../src/reply-signal.js";
 
 const JSON_OK = '{"reply":["헐 진짜?","그래서 어떻게 됐어?"]}';
-const JSON_NOTE = '{"reply":["오 축하해"],"note":"자격증 붙음"}';
+const JSON_NOTE = '{"reply":["오 축하해"],"note":["자격증 붙음"]}';
 const JSON_STAY = '{"reply":["그럼 좀 더 있을게"],"stay":true}';
 const PLAIN = "그냥 줄글로 답함";
 const PLAIN2 = "두 번째도 줄글";
@@ -23,7 +23,7 @@ const fixtures: {
   retry?: string;
   wantParse: ReplyParse;
   wantBubbles: string[];
-  wantNote?: string | null;
+  wantNote?: string[];
   wantStay?: boolean;
   wantRetried: boolean;
 }[] = [
@@ -64,7 +64,7 @@ const fixtures: {
     retry: JSON_OK,
     wantParse: "json",
     wantBubbles: ["헐 진짜?", "그래서 어떻게 됐어?"],
-    wantNote: "자격증 붙음",
+    wantNote: ["자격증 붙음"],
     wantRetried: true,
   },
   {
@@ -92,7 +92,8 @@ for (const f of fixtures) {
     assert.deepEqual(draft.bubbles, f.wantBubbles);
     assert.equal(calls, f.wantRetried ? 2 : 1);
     assert.equal(draft.retryCallId !== null, f.wantRetried);
-    if (f.wantNote !== undefined) assert.equal(draft.signals.note, f.wantNote);
+    if (f.wantNote !== undefined)
+      assert.deepEqual(draft.signals.note, f.wantNote);
     if (f.wantStay !== undefined) assert.equal(draft.signals.stay, f.wantStay);
   });
 }

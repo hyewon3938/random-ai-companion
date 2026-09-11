@@ -51,7 +51,7 @@ test("캐릭터 발화는 답장과 같은 객체로, 늘 넣는 칸까지 적�
   assert.equal(got[1]?.role, "assistant");
   assert.equal(
     got[1]?.content,
-    '{"reply":["안녕!","밥 먹었어?"],"note":null,"move":null,"first":null}',
+    '{"reply":["안녕!","밥 먹었어?"],"note":[],"move":null,"first":null}',
   );
 });
 
@@ -81,7 +81,7 @@ test("캐릭터 발화도 시간 표시가 붙으면 객체를 나눈다", () =>
   ]);
   assert.equal(
     got[1]?.content,
-    '{"reply":["잘 다녀와"],"note":null,"move":null,"first":null}\n[21:00] {"reply":["오늘 어땠어?"],"note":null,"move":null,"first":null}',
+    '{"reply":["잘 다녀와"],"note":[],"move":null,"first":null}\n[21:00] {"reply":["오늘 어땠어?"],"note":[],"move":null,"first":null}',
   );
 });
 
@@ -105,7 +105,7 @@ test("오늘이 언제냐에 따라 어제로 적는다", () => {
   assert.equal(got[0]?.content, "[어제 22:00] 잘 자");
 });
 
-const withNotes = (rows: MessageRow[], notes: Map<number, string>) =>
+const withNotes = (rows: MessageRow[], notes: Map<number, string[]>) =>
   toTurns(rows, { todayLogical: TODAY, notes });
 
 test("그 턴에 적은 메모는 답장 객체의 메모 칸에 그대로 들어간다", () => {
@@ -113,35 +113,56 @@ test("그 턴에 적은 메모는 답장 객체의 메모 칸에 그대로 들�
   const said = row("assistant", "몇 시에 시작해?", at("09:01:00"));
   const got = withNotes(
     [asked, said],
-    new Map([[said.id, "상대가 내일 이사한다고 했다"]]),
+    new Map([[said.id, ["상대가 내일 이사한다고 했다"]]]),
   );
   assert.equal(
     got[1]?.content,
-    '{"reply":["몇 시에 시작해?"],"note":"상대가 내일 이사한다고 했다","move":null,"first":null}',
+    '{"reply":["몇 시에 시작해?"],"note":["상대가 내일 이사한다고 했다"],"move":null,"first":null}',
   );
 });
 
-// 메모는 답장 하나에 하나라, 둘을 한 객체에 담으면 답장으로 올 수 없는 모양이 기록에 생긴다.
-test("메모가 둘이면 한 객체에 담지 않고 나눈다", () => {
+// 한 덩이는 답장 한 통이다. 서로 다른 답장의 메모를 한 배열에 합치면 어느 답장이 무엇을
+// 적었는지가 기록에서 섞인다.
+test("서로 다른 답장의 메모는 한 객체에 담지 않고 나눈다", () => {
   const first = row("assistant", "그렇구나", at("09:00:00"));
   const second = row("assistant", "그날 저녁은 비워둘게", at("09:00:30"));
   const got = withNotes(
     [first, second],
     new Map([
-      [first.id, "상대가 내일 이사한다고 했다"],
-      [second.id, "내일 저녁에 시간을 비워두기로 했다"],
+      [first.id, ["상대가 내일 이사한다고 했다"]],
+      [second.id, ["내일 저녁에 시간을 비워두기로 했다"]],
     ]),
   );
   assert.equal(
     got[1]?.content,
-    '[09:00] {"reply":["그렇구나"],"note":"상대가 내일 이사한다고 했다","move":null,"first":null}\n' +
-      '{"reply":["그날 저녁은 비워둘게"],"note":"내일 저녁에 시간을 비워두기로 했다","move":null,"first":null}',
+    '[09:00] {"reply":["그렇구나"],"note":["상대가 내일 이사한다고 했다"],"move":null,"first":null}\n' +
+      '{"reply":["그날 저녁은 비워둘게"],"note":["내일 저녁에 시간을 비워두기로 했다"],"move":null,"first":null}',
+  );
+});
+
+// 한 답장이 메모를 여럿 남기면 기록에도 여러 원소로 적는다(이슈 #399) — 한 줄로 몰아 쓰지
+// 말라는 지시를 기록의 모양이 거스르면 모델은 모양을 따라간다.
+test("한 답장이 적은 메모 여럿은 한 객체의 배열로 들어간다", () => {
+  const asked = row("user", "어디서 자랐어?", at("09:00:00"));
+  const said = row("assistant", "나도 대전에서 컸어", at("09:01:00"));
+  const got = withNotes(
+    [asked, said],
+    new Map([
+      [
+        said.id,
+        ["상대가 대전에서 살았다", "내가 자란 동네를 둔산동이라고 말했다"],
+      ],
+    ]),
+  );
+  assert.equal(
+    got[1]?.content,
+    '{"reply":["나도 대전에서 컸어"],"note":["상대가 대전에서 살았다","내가 자란 동네를 둔산동이라고 말했다"],"move":null,"first":null}',
   );
 });
 
 test("유저 발화는 번호가 같아도 메모를 가져오지 않는다", () => {
   const asked = row("user", "나 내일 이사해", at("09:00:00"));
-  const got = withNotes([asked], new Map([[asked.id, "메모"]]));
+  const got = withNotes([asked], new Map([[asked.id, ["메모"]]]));
   assert.equal(got[0]?.content, "[09:00] 나 내일 이사해");
 });
 

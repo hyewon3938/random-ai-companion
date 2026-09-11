@@ -117,7 +117,11 @@ export interface CallContext {
   userMsgs?: number;
   /** 객체의 신호 칸 — 키 이름은 그대로 둔다(이미 올라간 기록과 어긋나지 않게). */
   stay?: boolean;
-  note?: string | null;
+  /**
+   * 이 답장이 적은 오늘 메모. 지금 경로는 배열로 넣지만(이슈 #399) 옛 판이 넣은 한 문장짜리
+   * 값도 받는다 — 이 객체는 llm_calls.context_json에 그대로 저장되고 나중에 다시 그려진다.
+   */
+  note?: string | string[] | null;
   /**
    * 상대 상태 판정 — 이번 답장에서 바뀌었는지, 판정을 못 받았는지, 지금 값. 바뀌었으면
    * prev에 바로 전 값이 있어 슬랙에서 이전 → 지금으로 읽는다(이슈 #312).
@@ -479,9 +483,12 @@ const outcomeLines = (ctx: CallContext): string[] => {
   }
   // 메모는 붙었는지와 무엇을 적었는지를 같은 줄에서 본다 — 다른 신호와 묶어 두면
   // '메모 없음' 세 글자가 줄 안에 묻혀 저장 여부를 확인하러 스레드를 뒤지게 된다.
+  // 여러 건이면 건수를 앞에 적는다 — 한 줄로 몰아 쓴 답장과 한 건만 적은 답장이 구분되어야
+  // 메모가 빠지는 자리를 게시함에서 바로 센다(이슈 #399).
+  const notes = Array.isArray(ctx.note) ? ctx.note : ctx.note ? [ctx.note] : [];
   out.push(
-    ctx.note
-      ? `*오늘 메모* ${esc(clip(ctx.note, 200))}`
+    notes.length
+      ? `*오늘 메모* ${notes.length > 1 ? `${notes.length}건 — ` : ""}${esc(clip(notes.join(" / "), 200))}`
       : "*오늘 메모* 추가 없음",
   );
   if (ctx.promise) {

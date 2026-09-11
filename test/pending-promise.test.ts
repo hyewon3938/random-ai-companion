@@ -47,7 +47,7 @@ const insert = (chatId: string, kind: string): number =>
     characterId,
     userMsgAt: AT,
     bubbles: [],
-    noteToSave: null,
+    notesToSave: [],
     sendAt: "2026-09-07 14:00:30",
     kind,
     metaJson: kind === "promise" ? JSON.stringify(META) : null,

@@ -111,7 +111,7 @@ describe("composeReply", () => {
     logMessage(CHAT, characterId, "user", "오늘 뭐 했어", "2026-09-06 19:00:00");
     const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
-    const ask = canned([reply(["집에 있었어", "너는?"], { note: "상대가 하루를 물었다" })]);
+    const ask = canned([reply(["집에 있었어", "너는?"], { note: ["상대가 하루를 물었다"] })]);
     const out = await composeReply({
       judge: noJudge,
       characterId,
@@ -124,7 +124,7 @@ describe("composeReply", () => {
     });
     assert.ok(out);
     assert.deepEqual(out.bubbles, ["집에 있었어", "너는?"]);
-    assert.equal(out.signals.note, "상대가 하루를 물었다");
+    assert.deepEqual(out.signals.note, ["상대가 하루를 물었다"]);
     assert.equal(out.callId, null);
     assert.equal(ask.calls, 1);
     const last = ask.system[ask.system.length - 1];

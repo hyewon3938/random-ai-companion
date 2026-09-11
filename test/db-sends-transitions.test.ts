@@ -53,7 +53,7 @@ const insert = (
     characterId,
     userMsgAt: AT,
     bubbles: ["안녕"],
-    noteToSave: null,
+    notesToSave: [],
     sendAt: opts.sendAt ?? SEND_AT,
     kind,
     callId: opts.callId ?? null,
