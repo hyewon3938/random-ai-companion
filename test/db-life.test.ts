@@ -32,6 +32,7 @@ const {
   getRelationship,
   getSchedulesFrom,
   getUpcomingSchedules,
+  getUpcomingWindow,
   getUserProfile,
   hasUserScheduleOn,
   insertCharacter,
@@ -43,6 +44,8 @@ const {
   saveUserProfile,
   setSpeechLevel,
 } = await import("../src/db.js");
+const { UPCOMING_SCHEDULE_DAYS } = await import("../src/thresholds.js");
+const { shiftDate } = await import("../src/kst.js");
 
 const AT = "2026-09-07 10:00:00";
 const characterId = insertCharacter("chat-life", '{"v":2}', AT);
@@ -302,6 +305,40 @@ test("다가오는 일정은 기준일부터 날짜·번호 순으로 살아 있
   );
   assert.ok(
     !getUpcomingSchedules(fresh, "2026-09-07").some((s) => s.id === past),
+  );
+});
+
+// 건수만으로 자르면 캐릭터가 아는 앞일의 끝이 달마다 달라진다 — 프롬프트 슬롯이 읽는 자리는
+// 날짜로 먼저 자른다(이슈 #398).
+test("프롬프트 슬롯이 읽는 앞일은 정해진 날수 안의 것만 준다", () => {
+  const from = "2026-09-07";
+  const fresh = insertCharacter("chat-life-window", "{}", AT);
+  const edge = addSchedule(
+    fresh,
+    "char",
+    shiftDate(from, UPCOMING_SCHEDULE_DAYS),
+    null,
+    "창 마지막 날 일",
+    AT,
+    "conversation",
+  );
+  const beyond = addSchedule(
+    fresh,
+    "char",
+    shiftDate(from, UPCOMING_SCHEDULE_DAYS + 1),
+    null,
+    "창 밖의 일",
+    AT,
+    "conversation",
+  );
+  // 끝을 안 주는 읽기는 그대로 둘 다 준다 — 각본·새벽 정리가 쓰는 경로다.
+  assert.deepEqual(
+    getUpcomingSchedules(fresh, from).map((s) => s.id),
+    [edge, beyond],
+  );
+  assert.deepEqual(
+    getUpcomingWindow(fresh, from).map((s) => s.id),
+    [edge],
   );
 });
 

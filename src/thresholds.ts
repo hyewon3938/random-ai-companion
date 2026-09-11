@@ -177,11 +177,16 @@ export const NIGHTLY_RUN_AT = { hour: 5, minute: 40 } as const;
 /** 다음 달 리듬을 미리 만들기 시작하는 기준 — 이번 달 남은 날이 이 값 이하일 때. */
 export const RHYTHM_RUNWAY_DAYS = 6;
 
-/** 유저에 대해 알게 된 것을 뽑는 주기(턴). */
-export const USER_FACT_EVERY_TURNS = 15;
-
 /** 주제와 상관없이 프롬프트에 넣는 최근 일기 일수. */
 export const RECENT_DIARY_DAYS = 3;
+
+/** [다가오는 일정] 슬롯이 싣는 앞일의 범위 — 오늘부터 며칠까지. 건수만으로 자르면 캐릭터가
+ * 아는 앞일의 끝이 달마다 달라진다(일정이 촘촘한 달은 2주, 드문 달은 두 달 뒤까지). 범위를
+ * 날짜로 먼저 정하고 건수 상한은 그 안에서만 둔다(이슈 #398). */
+export const UPCOMING_SCHEDULE_DAYS = 14;
+
+/** 그 범위 안에서 싣는 최대 행 수. 범위 안에 일정이 몰린 주에만 걸린다. */
+export const UPCOMING_SCHEDULE_MAX = 12;
 
 /** 프롬프트에 원문 그대로 넣는 최근 대화 턴 수. 한 사람이 연달아 보낸 말은 몇 통이든
  * 한 턴으로 센다 — 행으로 세면 남는 대화 길이가 유저가 말을 끊어 보내는 습관에 딸려 간다. */

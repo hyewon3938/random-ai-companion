@@ -24,13 +24,8 @@ import {
 } from "../recall.js";
 import { RECENT_DIARY_DAYS, SEARCH_LIMIT, TAG_PICK_MAX } from "../thresholds.js";
 import { kstDateString } from "../kst.js";
+import { getUpcomingWindow } from "../db.js";
 import type { MemoryRow, ScheduleStateRow } from "../db.js";
-
-/**
- * [다가오는 일정] 슬롯이 싣는 최대 행 수. src/db.ts의 getUpcomingSchedules 기본값과 같은 값이고,
- * 여기 실린 행은 태그 검색 결과에서 빠지므로 그 경계를 화면에서도 같게 잡아야 한다.
- */
-export const UPCOMING_LIMIT = 12;
 
 export interface CharacterBrief {
   id: number;
@@ -255,16 +250,10 @@ export const runTagSearch = (
         )
         .all(characterId, ...schedHitRows.map((h) => h.ref_id)) as ScheduleStateRow[])
     : [];
+  // [다가오는 일정] 슬롯이 싣는 행은 답장 경로와 같은 함수로 읽는다 — 여기 실린 행은 검색
+  // 결과에서 빼므로, 범위를 이 파일에서 다시 계산하면 화면과 실제 프롬프트가 조용히 갈린다.
   const upcomingIds = new Set(
-    (
-      db
-        .prepare(
-          `SELECT id FROM schedules
-            WHERE character_id = ? AND status = 'active' AND date >= ?
-            ORDER BY date, id LIMIT ?`,
-        )
-        .all(characterId, today, UPCOMING_LIMIT) as { id: number }[]
-    ).map((r) => r.id),
+    getUpcomingWindow(characterId, today).map((r) => r.id),
   );
   const bySchedId = new Map(schedRows.map((r) => [r.id, r]));
   const schedOrdered = schedHitRows
