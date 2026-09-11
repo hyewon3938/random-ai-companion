@@ -40,9 +40,9 @@ export interface CultureStep {
 /**
  * 이벤트 이름을 문장에서 찾을 때 쓰는 별칭. 아크는 명절이라고 안 적고 추석이라고 적는다.
  *
- * notMatch는 이벤트 이름을 품고 있지만 그 이벤트가 아닌 말이다. 이사회에 들어간 이사, 승진 심사에
- * 들어간 승진처럼 겹쳐 걸리는 자리를 여기서 막는다. 찾는 쪽은 notMatch를 먼저 지우고 나서
- * 이름과 별칭을 찾는다.
+ * notMatch는 이벤트 이름을 품고 있지만 그 이벤트가 아닌 말이다. 이사회 안의 이사, 결혼기념일 안의
+ * 결혼처럼 글자만 겹치는 자리를 여기서 막는다. 찾는 쪽은 notMatch를 먼저 지우고 나서 이름과
+ * 별칭을 찾는다. 막지 않으면 부모님 결혼기념일 한 줄에 결혼 절차 전체가 그 달 프롬프트에 실린다.
  */
 export interface EventAlias {
   event: string;
@@ -51,7 +51,11 @@ export interface EventAlias {
 }
 
 export const EVENT_ALIASES: EventAlias[] = [
-  { event: "결혼", aliases: ["결혼식", "예식", "혼인", "웨딩"], notMatch: [] },
+  {
+    event: "결혼",
+    aliases: ["결혼식", "예식", "혼인", "웨딩"],
+    notMatch: ["결혼기념일", "결혼 기념일"],
+  },
   {
     event: "장례",
     aliases: ["부고", "빈소", "발인", "상을 당", "상당했", "조문"],

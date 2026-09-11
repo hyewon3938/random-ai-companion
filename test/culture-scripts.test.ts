@@ -128,6 +128,8 @@ test("별칭으로도 걸리고 이름이 없으면 아무것도 안 걸린다",
 test("이름을 품고 있어도 그 이벤트가 아닌 말은 안 걸린다", () => {
   assert.deepEqual(findCultureEvents("이사회에 들어가 이사님 보고를 한다"), []);
   assert.deepEqual(findCultureEvents("10-18 이삿짐 센터 견적"), ["이사"]);
+  assert.deepEqual(findCultureEvents("부모님 결혼기념일에 식사 대접"), []);
+  assert.deepEqual(findCultureEvents("사촌 결혼식에 간다"), ["결혼"]);
 });
 
 test("한 문장에 둘이 걸리면 둘 다 나온다", () => {
