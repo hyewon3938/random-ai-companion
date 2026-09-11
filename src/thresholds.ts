@@ -306,12 +306,12 @@ export const TAG_PICK_MAX = 8;
 // 코드가 어제까지의 값을 세어 문턱을 재고, 넘길지는 모델이 정한다. 세는 자리와 판정 함수는
 // relationship-stage.ts에 있다. 여기는 값만 둔다.
 
-/** 1→2. 최소 체류와 대화한 날, 유저가 먼저 건 날, 유저가 자기 얘기를 연 날. */
+/** 1→2. 최소 체류와 대화한 날, 유저가 자기 얘기를 연 날. 유저가 먼저 건 날은 캐릭터가 매일
+ * 아침 먼저 말을 거는 설계와 부딪혀 조건에서 뺐다(#393). */
 export const STAGE_1_TO_2 = {
   stayDays: 5,
   talkedDays: 5,
-  userFirstDays: 2,
-  selfStoryDays: 2,
+  selfStoryDays: 3,
 } as const;
 
 /** 2→3. 최소 체류와 상대가 캐릭터 근황을 먼저 물은 날, 2단계에서 열린 플러팅의 반응 점수 평균

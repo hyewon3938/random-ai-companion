@@ -63,7 +63,6 @@ after(() => {
 const counts = (over: Partial<StageCounts> = {}): StageCounts => ({
   stayDays: 0,
   talkedDays: 0,
-  userFirstDays: 0,
   selfStoryDays: 0,
   askedCharDays: 0,
   affectionCount: 0,
@@ -120,12 +119,11 @@ const first = (
   confirmed: 1,
 });
 
-test("1→2 문턱은 네 조건이 다 차야 하고 최소 체류는 하한이다", () => {
+test("1→2 문턱은 세 조건이 다 차야 하고 최소 체류는 하한이다", () => {
   const full = counts({
     stayDays: STAGE_1_TO_2.stayDays,
-    talkedDays: 5,
-    userFirstDays: 2,
-    selfStoryDays: 2,
+    talkedDays: STAGE_1_TO_2.talkedDays,
+    selfStoryDays: STAGE_1_TO_2.selfStoryDays,
   });
   const t = evaluateThreshold(1, full);
   assert.equal(t.from, 1);
@@ -133,7 +131,7 @@ test("1→2 문턱은 네 조건이 다 차야 하고 최소 체류는 하한이
   assert.equal(t.met, true);
   assert.deepEqual(
     t.conditions.map((c) => c.key),
-    ["stay_days", "talked_days", "user_first_days", "self_story_days"],
+    ["stay_days", "talked_days", "self_story_days"],
   );
   // 다른 조건이 다 차도 체류 일수가 모자라면 안 찬다
   const early = evaluateThreshold(1, {
@@ -189,17 +187,17 @@ test("셈은 05:00 경계로 날을 묶고 그날 첫 메시지가 유저 것인
     stageSince: "2026-09-05",
     today: "2026-09-09",
     messages: [
-      // 9/5 — 캐릭터 선톡 뒤 유저 답: 대화한 날이지만 먼저 건 날은 아니다
+      // 9/5 — 캐릭터 선톡 뒤 유저 답
       { role: "assistant", sent_at: "2026-09-05 08:00:00" },
       { role: "user", sent_at: "2026-09-05 08:30:00" },
       // 9/6 새벽 2시는 아직 9/5다 — 새 날로 세지 않는다
       { role: "user", sent_at: "2026-09-06 02:00:00" },
-      // 9/6 — 유저가 먼저
+      // 9/6
       { role: "user", sent_at: "2026-09-06 21:00:00" },
       { role: "assistant", sent_at: "2026-09-06 21:05:00" },
       // 9/7 — 캐릭터만 말한 날은 대화한 날이 아니다
       { role: "assistant", sent_at: "2026-09-07 09:00:00" },
-      // 9/8 05:00 정각은 9/8이다 — 유저가 먼저
+      // 9/8 05:00 정각은 9/8이다 — 새 날로 센다
       { role: "user", sent_at: "2026-09-08 05:00:00" },
     ],
     signals: [
@@ -213,7 +211,6 @@ test("셈은 05:00 경계로 날을 묶고 그날 첫 메시지가 유저 것인
   });
   assert.equal(c.stayDays, 4);
   assert.equal(c.talkedDays, 3);
-  assert.equal(c.userFirstDays, 2);
   // 9/5에 두 번 열었어도 하루다
   assert.equal(c.selfStoryDays, 1);
   assert.equal(c.askedCharDays, 1);
@@ -905,7 +902,6 @@ test("수집은 단계 창의 값을 세고 어제 후보·어제 쓴 플러팅�
   assert.deepEqual(byKey, {
     stay_days: 5,
     talked_days: 3,
-    user_first_days: 2,
     self_story_days: 1,
   });
   assert.deepEqual(rel.firstsDone, []);

@@ -1,9 +1,9 @@
 // 관계 단계 전이 — 어제까지의 값을 세어 문턱을 재고, 모델의 결정을 받아 단계·처음·의도를 저장한다.
 //
-// relationship.md 「단계 전이 절차」가 원본이다. 코드가 세는 값(대화한 날, 유저가 먼저 건 날,
-// 열림 신호가 켜진 날, 반응 점수 평균, 체류 일수)과 문턱 판정, 시도할 플러팅 추천 목록은 이 파일의
-// 순수 함수가 만들고, 새벽 정리 수집(gatherRelation)이 DB에서 읽어 그 함수들에 넣는다. 넘길지는
-// 모델이 정한다 — 조건이 다 찬 날에만 묻고, 조건이 찼다고 코드가 자동으로 올리지 않는다.
+// relationship.md 「단계 전이 절차」가 원본이다. 코드가 세는 값(대화한 날, 열림 신호가 켜진 날,
+// 반응 점수 평균, 체류 일수)과 문턱 판정, 시도할 플러팅 추천 목록은 이 파일의 순수 함수가 만들고,
+// 새벽 정리 수집(gatherRelation)이 DB에서 읽어 그 함수들에 넣는다. 넘길지는 모델이 정한다 —
+// 조건이 다 찬 날에만 묻고, 조건이 찼다고 코드가 자동으로 올리지 않는다.
 //
 // 저장(applyRelationOutput)은 새벽 정리 트랜잭션 안에서 부른다. 순서는 처음 → 단계 → 의도다.
 // 처음이 먼저인 이유는 3→4가 확정된 마음 확인 처음을 조건으로 해서다. 단계는 문턱이 찼고
@@ -103,8 +103,6 @@ export interface StageCounts {
   stayDays: number;
   /** 단계 시작일부터 유저 메시지가 1건 이상인 날 수. */
   talkedDays: number;
-  /** 그날 첫 메시지가 선톡이 아니라 유저 메시지인 날 수. */
-  userFirstDays: number;
   /** 유저가 자기 얘기를 연 판정이 있는 날 수. */
   selfStoryDays: number;
   /** 캐릭터 근황을 먼저 물은 판정이 있는 날 수. */
@@ -179,15 +177,8 @@ export const confessionExchangeOf = (
 /** 순수 계산. 창 안의 메시지·신호를 논리일로 묶어 센다. */
 export const countStageValues = (i: StageCountInput): StageCounts => {
   const talked = new Set<string>();
-  const userFirst = new Set<string>();
-  const seenDay = new Set<string>();
   for (const m of i.messages) {
-    const day = logicalDateOf(m.sent_at);
-    if (!seenDay.has(day)) {
-      seenDay.add(day);
-      if (m.role === "user") userFirst.add(day);
-    }
-    if (m.role === "user") talked.add(day);
+    if (m.role === "user") talked.add(logicalDateOf(m.sent_at));
   }
   const selfStory = new Set<string>();
   const askedChar = new Set<string>();
@@ -202,7 +193,6 @@ export const countStageValues = (i: StageCountInput): StageCounts => {
   return {
     stayDays: Math.max(0, dayDiff(i.stageSince, i.today)),
     talkedDays: talked.size,
-    userFirstDays: userFirst.size,
     selfStoryDays: selfStory.size,
     askedCharDays: askedChar.size,
     affectionCount: affection,
@@ -263,12 +253,6 @@ export const evaluateThreshold = (
           "대화한 날",
           c.talkedDays,
           STAGE_1_TO_2.talkedDays,
-        ),
-        atLeast(
-          "user_first_days",
-          "유저가 먼저 건 날",
-          c.userFirstDays,
-          STAGE_1_TO_2.userFirstDays,
         ),
         atLeast(
           "self_story_days",
