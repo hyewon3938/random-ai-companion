@@ -105,6 +105,7 @@ import {
   ensureRhythmRunway,
   monthDays,
   monthsNeedingRhythm,
+  rhythmMaterial,
   type MonthPlan,
 } from "./life-plan.js";
 import {
@@ -338,7 +339,17 @@ export interface NightlyGathered {
   workFactsNeeded: string[];
   workFactsKnown: string[];
   awayRule: string; // 오늘 각본의 자리 비움 규칙. 관계 국면으로 상한이 달라져서 외부 생성 경로가 이 줄을 그대로 각본 규칙에 넣는다(이슈 #335)
-  rhythmNeeded: { ym: string; days: { date: string; label: string }[] }[]; // 이번 새벽에 생성해야 할 월 리듬
+  // 이번 새벽에 생성해야 할 월 리듬. 봇 안 월 리듬이 쓰는 재료 둘을 달마다 같이 싣는다(이슈 #411).
+  // ongoing은 events의 from_ongoing에 적을 진행 중인 일 — 캐릭터 쪽 전부, 줄 앞에 행 번호.
+  // ongoingForPlan은 상대가 아는 것만 담아 이보다 좁아서, 그것만 주면 상대가 모르는 일에서
+  // 펼쳐 나온 일정에 원본 링크가 안 붙는다. culture는 그 달 재료에 이름이 걸린 일의 절차
+  // 블록이고, 걸린 것이 없으면 빈 문자열이라 평소 회차에는 아무것도 안 붙는다.
+  rhythmNeeded: {
+    ym: string;
+    days: { date: string; label: string }[];
+    ongoing: string;
+    culture: string;
+  }[];
   // 침묵 백오프 상태 — 외부 생성 경로가 이를 보고 산출물을 조절한다
   // (normal=평소대로 / quiet·dormant=각본·선톡 생성 불필요 / checkin=저녁 재연결 문안만)
   silenceTier: "normal" | "quiet" | "checkin" | "dormant";
@@ -663,10 +674,10 @@ export const gatherNightlyInput = (
     lastNight: lastNightSleep(character.id, today),
     ...workFactPlan(character.id, today),
     awayRule: awayRuleLines(awayPhaseOf(character.id, today)),
-    rhythmNeeded: monthsNeedingRhythm(character.id, today).map((ym) => ({
-      ym,
-      days: monthDays(ym),
-    })),
+    rhythmNeeded: monthsNeedingRhythm(character.id, today).map((ym) => {
+      const { ongoing, culture } = rhythmMaterial(character.id, ym);
+      return { ym, days: monthDays(ym), ongoing, culture };
+    }),
     silenceTier: silence.tier,
     silenceDays: silence.days,
     sendPlan: plan.kind,
