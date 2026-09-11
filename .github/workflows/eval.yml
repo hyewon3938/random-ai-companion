@@ -1,10 +1,12 @@
 # 표기 규칙 평가를 GitHub에서 돌린다. 모델을 실제로 부르므로 기본 검사(ci.yml)와 분리했다.
 #
-# 도는 때는 둘이다.
-#   Actions 탭에서 Run workflow로 직접 실행. 케이스를 몇 번씩 돌릴지 고를 수 있다.
-#   PR에 eval 라벨을 붙일 때. 프롬프트나 표기 규칙을 고친 PR에만 붙인다.
+# 도는 때는 둘이고, 무엇을 돌리는지가 다르다.
+#   PR에 eval 라벨을 붙일 때는 형식 레인만 돈다 — 케이스 5개 × 3회로 호출 15건이고, 답이
+#   객체로 오는지와 늘 넣는 칸이 오는지만 가른다(이슈 #391).
+#   Actions 탭에서 Run workflow로 직접 실행하면 케이스 26개 전체가 돈다. 표기·메모·플러팅
+#   통과율까지 보려면 이쪽이다. 케이스를 몇 번씩 돌릴지 고를 수 있다.
 #
-# 푸시마다 돌리지 않는 이유는 두 가지다. 호출이 케이스 수 × 반복 횟수만큼 나가서 비용이
+# 푸시마다 전체를 돌리지 않는 이유는 두 가지다. 호출이 케이스 수 × 반복 횟수만큼 나가서 비용이
 # 붙고, 통과율은 모델이 그날 어떻게 답하느냐에 따라 흔들려서 고친 것과 무관하게 떨어지는
 # 실행이 섞인다.
 name: 표기 규칙 평가
@@ -59,7 +61,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # 평가는 텔레그램을 부르지 않지만 config가 값을 요구해서 자리만 채운다.
           TELEGRAM_BOT_TOKEN: unused-in-eval
-          RUNS: ${{ inputs.runs || '5' }}
+          # PR 라벨 경로는 형식 레인 3회, 손으로 돌리는 경로는 전체 26개를 고른 횟수만큼.
+          LANE: ${{ github.event_name == 'pull_request' && 'format' || 'full' }}
+          RUNS: ${{ github.event_name == 'pull_request' && '3' || (inputs.runs || '5') }}
           PASS: ${{ inputs.pass_line }}
           JSON_PASS: ${{ inputs.json_pass_line }}
         run: |
@@ -67,9 +71,11 @@ jobs:
           # 하한은 비워 두면 run.ts의 기본값을 쓴다. 무엇이 통과인지를 YAML에 다시 적으면
           # 기준이 두 곳으로 갈라진다.
           # 실행 기록(eval-runs.jsonl)은 커밋으로 남기는 파일이라 여기서는 쌓지 않는다.
-          yarn eval --runs="$RUNS" --no-log \
-            ${PASS:+--pass="$PASS"} ${JSON_PASS:+--json-pass="$JSON_PASS"} \
-            | tee eval-output.txt
+          ARGS=(--runs="$RUNS" --no-log)
+          if [ "$LANE" = format ]; then ARGS+=(--lane=format); fi
+          if [ -n "$PASS" ]; then ARGS+=(--pass="$PASS"); fi
+          if [ -n "$JSON_PASS" ]; then ARGS+=(--json-pass="$JSON_PASS"); fi
+          yarn eval "${ARGS[@]}" | tee eval-output.txt
 
       - name: 결과를 실행 요약에 붙이기
         if: always()
