@@ -38,6 +38,7 @@ const {
   promiseSituation,
   returnSituation,
   splitBubbles,
+  stripGarbledChars,
   upcomingAnnouncedAway,
 } = await import("../src/bot.js");
 type PlanBlock = Parameters<typeof farewellSituation>[0];
@@ -133,6 +134,19 @@ test("줄바꿈이 없으면 말풍선 하나다", () => {
 
 test("공백뿐인 문안은 빈 말풍선 하나로 돌려준다", () => {
   assert.deepEqual(splitBubbles("   "), [""]);
+});
+
+test("U+FFFD와 짝 없는 서러게이트는 걷어내고 짝이 맞는 서러게이트(이모지)는 남긴다", () => {
+  const loneHigh = String.fromCharCode(0xd800);
+  const loneLow = String.fromCharCode(0xdc00);
+  assert.equal(stripGarbledChars(`앞${loneHigh}뒤`), "앞뒤");
+  assert.equal(stripGarbledChars(`앞${loneLow}뒤`), "앞뒤");
+  assert.equal(stripGarbledChars("앞�뒤"), "앞뒤");
+  assert.equal(stripGarbledChars("웃는 얼굴 😀 그대로"), "웃는 얼굴 😀 그대로");
+});
+
+test("깨진 글자만 있던 말풍선은 걸러내면 빈 문자열이 된다", () => {
+  assert.equal(stripGarbledChars("��"), "");
 });
 
 test("배웅 답 문단에 시작 시각과 활동이 들어간다", () => {

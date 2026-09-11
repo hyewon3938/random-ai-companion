@@ -18,6 +18,10 @@
 // 울린 뒤 답장 없이 끝나면 pending.ts가 그 행을 보낸 것으로 확정해 재시도도 걸리지 않으므로,
 // 여기서 적지 않으면 답장이 사라진 사실 자체가 어디에도 남지 않는다.
 //
+// 말풍선을 실제로 내보내는 sendBubbleList 한 곳에서 깨진 글자(U+FFFD·짝 없는 서러게이트)를
+// 걸러낸다(stripGarbledChars, 이슈 #395). 답장·선톡이 전부 이 함수를 지나므로 여기 한 곳만
+// 고치면 되고, 걸러진 횟수는 traceGarbledFilter로 게시함에 쌓는다.
+//
 // 부팅하면 recoverMissedReplies가 놓친 답장을 복구한다. 워터마크로 중복을 막고 최근
 // 3시간 것만 본다 — 더 멀리 보면 자정 경계에서 어제 것까지 딸려 온다.
 //
@@ -84,6 +88,7 @@ import {
   type WakeMeta,
 } from "./pending.js";
 import {
+  traceGarbledFilter,
   traceProactiveSend,
   tracePromise,
   traceReplyFault,
@@ -209,6 +214,16 @@ export const logErr = (prefix: string, e: unknown): void => {
   console.error(prefix, redactToken(inspect(e, { depth: 5 })));
 };
 
+// U+FFFD(디코딩할 수 없는 바이트 대신 들어오는 글자)와 짝 없는 서러게이트(U+D800~U+DFFF 중
+// 쌍을 이루지 못한 반쪽)를 걷어낸다. 둘 다 모델 응답에 이미 섞여 들어오는 쪽이라 우리 코드가
+// 만들어내는 자리가 없고, 발송 직전 한 곳에서 거르는 것 말고는 막을 길이 없다(이슈 #395).
+// 짝이 맞는 서러게이트 쌍(이모지 등)은 건드리지 않는다.
+const GARBLED_CHAR =
+  /�|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+export const stripGarbledChars = (text: string): string =>
+  text.replace(GARBLED_CHAR, "");
+
 // 줄바꿈으로 끊은 말풍선 — 선톡 문안이 쓴다(문안 여섯 곳은 자기 형식으로 답해 본문이 통글이다).
 // 답장은 객체의 reply 배열에서 나오므로 이 길을 타지 않는다. 상한 계산만 한곳(capBubbles)에서 쓴다.
 export const splitBubbles = (text: string): string[] => {
@@ -269,12 +284,22 @@ const sleepWhileTyping = async (chatId: string, ms: number): Promise<void> => {
 // 중간에 실패해도 이미 나간 말풍선은 되돌릴 수 없다. 그래서 실패를 그냥 던지지 않고
 // '어디까지 나갔는지'를 함께 돌려준다 — 호출부가 통째로 재시도해 앞부분을 중복 발송하는 걸 막는다.
 // (재시도 간격을 넓힌 만큼 이 부분 실패 확률도 같이 올라간다. 잘린 채로 두는 게 중복보다 낫다.)
+//
+// 답장·선톡이 전부 이 함수를 지나므로 깨진 글자 필터(stripGarbledChars)도 여기 한 곳에 둔다
+// (이슈 #395). sent에는 거른 뒤 글자를 담아 logMessage로 넘긴다 — 원문 그대로 저장하면 다음
+// 답장이 읽는 대화 기록에 깨진 글자가 다시 들어간다. 얼마나 자주 걸러지는지는 게시함(trace)에
+// 남는 원문 조각으로 본다.
 const sendBubbleList = async (
   chatId: string,
   bubbles: string[],
+  characterId?: number,
 ): Promise<{ sent: string[]; error?: unknown }> => {
   const sent: string[] = [];
-  for (const bubble of bubbles) {
+  for (const raw of bubbles) {
+    const bubble = stripGarbledChars(raw);
+    if (bubble !== raw)
+      traceGarbledFilter({ characterId, raw, filtered: bubble });
+    if (!bubble) continue; // 통째로 깨진 글자였으면 보낼 것이 없다
     // 실제 치는 속도(≈5~6자/초)에 맞춘 타이핑 시간. 90ms/자는 복붙처럼 빨라서 180ms/자로 늦춤.
     const typeMs =
       clamp(bubble.length * 180, 1700, 9000) + Math.random() * 1000;
@@ -294,8 +319,9 @@ const sendBubbleList = async (
 const sendBubblesTo = (
   chatId: string,
   text: string,
+  characterId?: number,
 ): Promise<{ sent: string[]; error?: unknown }> =>
-  sendBubbleList(chatId, splitBubbles(text));
+  sendBubbleList(chatId, splitBubbles(text), characterId);
 
 // 선제 발송(선톡): 유저 메시지 없이 캐릭터가 먼저 보낸다. 아침 안부(morning)·침묵 팔로업(followup)이 호출
 // 반환: 실제로 나간 말풍선 수 / 전체. 아무것도 못 나가면 throw(= 호출부가 재시도해도 안전),
@@ -314,7 +340,7 @@ export const sendProactive = async (
 ): Promise<SendOutcome> => {
   console.log(`[send] kind=${kind} chat=${chatId} len=${text.length}`);
   const total = splitBubbles(text).length;
-  const { sent, error } = await sendBubblesTo(chatId, text);
+  const { sent, error } = await sendBubblesTo(chatId, text, characterId);
   if (sent.length === 0 && error) throw error;
   logMessage(chatId, characterId, "assistant", sent.join("\n"), kstStamp(), {
     proactive: true,
@@ -533,7 +559,7 @@ const finishOnboarding = async (
       wish: ob.wish,
     });
     onboarding.delete(chatId);
-    const { sent } = await sendBubblesTo(chatId, output.firstGreeting);
+    const { sent } = await sendBubblesTo(chatId, output.firstGreeting, id);
     if (sent.length > 0)
       logMessage(chatId, id, "assistant", sent.join("\n"), kstStamp(), {
         first: true,
@@ -1144,7 +1170,11 @@ const respond = async (
 // (pending.ts가 bot.ts를 부르면 서로 물고 늘어져서, 발송만 여기서 끼워 넣는다.)
 setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
   const kind = (row.kind === "recover" ? "recover" : "reply") as SendKind;
-  const { sent, error } = await sendBubbleList(row.chat_id, bubbles);
+  const { sent, error } = await sendBubbleList(
+    row.chat_id,
+    bubbles,
+    row.character_id,
+  );
   // 한 마디도 못 나갔으면 throw → 아래 기록 생략 → pending 재시도에 맡긴다.
   // 일부라도 나갔으면 답장 책임을 완료로 확정한다: 재시도하면 이미 나간 앞부분이 중복되기 때문.
   if (sent.length === 0 && error) throw error;
@@ -1249,7 +1279,11 @@ setWakeHandler(async (row: PendingReplyRow) => {
     }
     const { bubbles, signals } = reply;
     // 바로 보낸다 — 구간이 끝나는 시각이 이미 이 답장의 텀이다.
-    const { sent, error } = await sendBubbleList(chatId, bubbles);
+    const { sent, error } = await sendBubbleList(
+      chatId,
+      bubbles,
+      row.character_id,
+    );
     if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
     // 이 길은 pending을 타지 않아 발송 결과가 따로 붙지 않는다 — 여기서 남긴다.
     reply.attach({ sent: `${sent.length}/${bubbles.length}` });
@@ -1270,8 +1304,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
           : {}),
       },
     );
-    if (signals.note)
-      saveTodayNote(row.character_id, signals.note, messageId);
+    if (signals.note) saveTodayNote(row.character_id, signals.note, messageId);
     setRecoveryMark(chatId, turn.at);
     if (signals.promise) {
       const kept = keepPromise(
@@ -1491,7 +1524,11 @@ setPromiseHandler(async (row: PendingReplyRow) => {
       return;
     }
     const { bubbles, signals } = reply;
-    const { sent, error } = await sendBubbleList(chatId, bubbles);
+    const { sent, error } = await sendBubbleList(
+      chatId,
+      bubbles,
+      row.character_id,
+    );
     if (sent.length === 0 && error) throw error; // pending의 재시도에 맡긴다
     reply.attach({ sent: `${sent.length}/${bubbles.length}` });
     if (error)
@@ -1511,8 +1548,7 @@ setPromiseHandler(async (row: PendingReplyRow) => {
           : {}),
       },
     );
-    if (signals.note)
-      saveTodayNote(row.character_id, signals.note, messageId);
+    if (signals.note) saveTodayNote(row.character_id, signals.note, messageId);
     setRecoveryMark(chatId, turn.at);
     trace("replied", reply.callId ? `답장 #${reply.callId}` : undefined);
     if (signals.promise) {
