@@ -26,7 +26,7 @@
 
 > 이 색인은 `node scripts/gen-modules.mjs`가 위 영역 표와 각 파일 맨 위 주석의 첫 줄에서 만든다. 손으로 고치지 않는다. 줄 수는 영역에 든 파일의 합이다.
 
-### 1. 기반과 저장 · 5,375줄
+### 1. 기반과 저장 · 5,486줄
 
 - `src/config.ts` — 환경변수를 한 번 읽어 두는 자리.
 - `src/kst.ts` — 시각을 다루는 자리 — 한국 시간과 논리일 경계.
@@ -101,7 +101,7 @@
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
-### 7. 관측과 운영 · 7,874줄
+### 7. 관측과 운영 · 8,082줄
 
 - `src/trace.ts` — 슬랙 트레이스 게시함 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
 - `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고와 틈새 한 줄, 연락 약속의 단계를 게시함에 쌓는다.
@@ -124,6 +124,7 @@
 - `src/tools/db-view.ts` — 관리 대시보드 화면을 만드는 곳 — DB에 저장된 데이터를 표 단위로 보는 화면.
 - `src/tools/dedupe-schedules.ts` — 정리 도구: 같은 일정이 여러 줄로 쌓인 것을 한 줄로 줄인다 (이슈 #267).
 - `src/tools/end-character.ts` — 캐릭터를 끝내는 도구 — 활성 캐릭터를 ended로 바꾸고 걸린 발송을 거두고 종료 게시를 쌓는다.
+- `src/tools/feedback.ts` — 슬랙에서 모은 표시를 처리 여부와 함께 보는 도구 — 안 끝난 것을 보여주고 처리 표시를 찍는다.
 - `src/tools/gen-day-plan.ts` — 운영 도구: 활성 캐릭터의 오늘 하루 각본을 생성(없을 때)하고 출력한다.
 - `src/tools/gen-rhythm.ts` — 월 리듬(이벤트 + 매일 컨디션 시드) 생성·확인 도구.
 - `src/tools/measure-prompt.ts` — 운영 도구: 시스템 프롬프트 3층(불변/일간/실시간) 크기를 측정하고, --live를 주면 같은 프롬프트로 2회 실호출해 캐시 히트(cr>0)를 검증한다.
@@ -227,7 +228,7 @@ nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 app
 
 ### 7. 관측과 운영
 
-trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 17개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 23개, scripts 3개, 워크플로 2개, 커밋 훅이 여기다.
+trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 16개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 87개, scripts 5개, 워크플로 2개, 커밋 훅이 여기다.
 
 고칠 때 같이 보는 곳은 슬랙 채널의 글 형식과 호출부 전부다. 검사는 proactive-fail-trace·reply-render·morning-plan·feedback 4개고, trace는 테스트가 없다. 설계 원본은 ADR 0008·0009다.
 

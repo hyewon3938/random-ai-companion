@@ -411,6 +411,10 @@ const TABLES: Record<string, string> = {
   //
   // 지우지 않고 removed_at으로 표시한다. 폴링이라 리액션을 뗀 것은 다음 회차에 없어진 것으로
   // 드러나는데, 행을 지워 버리면 무엇이 있다가 없어졌는지가 남지 않는다.
+  //
+  // 그 지적을 다뤘는지는 resolved_at·issue_no·resolution 3개에 사람이 적는다(src/tools/feedback.ts).
+  // removed_at과 뜻이 다르다 — 그쪽은 슬랙에서 이모지를 뗐다는 것이고, 고쳤는지와는 상관이 없다.
+  // 이슈 번호는 나중에 대조할 실마리로만 두고, 이슈가 닫혔는지를 따라 여기 값이 바뀌지는 않는다.
   call_feedback: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER REFERENCES characters(id),
@@ -424,7 +428,10 @@ const TABLES: Record<string, string> = {
   reply_ts TEXT,
   dedupe_key TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL,
-  removed_at TEXT`,
+  removed_at TEXT,
+  resolved_at TEXT,
+  issue_no INTEGER,
+  resolution TEXT CHECK (resolution IN ('fixed','wontfix','dup'))`,
 };
 
 const INDEXES = [
@@ -454,7 +461,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -965,6 +972,31 @@ const migrateToV11 = (): void => {
   console.log(`[db] 스키마를 v11로 옮겼다`);
 };
 
+// v12: call_feedback에 처리 여부 3개를 더한다(#400).
+//
+// 이미 쌓인 표시는 전부 처리 전으로 두고 시작한다. 지금까지 무엇을 고쳤는지는 닫힌 이슈에만
+// 있어서 행마다 되짚을 방법이 없고, 처리한 것을 손으로 찍어 주는 편이 틀린 값을 채우는 것보다
+// 낫다. 새로 붙이는 칸은 전부 비어 있어도 되므로 표를 다시 만들지 않고 ALTER로 붙인다.
+const migrateToV12 = (): void => {
+  db.transaction(() => {
+    const cols = (
+      db.pragma(`table_info(call_feedback)`) as { name: string }[]
+    ).map((c) => c.name);
+    if (!cols.includes("resolved_at"))
+      db.exec(`ALTER TABLE call_feedback ADD COLUMN resolved_at TEXT`);
+    if (!cols.includes("issue_no"))
+      db.exec(`ALTER TABLE call_feedback ADD COLUMN issue_no INTEGER`);
+    if (!cols.includes("resolution"))
+      db.exec(
+        `ALTER TABLE call_feedback ADD COLUMN resolution TEXT
+           CHECK (resolution IN ('fixed','wontfix','dup'))`,
+      );
+    db.pragma(`user_version = 12`);
+  })();
+
+  console.log(`[db] 스키마를 v12로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < 5) migrateToV5();
 if (schemaVersion() < 6) migrateToV6();
@@ -972,7 +1004,8 @@ if (schemaVersion() < 7) migrateToV7();
 if (schemaVersion() < 8) migrateToV8();
 if (schemaVersion() < 9) migrateToV9();
 if (schemaVersion() < 10) migrateToV10();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV11();
+if (schemaVersion() < 11) migrateToV11();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV12();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를
