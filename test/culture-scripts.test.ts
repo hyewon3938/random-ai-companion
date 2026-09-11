@@ -19,8 +19,6 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { CharacterRow } from "../src/db.js";
-
 process.env.DB_PATH = join(
   mkdtempSync(join(tmpdir(), "companion-test-")),
   "test.db",
@@ -34,6 +32,7 @@ const {
   CULTURE_SCRIPTS,
   EVENT_ALIASES,
   findCultureEvents,
+  getCharacterById,
   getCultureEvent,
   getCultureScript,
   getSchedulesInMonth,
@@ -289,8 +288,11 @@ test("이 캐릭터 것이 아닌 번호는 링크 없이 들어간다", () => {
 
 // ── 봇 밖 생성 경로로 넘기는 재료 ──────────────────────────────────────────
 
-const rowOf = (id: number): CharacterRow =>
-  db.prepare(`SELECT * FROM characters WHERE id = ?`).get(id) as CharacterRow;
+const rowOf = (id: number) => {
+  const row = getCharacterById(id);
+  assert.ok(row, `캐릭터 ${id}가 없다`);
+  return row;
+};
 
 test("수집 결과의 달마다 걸린 일의 절차가 실린다", () => {
   const g = gatherNightlyInput(rowOf(gatherChar));
