@@ -117,12 +117,12 @@ export const getUpcomingSchedules = (
 
 /**
  * 프롬프트의 [다가오는 일정] 슬롯이 싣는 앞일 — 오늘부터 UPCOMING_SCHEDULE_DAYS일 안의 행을
- * 최대 UPCOMING_SCHEDULE_MAX건.
+ * 최대 UPCOMING_SCHEDULE_MAX건. 답장 경로(context/input.ts)가 이 함수를 부른다.
  *
- * 답장 경로(context/input.ts)와 그 화면을 다시 그리는 도구(tools/db-tag-search.ts)가 같은
- * 함수를 부른다. 두 자리가 각자 범위를 계산하면 도구 화면과 실제 프롬프트가 조용히 갈리고,
- * 여기 실린 행은 주제 검색 결과에서 빼는 기준이라 경계가 어긋나면 같은 일정이 두 자리에
- * 겹쳐 들어간다.
+ * 같은 화면을 다시 그리는 도구(tools/db-tag-search.ts)는 읽기 전용으로 따로 연 연결을 써서
+ * 이 함수를 못 부르고 질의를 따로 적는다. 대신 경계값 둘을 thresholds에서 같이 가져간다 —
+ * 여기 실린 행은 주제 검색 결과에서 빼는 기준이라, 두 자리가 각자 범위를 정하면 같은 일정이
+ * 두 자리에 겹쳐 들어간다.
  */
 export const getUpcomingWindow = (
   characterId: number,

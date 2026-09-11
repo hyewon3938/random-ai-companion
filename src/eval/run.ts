@@ -228,11 +228,14 @@ for (const r of results) {
   // 보이면, 고치려는 자리가 리포트에서 사라진다.
   // 건수를 보는 케이스는 몇 건 왔는지까지 적는다 — 바라는 것이 둘인 자리에서 한 건만 오면
   // ○ 하나로는 안 갈린다(이슈 #399).
-  const noteHit = r.gotNote !== undefined && r.gotNote.length >= (r.noteMin ?? 1);
+  const noteMin = r.noteMin ?? 1;
+  const noteHit = r.gotNote !== undefined && r.gotNote.length >= noteMin;
+  const noteCount =
+    r.gotNote !== undefined && noteMin > 1
+      ? ` (${r.gotNote.length}/${noteMin})`
+      : "";
   const noteMark =
-    r.gotNote === undefined
-      ? ""
-      : `  메모 ${noteHit ? "○" : "✕"}${(r.noteMin ?? 1) > 1 ? ` (${r.gotNote.length}/${r.noteMin})` : ""}`;
+    r.gotNote === undefined ? "" : `  메모 ${noteHit ? "○" : "✕"}${noteCount}`;
   const moveMark =
     r.gotMove === undefined
       ? ""
@@ -262,8 +265,7 @@ for (const r of results) {
     (r.gotMove !== undefined && !r.gotMove)
   )
     console.log(`      ${r.bubbles.join(" / ")}`);
-  if (r.gotNote?.length)
-    console.log(`      메모: ${r.gotNote.join(" / ")}`);
+  if (r.gotNote?.length) console.log(`      메모: ${r.gotNote.join(" / ")}`);
   for (const line of r.suspects)
     console.log(`      물음표 확인(점수 밖) ${line}`);
 }

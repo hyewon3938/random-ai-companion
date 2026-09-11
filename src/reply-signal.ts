@@ -207,7 +207,11 @@ const asNotes = (v: unknown): string[] => {
   const raw: unknown[] = Array.isArray(v) ? v : [v];
   const out = raw.flatMap((el) => {
     const s = asText(el);
-    return s ? s.split("\n").map((t) => t.trim()).filter(Boolean) : [];
+    if (!s) return [];
+    return s
+      .split("\n")
+      .map((t) => t.trim())
+      .filter(Boolean);
   });
   return [...new Set(out)];
 };
