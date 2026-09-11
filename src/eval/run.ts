@@ -92,6 +92,10 @@ if (lane && lane !== "format") {
   process.exit(1);
 }
 const formatLane = lane === "format";
+if (formatLane && only) {
+  console.log("--lane=format과 --only는 같이 쓸 수 없다. 레인은 케이스가 정해져 있다.");
+  process.exit(1);
+}
 const cases = formatLane
   ? CASES.filter((c) => (FORMAT_LANE_IDS as readonly string[]).includes(c.id))
   : only
