@@ -509,11 +509,16 @@ export const STAGE_INTENT_LINES: Record<RelationshipStage, IntentLine[]> = {
 interface LineMeta {
   intent_line?: unknown;
   move?: unknown;
+  intent_lines?: unknown;
 }
 
 /**
  * 오늘 이미 쓴 의도 줄. 선톡은 meta_json의 intent_line에 줄 코드를 적고, 답장은 쓴 플러팅을
- * move에 적는다 — 플러팅을 이미 뒀으면 시도할 플러팅 줄은 오늘 쓴 것으로 본다.
+ * move에, 나머지 줄을 intent_lines 배열에 적는다 — 플러팅을 이미 뒀으면 시도할 플러팅 줄은
+ * 오늘 쓴 것으로 본다.
+ *
+ * 답장 쪽 배열을 세기 전에는 낮에 답장이 던진 물음을 몇 시간 뒤 의도 선톡이 다시 물었다 —
+ * 답장이 쓴 줄은 어디에도 안 남아서 아직 안 쓴 줄로 읽혔다(이슈 #390).
  */
 export const usedIntentLines = (
   chatId: string,
@@ -534,6 +539,10 @@ export const usedIntentLines = (
     if (typeof m.intent_line === "string" && m.intent_line in INTENT_LINE_NAME)
       out.add(m.intent_line as IntentLine);
     if (typeof m.move === "string" && m.move) out.add("move");
+    if (Array.isArray(m.intent_lines))
+      for (const line of m.intent_lines)
+        if (typeof line === "string" && line in INTENT_LINE_NAME)
+          out.add(line as IntentLine);
   }
   return [...out];
 };

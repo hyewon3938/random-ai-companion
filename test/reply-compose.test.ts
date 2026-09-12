@@ -18,6 +18,7 @@ const {
   addSchedule,
   db,
   getActiveSchedulesOn,
+  saveRelationshipIntent,
   getRelationshipSignals,
   getUnconfirmedFirsts,
   logMessage,
@@ -471,5 +472,51 @@ describe("composeReply", () => {
     await compose("아이고");
     assert.equal(count(), 2);
     db.prepare(`DELETE FROM relationship_signals WHERE character_id = ?`).run(characterId);
+  });
+
+  // 오늘 의도로 둔 것을 이번 답장이 썼는지가 남아야, 몇 시간 뒤 선톡이 같은 물음을 다시
+  // 던지지 않는다(이슈 #390). 앞일의 근거로 쓴 일정 줄은 게시가 참고한 일정 옆에 적는다(#397).
+  it("답장이 쓴 의도 줄은 replyMeta로 나가고 오늘 둔 플러팅·앞일 근거는 판단 근거에 남는다", async () => {
+    clearMessages();
+    const today = kstLogicalDate();
+    saveRelationshipIntent(
+      characterId,
+      today,
+      { dig: "왜 그 팀을 그만뒀는지", move: "nickname", leadTone: "tease_sincere" },
+      kstStamp(),
+    );
+    logMessage(CHAT, characterId, "user", "요즘 어때?", kstStamp());
+    const turn = pendingUserTurn(CHAT, characterId);
+    assert.ok(turn);
+    const record = (meta: { callId?: number }): void => {
+      meta.callId = recordLlmCall({
+        purpose: "reply", model: "test", system: [], turns: "", latencyMs: 1,
+      });
+    };
+    const out = await composeReply({
+      judge: noJudge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]",
+      ask: canned(
+        [
+          reply(["그 팀이랑은 좀 괜찮아졌어?", "나는 금요일에 워크샵 가"], {
+            intent_lines: ["dig", "thread"],
+            plan_ref: ["9/18 팀 워크샵"],
+          }),
+        ],
+        record,
+      ),
+    });
+    assert.ok(out);
+    assert.deepEqual(out.replyMeta, { intent_lines: ["dig", "thread"] });
+    out.attach({});
+    const ctx = JSON.parse(
+      (db.prepare(`SELECT context_json FROM llm_calls WHERE id = ?`).get(out.callId) as {
+        context_json: string;
+      }).context_json,
+    ) as Record<string, unknown>;
+    const rel = ctx.relationship as Record<string, unknown>;
+    assert.equal(rel.todayMove, "별명 부르기. 앞세울 결은 장난 속에 진심");
+    assert.deepEqual(rel.intentLines, ["dig", "thread"]);
+    assert.deepEqual(ctx.planRef, ["9/18 팀 워크샵"]);
+    db.prepare(`DELETE FROM relationship_intents WHERE character_id = ?`).run(characterId);
   });
 });

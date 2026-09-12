@@ -11,7 +11,7 @@
 // · mergeSignals(두 답 합치기) · hasSignal(신호가 하나라도 있는지).
 // 객체 밖에서 주워 오는 자리는 앞의 것들을 그대로 쓰므로 따로 손대지 않는다. 잘린 답에서
 // 건져 올리는 자리(salvage)도 값이 스칼라인 칸은 그대로 타지만, 값이 배열인 칸은 키:값
-// 정규식에 안 걸려 한 줄을 따로 쓴다 — note가 그렇다.
+// 정규식에 안 걸려 키 이름을 ARRAY_KEYS에 넣어 따로 훑는다 — note·intent_lines·plan_ref가 그렇다.
 //
 // 관계 신호 셋(move·first·told_plan)은 코드 값이라 이름표(labels.ts)의 목록에 있는 것만
 // 받는다 — 모델이 지어낸 코드가 표의 CHECK에 걸려 답장 저장이 통째로 실패하면 안 된다.
@@ -21,8 +21,13 @@
 // 늘 넣는 쪽에 두면 ALWAYS_KEYS에도 이름을 넣는다 — 평가가 그 목록으로 형식을 재고, 값이
 // null인 것과 칸이 아예 안 온 것을 가르는 자리가 거기뿐이다(이슈 #385).
 
-import type { FirstBy, FirstKind, Move } from "./labels.js";
-import { FIRST_BY_NAME, FIRST_KIND_NAME, MOVE_NAME } from "./labels.js";
+import type { FirstBy, FirstKind, IntentLine, Move } from "./labels.js";
+import {
+  FIRST_BY_NAME,
+  FIRST_KIND_NAME,
+  INTENT_LINE_NAME,
+  MOVE_NAME,
+} from "./labels.js";
 
 /** 답장에 함께 실려 오는 신호. 값이 없으면 신호가 없는 것이다. */
 export interface ReplySignals {
@@ -48,6 +53,21 @@ export interface ReplySignals {
   first: { kind: FirstKind; by: FirstBy } | null;
   /** 이번 답장에서 오늘 자기 일정을 먼저 말했으면 true. */
   toldPlan: boolean;
+  /**
+   * 오늘의 관계 의도 가운데 이번 답장이 실제로 쓴 줄. 시도할 플러팅은 move 칸이 맡으므로
+   * 여기 오는 것은 파고들 것·흘릴 내 얘기·이어갈 자리 셋이다(이슈 #390).
+   *
+   * 이 표시가 없던 동안에는 답장이 쓴 줄을 셀 길이 없어서, 낮에 답장이 던진 물음을 몇 시간
+   * 뒤 의도 선톡이 다시 물었다(proactive-policy.ts usedIntentLines).
+   */
+  intentLines: IntentLine[];
+  /**
+   * 이번 답장이 앞일을 말하며 근거로 쓴 일정 줄. 안 말했으면 빈 배열이다.
+   *
+   * 일정 절은 하루 한 번 올라가는 고정 덩이에 있어서 답장 스레드에 안 붙는다. 캐릭터가 날짜를
+   * 짚어 말했을 때 저장된 행을 읽은 것인지 그 자리에서 지어낸 것인지는 이 칸으로만 가른다(이슈 #397).
+   */
+  planRef: string[];
 }
 
 /** 답을 어느 길로 읽었는지 — 운영에서 형식이 얼마나 지켜지는지 보려고 남긴다. */
@@ -75,6 +95,8 @@ export const EMPTY_SIGNALS: ReplySignals = {
   move: null,
   first: null,
   toldPlan: false,
+  intentLines: [],
+  planRef: [],
 };
 
 // 객체 키·따옴표가 본문 밖에서 토큰을 쓰고, 잘리면 본문 일부가 아니라 JSON 한 덩이가 통째로
@@ -96,6 +118,11 @@ const codeList = (table: Record<string, string>): string =>
     .join(" · ");
 const moveCodeList = (): string => codeList(MOVE_NAME);
 const firstCodeList = (): string => codeList(FIRST_KIND_NAME);
+// 의도 줄 넷 가운데 시도할 플러팅은 move 칸이 맡는다 — 두 칸에 같은 줄을 적게 하면 어느 쪽이
+// 정본인지 모델도 코드도 못 가른다. 프롬프트에는 나머지 셋만 편다.
+const INTENT_SIGNAL_LINES: IntentLine[] = ["dig", "share", "thread"];
+const intentCodeList = (): string =>
+  INTENT_SIGNAL_LINES.map((l) => `${l}(${INTENT_LINE_NAME[l]})`).join(" · ");
 /** 객체에 실려 오는 신호 키. 프롬프트가 쓰는 이름 그대로다. */
 const SIGNAL_KEYS = [
   "stay",
@@ -107,7 +134,12 @@ const SIGNAL_KEYS = [
   "first",
   "first_by",
   "told_plan",
+  "intent_lines",
+  "plan_ref",
 ] as const;
+
+// 값이 배열로 오는 칸. 잘린 답을 건질 때 키:값 정규식에 안 걸려 따로 훑는 목록이다(salvage).
+const ARRAY_KEYS = ["note", "intent_lines", "plan_ref"] as const;
 
 /**
  * 값이 없어도 키째 오게 한 칸(이슈 #385). 프롬프트가 늘 넣으라고 시키는 셋과 같은 목록이고,
@@ -136,7 +168,7 @@ export const ALWAYS_KEYS = ["note", "move", "first"] as const;
 // address_terms·promise·told_plan은 자리를 가려서 드물게 켜지므로 그대로 둔다.
 const SIGNAL_LINES = [
   `- note: 오늘 메모로 남길 문장들의 배열. 원소 하나가 메모 한 줄이다. 뒤에 가서도 알고 있어야 할 것이 나오면 적는 칸이라 늘 넣는다 — 적을 것이 여럿이면 원소를 여러 개 두고, 남길 것이 없는 답장에서만 빈 배열([])로 둔다. 무엇을 적는지는 위 note 신호 규칙에 있다.`,
-  `- move: 이번 답장이 상대를 설레게 하려고 쓴 플러팅 코드 하나. 이 칸도 늘 넣고, 그런 자리가 아니었으면 null로 둔다. 코드는 ${moveCodeList()} 가운데 하나다. 한 답장에 둘 이상 썼으면 앞세운 것 하나만 적는다.`,
+  `- move: 이번 답장이 상대를 설레게 하려고 쓴 플러팅 코드 하나. 이 칸도 늘 넣고, 그런 자리가 아니었으면 null로 둔다. 코드는 ${moveCodeList()} 가운데 하나다. 한 답장에 둘 이상 썼으면 앞세운 것 하나만 적는다. 위 [지금 관계]의 '시도할 플러팅'에 적힌 것을 이번 답장에서 했으면, 설레게 하려는 결이 아니어도 그 코드를 적는다.`,
   `- first: 위 [지금 관계]의 '아직 안 한 처음'에 있는 일이 이번 답장에서 처음으로 일어났으면 그 코드 하나. 이 칸도 늘 넣고, 그런 일이 없었으면 null로 둔다. 코드는 ${firstCodeList()} 가운데 하나다. 이미 한 처음은 다시 적지 않는다.`,
   `- first_by: first에 코드를 적었을 때만 같이 넣는다. 네가 먼저 했으면 character, 상대가 먼저 해서 네가 받은 것이면 user.`,
   `- stay: 하려던 일을 접거나 미루고 상대 곁에 남기로 했을 때만 true.`,
@@ -144,6 +176,8 @@ const SIGNAL_LINES = [
   `- address_terms: 서로 부르는 말이 달라졌을 때만, 서로를 뭐라고 부르는지 짧게 적는다. 부르던 대로면 넣지 않는다.`,
   `- promise: 이번 답장에서 지금 하는 일을 마치고 다시 연락하겠다고 상대에게 말했을 때만, 무엇을 마치고 연락할지 한 문장으로 적는다(예: 통화 끝나고 다시 연락). 시각은 적지 않는다 — 그 일이 끝나는 시각에 코드가 너를 다시 불러 그때 말을 만든다. 그런 말을 안 했으면 넣지 않는다.`,
   `- told_plan: 이번 답장에서 오늘 네 일정을 상대가 묻지 않았는데 먼저 말했을 때만 true.`,
+  `- intent_lines: 위 [지금 관계]의 '오늘의 관계 의도' 가운데 이번 답장에서 실제로 한 줄의 코드 배열. 코드는 ${intentCodeList()} 셋이다. 시도할 플러팅은 move 칸에 적으니 여기 넣지 않는다. 한 줄도 안 했으면 넣지 않는다.`,
+  `- plan_ref: 이번 답장에서 네 앞일이나 상대의 앞일을 말했을 때만, 그 근거로 쓴 줄을 [다가오는 일정]·[지금 얘기와 관련 있는 일정]에 적힌 날짜와 내용 그대로 배열에 적는다. 앞일을 말하지 않았거나 이 대화에서 새로 정한 것이면 넣지 않는다.`,
 ].join("\n");
 
 // 답장 경로에서만 프롬프트 맨 끝에 붙는다(context.ts BuildOptions.signals).
@@ -159,6 +193,7 @@ ${SIGNAL_LINES}
 - 예: {"reply": ["아 진짜요?", "그럼 오늘은 좀 일찍 자요"], "note": ["상대가 다음 주 화요일에 면접을 본다"], "move": null, "first": null}
 - 남길 것이 둘인 예: {"reply": ["나도 대전에서 컸어", "무슨 중학교 나왔어?"], "note": ["상대가 중학교까지 대전에서 살았다", "내가 자란 동네를 둔산동이라고 말했다"], "move": null, "first": null}
 - 플러팅을 쓴 답장의 예: {"reply": ["아까 그거 다 했어?", "끝나면 알려줘"], "note": [], "move": "remember", "first": null}
+- 오늘 의도와 앞일이 함께 든 예: {"reply": ["요즘 그 팀이랑은 좀 괜찮아졌어?", "나는 금요일에 워크샵 가"], "note": [], "move": null, "first": null, "intent_lines": ["dig"], "plan_ref": ["9/18 팀 워크샵"]}
 - reply 안의 문장만 상대에게 그대로 나간다. 나머지 칸도 이 형식도 상대에게 보이지 않는다.
 - 형식이 JSON이라고 말이 굳으면 안 된다. 문장은 평소처럼 메신저에 치듯 쓰고, 표기 규칙대로 문장 안에 큰따옴표를 쓰지 않는다.`;
 
@@ -200,10 +235,11 @@ const asText = (v: unknown): string | null => {
   return s ? s : null;
 };
 
-// 메모 칸은 배열이 정식이되 문자열 하나로 와도 한 줄로 받는다 — 형식이 흔들려도 적어 온 사실을
-// 버리지 않는다. 줄 안의 줄바꿈으로도 나눈다: 저장이 줄바꿈으로 이어 붙이는 자리를 쓰므로
-// (db/sends.ts) 값에 줄바꿈이 남으면 뒤에서 한 줄이 둘로 읽힌다. 글자까지 같은 줄은 한 번만.
-const asNotes = (v: unknown): string[] => {
+// 배열 칸(note·plan_ref)은 배열이 정식이되 문자열 하나로 와도 한 줄로 받는다 — 형식이 흔들려도
+// 적어 온 사실을 버리지 않는다. 줄 안의 줄바꿈으로도 나눈다: 저장이 줄바꿈으로 이어 붙이는
+// 자리를 쓰므로(db/sends.ts) 값에 줄바꿈이 남으면 뒤에서 한 줄이 둘로 읽힌다. 글자까지 같은
+// 줄은 한 번만.
+const asLines = (v: unknown): string[] => {
   const raw: unknown[] = Array.isArray(v) ? v : [v];
   const out = raw.flatMap((el) => {
     const s = asText(el);
@@ -223,6 +259,19 @@ const asFlag = (v: unknown): boolean => v === true || v === "true";
 const asMove = (v: unknown): Move | null =>
   typeof v === "string" && v.trim() in MOVE_NAME ? (v.trim() as Move) : null;
 
+// 의도 줄은 목록에 있는 코드만 받고 같은 코드는 한 번만 남긴다. move가 섞여 와도 받는다 —
+// 버리면 선톡이 같은 플러팅을 다시 내보내는 자리가 되는데, 세는 쪽(usedIntentLines)은 어느
+// 칸에서 왔든 한 번만 센다.
+const asIntentLines = (v: unknown): IntentLine[] => {
+  const raw: unknown[] = Array.isArray(v) ? v : [v];
+  const out = raw.flatMap((el) =>
+    typeof el === "string" && el.trim() in INTENT_LINE_NAME
+      ? [el.trim() as IntentLine]
+      : [],
+  );
+  return [...new Set(out)];
+};
+
 const asFirst = (
   kind: unknown,
   by: unknown,
@@ -239,13 +288,15 @@ const asFirst = (
 
 const readSignals = (o: Record<string, unknown>): ReplySignals => ({
   stay: asFlag(o.stay),
-  note: asNotes(o.note),
+  note: asLines(o.note),
   stage: asText(o.stage),
   addressTerms: asText(o.address_terms),
   promise: asText(o.promise),
   move: asMove(o.move),
   first: asFirst(o.first, o.first_by),
   toldPlan: asFlag(o.told_plan),
+  intentLines: asIntentLines(o.intent_lines),
+  planRef: asLines(o.plan_ref),
 });
 
 /** 첫 답이 비어 다시 부른 경우 — 두 답의 신호를 하나로 합친다(먼저 나온 값을 남긴다). */
@@ -263,6 +314,10 @@ export const mergeSignals = (
   move: a.move ?? b.move,
   first: a.first ?? b.first,
   toldPlan: a.toldPlan || b.toldPlan,
+  // 의도 줄과 앞일 근거도 메모와 같이 두 답에서 온 것을 잇는다 — 다시 부른 답에만 적힌 줄이
+  // 사라지면 그 줄을 아직 안 쓴 것으로 보고 선톡이 같은 말을 다시 낸다.
+  intentLines: [...new Set([...a.intentLines, ...b.intentLines])],
+  planRef: [...new Set([...a.planRef, ...b.planRef])],
 });
 
 // 배열이면 원소마다, 문자열 하나면 그것만. 원소 안에 줄바꿈이 들어와도 말풍선으로 나눈다 —
@@ -359,7 +414,9 @@ const hasSignal = (s: ReplySignals): boolean =>
   s.promise !== null ||
   s.move !== null ||
   s.first !== null ||
-  s.toldPlan;
+  s.toldPlan ||
+  s.intentLines.length > 0 ||
+  s.planRef.length > 0;
 
 // JSON을 쓰려다 만 답(대개 상한에 걸려 잘린 경우)에서 온전한 조각만 건진다.
 // 닫는 따옴표가 없는 마지막 문장은 걸리지 않는다 — 반 토막 난 말을 보내느니 버린다.
@@ -405,12 +462,13 @@ const salvage = (
             ? null
             : unquote(m[2]);
   }
-  // 값이 배열인 칸은 위 정규식에 걸리지 않는다 — 열린 대괄호에서 멈춘다. note가 그래서
-  // 말풍선과 같은 방법으로 한 번 더 훑는다(이슈 #399). 잘린 답에서 메모가 통째로 사라지면
-  // 그 턴의 사실이 하루 안에서 되찾을 길이 없다.
-  const noteAt = text.search(/"note"\s*:\s*\[/);
-  if (noteAt >= 0)
-    found.note = arrayItems(text.slice(text.indexOf("[", noteAt) + 1));
+  // 값이 배열인 칸은 위 정규식에 걸리지 않는다 — 열린 대괄호에서 멈춘다. 그래서 말풍선과
+  // 같은 방법으로 한 번 더 훑는다(이슈 #399). 잘린 답에서 메모가 통째로 사라지면 그 턴의
+  // 사실을 하루 안에서 되찾을 길이 없고, 의도 줄과 앞일 근거도 같은 자리에서 사라진다.
+  for (const key of ARRAY_KEYS) {
+    const at = text.search(new RegExp(`"${key}"\\s*:\\s*\\[`));
+    if (at >= 0) found[key] = arrayItems(text.slice(text.indexOf("[", at) + 1));
+  }
   return {
     bubbles: capBubbles(parts),
     signals: readSignals(found),

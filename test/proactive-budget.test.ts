@@ -52,6 +52,11 @@ before(() => {
   say("2026-09-06 18:00:00", { kind: "promise", proactive: true, promise_row: 12 });
   // 답장이 오늘 시도할 플러팅을 이미 뒀다 — 의도 줄 셈은 이것도 쓴 것으로 본다.
   say("2026-09-06 20:00:00", { kind: "reply", move: "같이 볼 것 하나 고르기" });
+  // 답장이 쓴 나머지 의도 줄은 배열 칸으로 온다(이슈 #390). 목록에 없는 코드는 안 센다.
+  say("2026-09-06 21:00:00", {
+    kind: "reply",
+    intent_lines: ["thread", "weather"],
+  });
 });
 after(() => {
   db.close();
@@ -104,8 +109,12 @@ test("의도 상한은 합계와 따로 찬다", () => {
   assert.equal(budgetAllows(used, "catchup"), true);
 });
 
-test("오늘 쓴 의도 줄은 선톡의 줄 코드와 답장의 플러팅을 함께 센다", () => {
-  assert.deepEqual(usedIntentLines(FULL, fullId, SINCE).sort(), ["dig", "move"]);
+test("오늘 쓴 의도 줄은 선톡의 줄 코드와 답장이 쓴 줄을 함께 센다", () => {
+  assert.deepEqual(usedIntentLines(FULL, fullId, SINCE).sort(), [
+    "dig",
+    "move",
+    "thread",
+  ]);
   assert.deepEqual(usedIntentLines(OPEN, openId, SINCE), []);
 });
 

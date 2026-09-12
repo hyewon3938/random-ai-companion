@@ -59,6 +59,40 @@ test("잘린 답에서도 메모 배열은 건진다", () => {
   assert.deepEqual(got.signals.note, ["상대가 자격증에 붙었다"]);
 });
 
+// 오늘의 관계 의도 가운데 이번 답장이 실제로 쓴 줄(이슈 #390). 시도할 플러팅은 move 칸이
+// 맡으므로 여기는 나머지 셋이 온다.
+test("답장이 쓴 의도 줄은 목록에 있는 코드만 받는다", () => {
+  const got = parseReplyOutput(
+    '{"reply":["요즘 그 팀이랑은 좀 괜찮아졌어?"],"intent_lines":["dig","thread","dig","weather"]}',
+  );
+  assert.equal(got.parse, "json");
+  assert.deepEqual(got.signals.intentLines, ["dig", "thread"]);
+  assert.deepEqual(parseReplyOutput('{"reply":["응"]}').signals.intentLines, []);
+});
+
+test("앞일의 근거로 쓴 일정 줄을 읽는다", () => {
+  const got = parseReplyOutput(
+    '{"reply":["나 금요일에 워크샵 가"],"plan_ref":["9/18 팀 워크샵"]}',
+  );
+  assert.deepEqual(got.signals.planRef, ["9/18 팀 워크샵"]);
+  // 메모와 같이 문장 하나로 와도 한 건짜리 목록으로 받는다.
+  const one = parseReplyOutput(
+    '{"reply":["나 금요일에 워크샵 가"],"plan_ref":"9/18 팀 워크샵"}',
+  );
+  assert.deepEqual(one.signals.planRef, ["9/18 팀 워크샵"]);
+  assert.deepEqual(parseReplyOutput('{"reply":["응"]}').signals.planRef, []);
+});
+
+// 메모와 같은 이유로 잘린 답에서도 건진다 — 키:값 정규식이 배열 값을 못 잡는다.
+test("잘린 답에서도 의도 줄과 앞일 근거는 건진다", () => {
+  const got = parseReplyOutput(
+    '{"reply":["그 팀 얘기 좀 해봐"],"note":[],"intent_lines":["dig"],"plan_ref":["9/18 팀 워크샵"],"mo',
+  );
+  assert.equal(got.parse, "salvage");
+  assert.deepEqual(got.signals.intentLines, ["dig"]);
+  assert.deepEqual(got.signals.planRef, ["9/18 팀 워크샵"]);
+});
+
 test("객체 밖으로 흘린 신호도 주워 온다", () => {
   const got = parseReplyOutput(
     '{"reply":["오 축하해"]}\nnote: 상대가 자격증에 붙었다',
@@ -138,6 +172,20 @@ test("두 답의 메모는 순서대로 이어 붙인다", () => {
     "같은 것",
     "나중에 알게 된 것",
   ]);
+});
+
+// 메모와 같은 규칙이다 — 다시 부른 답에만 적힌 줄이 사라지면 그 줄을 아직 안 쓴 것으로 보고
+// 선톡이 같은 말을 다시 낸다.
+test("두 답의 의도 줄과 앞일 근거도 이어 붙인다", () => {
+  const a = { ...EMPTY_SIGNALS, intentLines: ["dig" as const], planRef: ["9/18 팀 워크샵"] };
+  const b = {
+    ...EMPTY_SIGNALS,
+    intentLines: ["dig" as const, "thread" as const],
+    planRef: ["9/20 이사"],
+  };
+  const got = mergeSignals(a, b);
+  assert.deepEqual(got.intentLines, ["dig", "thread"]);
+  assert.deepEqual(got.planRef, ["9/18 팀 워크샵", "9/20 이사"]);
 });
 
 test("연락 약속은 객체 안에서도 흘린 줄에서도 읽는다", () => {

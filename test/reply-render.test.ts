@@ -226,7 +226,7 @@ test("관계·열림 줄은 이 답장이 쓴 플러팅과 그 반응을 적는�
       moveReaction: "accepted",
     },
   });
-  assert.ok(text.includes("*관계* 2단계 6일째 · 플러팅 별명 부르기"));
+  assert.ok(text.includes("*관계* 2단계 6일째 · 오늘 둔 플러팅 없음 · 쓴 플러팅 별명 부르기"));
   assert.ok(
     text.includes(
       "*열림* 자기 얘기 O · 근황 물음 X · 호감 X · 플러팅 반응 받음",
@@ -235,7 +235,47 @@ test("관계·열림 줄은 이 답장이 쓴 플러팅과 그 반응을 적는�
   const none = renderReply(row(), {
     relationship: { stage: 1, days: 2, move: null },
   });
-  assert.ok(none.includes("*관계* 1단계 2일째 · 플러팅 없음"));
+  assert.ok(none.includes("*관계* 1단계 2일째 · 오늘 둔 플러팅 없음 · 쓴 플러팅 없음"));
+});
+
+test("관계 줄은 오늘 둔 플러팅과 답장이 쓴 의도 줄을 함께 적는다", () => {
+  const text = renderReply(row(), {
+    relationship: {
+      stage: 3,
+      days: 4,
+      todayMove: "별명으로 부르기. 앞세울 결은 장난",
+      move: null,
+      intentLines: ["dig", "thread"],
+    },
+  });
+  // 오늘 두기만 하고 안 쓴 날이 한 줄에서 보여야 한다.
+  assert.ok(
+    text.includes(
+      "*관계* 3단계 4일째 · 오늘 둔 플러팅 별명으로 부르기. 앞세울 결은 장난 · 쓴 플러팅 없음 · 쓴 의도 줄 파고들 것·이어갈 자리",
+    ),
+  );
+  // 의도 줄이 빈 답장에는 그 토막이 없다.
+  const none = renderReply(row(), {
+    relationship: { stage: 3, days: 4, todayMove: "손 잡기", move: "nickname" },
+  });
+  assert.ok(none.includes("오늘 둔 플러팅 손 잡기 · 쓴 플러팅 별명 부르기"));
+  assert.ok(!none.includes("쓴 의도 줄"));
+});
+
+test("참고한 일정 줄은 답장이 근거로 쓴 일정을 같은 줄에 적는다", () => {
+  const text = renderReply(row(), {
+    search: { upcoming: ["나 9/18 팀 워크샵", "상대 9/20 이사"] },
+    planRef: ["9/18 팀 워크샵"],
+  });
+  assert.ok(
+    text.includes(
+      "*참고한 일정* 2건 — 나 9/18 팀 워크샵 / 상대 9/20 이사 | 답장이 근거로 쓴 줄 9/18 팀 워크샵",
+    ),
+  );
+  // 앞일을 말하지 않은 답장에는 그 토막이 없다.
+  const none = renderReply(row(), { search: { upcoming: [] } });
+  assert.ok(none.includes("*참고한 일정* 0건"));
+  assert.ok(!none.includes("근거로 쓴 줄"));
 });
 
 test("새 약속이 앞 약속을 거두면 그 건수를 약속 줄 끝에 적는다", () => {
