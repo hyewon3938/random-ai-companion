@@ -110,6 +110,7 @@ import {
 } from "./life-plan.js";
 import {
   getKstNow,
+  holidayGapYear,
   kstDateString,
   kstStamp,
   dayLabelOf,
@@ -344,11 +345,14 @@ export interface NightlyGathered {
   // ongoingForPlan은 상대가 아는 것만 담아 이보다 좁아서, 그것만 주면 상대가 모르는 일에서
   // 펼쳐 나온 일정에 원본 링크가 안 붙는다. culture는 그 달 재료에 이름이 걸린 일의 절차
   // 블록이고, 걸린 것이 없으면 빈 문자열이라 평소 회차에는 아무것도 안 붙는다.
+  // holidayGap은 공휴일 표가 아직 안 덮은 해다(이슈 #415). 값이 있으면 days의 이름표에
+  // 그 해 공휴일이 하나도 안 실려서, 명절이 든 달이어도 전부 평일·주말로만 보인다.
   rhythmNeeded: {
     ym: string;
     days: { date: string; label: string }[];
     ongoing: string;
     culture: string;
+    holidayGap: string | null;
   }[];
   // 침묵 백오프 상태 — 외부 생성 경로가 이를 보고 산출물을 조절한다
   // (normal=평소대로 / quiet·dormant=각본·선톡 생성 불필요 / checkin=저녁 재연결 문안만)
@@ -676,7 +680,13 @@ export const gatherNightlyInput = (
     awayRule: awayRuleLines(awayPhaseOf(character.id, today)),
     rhythmNeeded: monthsNeedingRhythm(character.id, today).map((ym) => {
       const { ongoing, culture } = rhythmMaterial(character.id, ym);
-      return { ym, days: monthDays(ym), ongoing, culture };
+      return {
+        ym,
+        days: monthDays(ym),
+        ongoing,
+        culture,
+        holidayGap: holidayGapYear(ym),
+      };
     }),
     silenceTier: silence.tier,
     silenceDays: silence.days,
