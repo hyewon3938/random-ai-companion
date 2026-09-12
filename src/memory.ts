@@ -7,6 +7,9 @@
 // searchMemories는 태그로 후보를 모으고, 꺼낸 기록을 남긴다(track:false로 끌 수 있다).
 // 후보 중 무엇을 프롬프트에 넣을지 고르는 규칙과 줄을 만드는 일은 recall.ts가 갖는다.
 //
+// 붙일 태그 이름은 저장 직전에 이미 쓰는 이름과 대조한다 — 판정 표는 tag-canon.ts가 만들고
+// 새벽 정리가 넘긴다. 키의 두 낱말을 태그로 복사하는 자리도 같은 표를 지난다.
+//
 // tagSearch는 유저 발화에서 검색어를 뽑는다. 한 글자 태그("일"·"돈"·"집")는 어절 단위로만
 // 맞춘다 — 문자열 포함으로 두면 "일요일"·"생일"·"수집" 속 글자에 걸린다(이슈 #54).
 
@@ -36,6 +39,7 @@ import {
   type Interest,
 } from "./labels.js";
 import { matchTagNames, memoryLine, pickMemories } from "./recall.js";
+import { canonTags, type TagCanon } from "./tag-canon.js";
 import { kstStamp, logicalDayStartTs } from "./kst.js";
 
 // 고르는 규칙과 프롬프트 줄은 recall.ts가 갖는다 — DB를 열지 않는 자리라 관리 대시보드의
@@ -105,6 +109,11 @@ export interface MemoryInput {
   interest?: Interest | null;
   /** 그 값이 가리키는 일이 실제로 있었던 날. YYYY-MM-DD가 아니면 비워 둔다. */
   occurredOn?: string | null;
+  /**
+   * 붙일 태그 이름을 이미 쓰는 이름으로 바꾸는 표(tag-canon.ts). 새벽 정리가 회차마다 한 번
+   * 만들어 넘긴다 — 안 넘기면 후보 이름이 그대로 저장되어 지금까지와 같다.
+   */
+  canon?: TagCanon;
 }
 
 /**
@@ -138,10 +147,13 @@ const toWrite = (m: MemoryInput, area: string, subject: string) => ({
   updatedAt: kstStamp(),
 });
 
+// 키의 두 낱말도 태그 판정을 지난다 — 키는 기억을 구분하려고 짓는 값이라, 그대로 복사하면
+// 이미 있는 태그와 조금씩 다른 이름이 계속 는다(이슈 #142). 키 자체는 그대로 남고 태그 쪽
+// 사본만 바뀌므로, 합쳐진 이름으로 검색해도 그 기억이 걸린다.
 const attach = (m: MemoryInput, id: number, area: string, subject: string) => {
   upsertArea(m.characterId, area);
-  const tags = new Set([area, subject, ...(m.tags ?? []).map(tidy)]);
-  setTags(m.characterId, "memory", id, [...tags].filter(Boolean));
+  const tags = canonTags(m.canon, [area, subject, ...(m.tags ?? [])]);
+  setTags(m.characterId, "memory", id, tags);
   return id;
 };
 

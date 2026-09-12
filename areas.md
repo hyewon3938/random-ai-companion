@@ -11,7 +11,7 @@
 | 영역 | 여기로 오는 변경 | 파일 |
 | --- | --- | --- |
 | 1. 기반과 저장 | 기준값·이름표·시각 계산, 표와 컬럼, 모델 호출 방식 | config, kst, labels, thresholds, db, db/*, llm |
-| 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-pick, user-profile |
+| 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-canon, tag-pick, user-profile |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
 | 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, context/*, prompts/reply, prompts/relationship, turns, reply-signal, reply-ask, reply-compose, reply-promise, user-state, relationship-update, speech-level, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 4개, 크론표 | index, bot, pending, presence, glance, followup, dispatch, proactive-send |
@@ -26,7 +26,7 @@
 
 > 이 색인은 `node scripts/gen-modules.mjs`가 위 영역 표와 각 파일 맨 위 주석의 첫 줄에서 만든다. 손으로 고치지 않는다. 줄 수는 영역에 든 파일의 합이다.
 
-### 1. 기반과 저장 · 6,402줄
+### 1. 기반과 저장 · 6,413줄
 
 - `src/config.ts` — 환경변수를 한 번 읽어 두는 자리.
 - `src/kst.ts` — 시각을 다루는 자리 — 한국 시간, 논리일 경계, 공휴일 달력.
@@ -46,10 +46,11 @@
 - `src/db/sends.ts` — 예약 발송과 대기 중인 답장 표의 저장 함수.
 - `src/db/trace-events.ts` — 게시함 표의 저장 함수와 보관 기간.
 
-### 2. 기억 · 867줄
+### 2. 기억 · 1,012줄
 
 - `src/memory.ts` — 기억을 저장하고 찾는 자리.
 - `src/recall.ts` — 태그로 찾은 것 중 무엇을 프롬프트에 넣을지 고르고, 넣을 줄을 만드는 자리.
+- `src/tag-canon.ts` — 저장할 태그 이름을 이미 쓰는 이름으로 모으는 자리.
 - `src/tag-pick.ts` — 이번 발화로 무엇을 검색할지 주제 태그를 고르는 자리.
 - `src/user-profile.ts` — 유저 프로필을 프롬프트 한 덩이로 만드는 자리.
 
@@ -92,7 +93,7 @@
 - `src/dispatch.ts` — 아침·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 - `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
-### 6. 새벽 정리 · 3,394줄
+### 6. 새벽 정리 · 3,444줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 - `src/relationship-stage.ts` — 관계 단계 전이 — 어제까지의 값을 세어 문턱을 재고, 모델의 결정을 받아 단계·처음·의도를 저장한다.
@@ -174,11 +175,11 @@ kst는 파일 25개, config 18개, thresholds 14개, labels 14개, llm 11개, db
 
 ### 2. 기억
 
-memory.ts가 저장하고 찾고, recall.ts가 찾은 것 중 무엇을 넣을지 고르고 줄을 만든다. recall.ts는 DB를 열지 않고, memory.ts는 SQL을 직접 쓰지 않는다. tag-pick.ts는 발화마다 검색 태그를 고르는 sonnet 호출이고, user-profile.ts는 유저 절 한 덩이를 만든다.
+memory.ts가 저장하고 찾고, recall.ts가 찾은 것 중 무엇을 넣을지 고르고 줄을 만든다. recall.ts는 DB를 열지 않고, memory.ts는 SQL을 직접 쓰지 않는다. tag-pick.ts는 발화마다 검색 태그를 고르는 sonnet 호출이고, tag-canon.ts는 저장할 태그 이름을 이미 쓰는 이름과 대조하는 opus 호출이며, user-profile.ts는 유저 절 한 덩이를 만든다.
 
 고칠 때 같이 보는 곳은 6번의 추출 프롬프트, 4번 context/assemble.ts의 검색 절, 3번 day-plan.ts의 진행 중인 일 블록, tools/db-tag-search, erd.md의 memory_items·tags·relationships다.
 
-검사는 nightly-extract·day-plan-ongoing·recall·tag-pick·user-profile 5개다. 설계 원본은 time-and-memory.md와 ADR 0003·0004·0005·0010이다.
+검사는 nightly-extract·day-plan-ongoing·recall·tag-canon·tag-pick·user-profile 6개다. 설계 원본은 time-and-memory.md와 ADR 0003·0004·0005·0010이다.
 
 경계가 깨끗해서 손볼 자리가 작고, 다른 영역을 정리한 뒤에 봐도 된다.
 
