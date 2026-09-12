@@ -84,11 +84,19 @@ test("그 달의 공휴일만 날짜순으로 준다", () => {
   ]);
   // 공휴일이 하나도 없는 달은 빈 배열이다 — 월 리듬 재료가 이 값을 그대로 이어 붙인다.
   assert.deepEqual(holidaysInMonth("2026-11"), []);
+  // 설날이 일요일이라 연휴 뒤에 대체공휴일이 하루 붙는 달
+  assert.deepEqual(holidaysInMonth("2027-02"), [
+    { date: "2027-02-06", name: "설날 연휴" },
+    { date: "2027-02-07", name: "설날" },
+    { date: "2027-02-08", name: "설날 연휴" },
+    { date: "2027-02-09", name: "설날 대체공휴일" },
+  ]);
 });
 
 test("표가 안 덮은 해는 그 해를 알린다", () => {
   assert.equal(holidayGapYear("2026-09"), null);
-  assert.equal(holidayGapYear("2027-02"), "2027");
+  assert.equal(holidayGapYear("2027-02"), null);
+  assert.equal(holidayGapYear("2028-02"), "2028");
 });
 
 // ── workdayContext ────────────────────────────────────────────────────
