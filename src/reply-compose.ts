@@ -13,8 +13,9 @@
 // 오늘 캐릭터 일정이 하나뿐일 때 그 일정의 상대가 안다는 표시로, 판정 호출이 돌려준 열림
 // 4항목은 relationship_signals에 턴마다 1행으로. 만들어 둔 답장이 폐기되고 다시 만들어지면
 // 마지막으로 나간 답장 뒤의 열림 행을 걷어 내고 적어 한 턴에 1행을 지킨다. 쓴 플러팅(move)과
-// told_plan은 replyMeta로 돌려줘 호출부가 대화 기록의 답장 행 meta_json에 싣는다 — 다음 판정
-// 호출과 [지금 관계] 절이 그 행을 읽는다.
+// told_plan, 이번 답장이 쓴 의도 줄(intent_lines)은 replyMeta로 돌려줘 호출부가 대화 기록의
+// 답장 행 meta_json에 싣는다 — 다음 판정 호출과 [지금 관계] 절이 그 행을 읽고, 의도 선톡은
+// 오늘 이미 쓴 줄을 그 칸으로 센다(이슈 #390).
 //
 // 만드는 동안 유저가 말을 더 보냈거나 답이 비어 있으면 null을 돌려준다. 그때도 호출 기록에는
 // 버린 이유와 객체를 어느 길로 읽었는지가 남는다 — 형식이 깨진 날을 되짚는 자리다.
@@ -28,6 +29,7 @@ import {
   deleteRelationshipSignalsAfter,
   getActiveSchedulesOn,
   getRecentMessages,
+  getRelationshipIntent,
   getStage,
   insertFirst,
   insertRelationshipSignal,
@@ -37,7 +39,7 @@ import {
   type MessageRow,
 } from "./db.js";
 import { kstLogicalDate, kstStamp } from "./kst.js";
-import { stageDays } from "./context/relationship.js";
+import { intentLineText, stageDays } from "./context/relationship.js";
 import {
   chat,
   type CallMeta,
@@ -368,23 +370,38 @@ export const composeReply = async (
       console.error(`${logTag} 열림 신호 기록 실패:`, e);
     }
   const stage = getStage(characterId);
+  // 답장 행 meta_json에 싣는 값. 의도 줄은 여기로만 남아서, 몇 시간 뒤 선톡이 오늘 무엇을
+  // 이미 했는지 셀 때 이 칸을 읽는다(proactive-policy.ts usedIntentLines).
   const replyMeta: Record<string, unknown> = {
     ...(signals.move ? { move: signals.move } : {}),
     ...(signals.toldPlan ? { told_plan: true } : {}),
+    ...(signals.intentLines.length
+      ? { intent_lines: signals.intentLines }
+      : {}),
   };
   const rel = getRelationship(characterId);
+  // 오늘 시도하기로 둔 플러팅. 답장이 쓴 것과 함께 게시해야 안 쓴 날이 눈에 띈다(이슈 #390).
+  const todayMove = intentLineText(
+    getRelationshipIntent(characterId, kstLogicalDate()) ?? null,
+    "move",
+  );
   attach({
     stay: signals.stay,
     note: signals.note,
-    // 관계 — 지금 단계와 며칠째인지, 이 답장이 쓴 플러팅, 처음으로 적은 일. 슬랙 답장 게시의 관계 줄.
+    // 관계 — 지금 단계와 며칠째인지, 오늘 시도할 플러팅과 이 답장이 쓴 플러팅, 답장이 쓴 나머지
+    // 의도 줄, 처음으로 적은 일. 슬랙 답장 게시의 관계 줄.
     relationship: {
       stage: stage?.stage_no ?? 1,
       days: stageDays(stage?.stage_since ?? kstLogicalDate(), kstLogicalDate()),
+      todayMove,
       move: signals.move,
+      intentLines: signals.intentLines,
       first: signals.first
         ? { kind: signals.first.kind, by: signals.first.by, confirmed: false }
         : null,
     },
+    // 앞일을 말했을 때 근거로 쓴 일정 줄. 참고한 일정 줄 옆에 붙어 지어낸 날짜를 가른다(이슈 #397).
+    ...(signals.planRef.length ? { planRef: signals.planRef } : {}),
     // 열림 — 판정 호출이 돌려준 4항목. 답에 칸이 없으면 줄도 없다.
     ...(verdict.signals
       ? {

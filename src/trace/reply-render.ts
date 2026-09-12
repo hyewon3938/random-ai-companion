@@ -18,6 +18,7 @@ import {
   ACTIVITY_CATEGORY_NAME,
   FIRST_BY_NAME,
   FIRST_KIND_NAME,
+  INTENT_LINE_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
   RESPONSIVENESS_NAME,
@@ -26,6 +27,7 @@ import {
   toResponsiveness,
   type FirstBy,
   type FirstKind,
+  type IntentLine,
   type Move,
   type MoveReaction,
   type SpeechLevel,
@@ -135,13 +137,25 @@ export interface CallContext {
     label?: string | null;
     prev?: string | null;
   };
-  /** 관계 — 지금 단계와 며칠째, 이 답장이 쓴 플러팅, 처음으로 적은 일(#353). */
+  /**
+   * 관계 — 지금 단계와 며칠째, 오늘 시도하기로 둔 플러팅, 이 답장이 쓴 플러팅과 나머지 의도
+   * 줄, 처음으로 적은 일(#353·#390).
+   */
   relationship?: {
     stage?: number;
     days?: number;
+    /** 오늘의 관계 의도가 정한 시도할 플러팅. 답장이 쓴 것과 나란히 적어 누락을 보인다. */
+    todayMove?: string | null;
     move?: Move | null;
+    /** 이 답장이 쓴 의도 줄. 시도할 플러팅은 move 칸이 맡지만 모델이 섞어 보낸 날은 여기에도 온다. */
+    intentLines?: IntentLine[];
     first?: { kind: FirstKind; by?: FirstBy; confirmed?: boolean } | null;
   };
+  /**
+   * 이 답장이 앞일을 말하며 근거로 쓴 일정 줄(#397). 참고한 일정 줄 옆에 붙는다 — 읽은 행을
+   * 짚었는지 그 자리에서 지어냈는지를 두 값이 붙어 있을 때만 가른다.
+   */
+  planRef?: string[];
   /** 열림 — 판정 호출이 돌려준 4항목. */
   opened?: {
     openedSelf?: boolean;
@@ -434,10 +448,15 @@ const searchLines = (ctx: CallContext): string[] => {
     // '상대 · 가족 · 어머니 · 주제로 걸린 일정'에서 이름이 어디서 끝나는지 안 보인다.
     `*검색* ${esc(bits.join(" | "))}`,
     // 0건도 적는다 — 줄이 사라지면 앞일이 없는 날인지 기록이 안 된 것인지 구별되지 않는다.
+    // 답장이 근거로 쓴 줄을 같은 줄에 붙여, 읽은 행에 없는 날짜를 말한 답장이 눈에 띄게 한다.
     `*참고한 일정* ${
       upcoming.length
         ? esc(`${upcoming.length}건 — ${upcoming.join(" / ")}`)
         : "0건"
+    }${
+      ctx.planRef?.length
+        ? ` | ${esc(`답장이 근거로 쓴 줄 ${ctx.planRef.join(" / ")}`)}`
+        : ""
     }`,
   ];
 };
@@ -476,10 +495,19 @@ const outcomeLines = (ctx: CallContext): string[] => {
   // 자리에서 보게 하려는 것이다.
   if (ctx.relationship) {
     const r = ctx.relationship;
+    // 오늘 둔 플러팅과 답장이 쓴 것을 나란히 적는다 — 한쪽만 적으면 오늘 두기만 하고 안 쓴
+    // 날과 애초에 안 둔 날이 같은 줄로 읽힌다(이슈 #390).
     const parts = [
       `${r.stage ?? 1}단계${r.days ? ` ${r.days}일째` : ""}`,
-      r.move ? `플러팅 ${MOVE_NAME[r.move] ?? r.move}` : "플러팅 없음",
+      r.todayMove ? `오늘 둔 플러팅 ${esc(r.todayMove)}` : "오늘 둔 플러팅 없음",
+      r.move ? `쓴 플러팅 ${MOVE_NAME[r.move] ?? r.move}` : "쓴 플러팅 없음",
     ];
+    if (r.intentLines?.length)
+      parts.push(
+        `쓴 의도 줄 ${r.intentLines
+          .map((l) => INTENT_LINE_NAME[l] ?? l)
+          .join("·")}`,
+      );
     if (r.first)
       parts.push(
         `처음 ${FIRST_KIND_NAME[r.first.kind] ?? r.first.kind}` +
