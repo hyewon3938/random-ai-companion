@@ -11,7 +11,9 @@
 //
 // 문화 스크립트를 펼치는 자리도 여기 하나다(이슈 #405). 결혼·장례·명절처럼 절차가 정해진 일은
 // 이 달 재료에 그 이름이 걸렸을 때만 해당 이벤트의 단계를 프롬프트에 넣는다. 하루 각본이 같은
-// 표를 읽으면 매일 같은 절차를 다시 보게 되어 단계 순서가 튄다.
+// 표를 읽으면 매일 같은 절차를 다시 보게 되어 단계 순서가 튄다. 재료에는 그 달의 공휴일도
+// 넣는다(이슈 #415) — 명절은 아크에도 진행 중인 일에도 안 적혀서, 달력을 안 보면 추석이 든
+// 달에도 절차가 안 걸린다.
 //
 // 운영의 월 리듬은 봇 밖 생성 경로가 만든다. 그쪽도 같은 절차를 봐야 해서 새벽 정리 수집이
 // rhythmMaterial을 불러 그 결과를 넘긴다(이슈 #411) — 절차를 외부 문서에 옮겨 적으면 사본이
@@ -32,7 +34,7 @@ import {
 } from "./db.js";
 import { identityLines } from "./memory.js";
 import { RHYTHM_RUNWAY_DAYS } from "./thresholds.js";
-import { dayLabel, kstStamp } from "./kst.js";
+import { dayLabel, holidayGapYear, holidaysInMonth, kstStamp } from "./kst.js";
 
 // 월 리듬(중간 지평): 한 달치 이벤트 + 매일의 컨디션/기상 시드를 미리 깔아둔다.
 // 연(아크)은 러프, 월은 디테일, 일(각본)은 구체 — 세 지평이 이 층에서 만난다.
@@ -134,8 +136,12 @@ const scheduleLines = (
  * 이 함수 하나를 불러 같은 문장을 받는다(이슈 #411). 절차 문장을 외부 문서에 옮겨 적어 두면
  * culture_scripts 원본과 어긋나기 시작해서, 표를 읽는 자리를 여기 하나로 둔다.
  *
- * 절차를 찾을 재료는 앞일이 적힌 곳만 본다 — 아크·진행 중인 일·이 달에 이미 잡힌 일정.
- * 일기는 지나간 일이라 지난달에 다녀온 결혼식이 이 달 절차를 불러온다.
+ * 절차를 찾을 재료는 앞일이 적힌 곳만 본다 — 아크·진행 중인 일·이 달에 이미 잡힌 일정,
+ * 그리고 이 달의 공휴일. 일기는 지나간 일이라 지난달에 다녀온 결혼식이 이 달 절차를 불러온다.
+ *
+ * 공휴일을 넣는 까닭은 명절이 아무도 먼저 적어 주지 않는 일이어서다(이슈 #415). 결혼·이사는
+ * 아크나 진행 중인 일에 이름이 오르지만, 추석과 설날은 달력에만 있어서 앞의 셋만 보면 추석이
+ * 든 달에도 절차가 안 걸리고 그 달 리듬에 명절이 통째로 빠진다.
  */
 export const rhythmMaterial = (
   characterId: number,
@@ -146,11 +152,14 @@ export const rhythmMaterial = (
   const existingChar = scheduleLines(
     getSchedulesInMonth(characterId, ym, "char"),
   );
+  const holidays = holidaysInMonth(ym)
+    .map((h) => `${h.date} ${h.name}`)
+    .join("\n");
   return {
     arcs,
     ongoing,
     existingChar,
-    culture: culturePrompt([arcs, ongoing, existingChar].join("\n")),
+    culture: culturePrompt([arcs, ongoing, existingChar, holidays].join("\n")),
   };
 };
 
@@ -212,12 +221,24 @@ ${culture}
 JSON: {"events":[{"date":"YYYY-MM-DD","time_hint":"저녁|오전|점심|null","content":"...","from_ongoing":null}],"days":[{"date":"YYYY-MM-DD","energy":"보통","wake_hint":"보통","mood":"...","note":""}]}
 days에는 위 '이 달의 날짜'를 하나도 빠짐없이 전부 포함한다.`;
 
+// 공휴일 표가 아직 안 덮은 해의 달을 만들려 하면 로그에 남긴다. 표는 해마다 손으로 채우는데,
+// 안 채운 채로 넘어가면 그 해는 공휴일이 하나도 없는 달력으로 한 달이 만들어지고 명절 절차도
+// 안 걸린다. 만드는 것 자체를 막지는 않는다 — 리듬이 없으면 하루 각본까지 멈춘다.
+const warnHolidayGap = (ym: string): void => {
+  const year = holidayGapYear(ym);
+  if (year)
+    console.warn(
+      `[life-plan] ${year}년 공휴일이 kst.ts에 없다. ${ym} 리듬은 공휴일 없는 달력으로 만들어진다.`,
+    );
+};
+
 // 한 달치 리듬을 생성해 DB에 반영한다(이미 있으면 스킵). API 폴백·수동 도구가 직접 호출.
 export const ensureMonthPlan = async (
   characterId: number,
   ym: string,
 ): Promise<boolean> => {
   if (monthHasSeeds(characterId, ym)) return false;
+  warnHolidayGap(ym);
   const diaries = getRecentDiaries(characterId, 3)
     .map((d) => {
       try {
