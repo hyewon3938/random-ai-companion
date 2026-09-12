@@ -68,6 +68,8 @@ test("토요일과 일요일은 주말이다", () => {
 test("공휴일도 주말도 아니면 평일이다", () => {
   assert.equal(dayLabel(new Date("2026-09-07T00:00:00Z")), "평일");
   assert.equal(dayLabelOf("2026-09-07"), "평일");
+  // 근로자의날은 표에 없다 — 관공서 공휴일이 아니라 근로자에게만 붙는 유급휴일이다.
+  assert.equal(dayLabelOf("2026-05-01"), "평일");
 });
 
 test("UTC 필드를 KST 값으로 읽는다 — 밤 늦은 시각도 그날이다", () => {
@@ -84,11 +86,19 @@ test("그 달의 공휴일만 날짜순으로 준다", () => {
   ]);
   // 공휴일이 하나도 없는 달은 빈 배열이다 — 월 리듬 재료가 이 값을 그대로 이어 붙인다.
   assert.deepEqual(holidaysInMonth("2026-11"), []);
+  // 설날이 일요일이라 연휴 뒤에 대체공휴일이 하루 붙는 달
+  assert.deepEqual(holidaysInMonth("2027-02"), [
+    { date: "2027-02-06", name: "설날 연휴" },
+    { date: "2027-02-07", name: "설날" },
+    { date: "2027-02-08", name: "설날 연휴" },
+    { date: "2027-02-09", name: "설날 대체공휴일" },
+  ]);
 });
 
 test("표가 안 덮은 해는 그 해를 알린다", () => {
   assert.equal(holidayGapYear("2026-09"), null);
-  assert.equal(holidayGapYear("2027-02"), "2027");
+  assert.equal(holidayGapYear("2027-02"), null);
+  assert.equal(holidayGapYear("2028-02"), "2028");
 });
 
 // ── workdayContext ────────────────────────────────────────────────────
