@@ -259,7 +259,7 @@ ${g.todayNotes.join("\n") || "(없음)"}
 ${g.dayActuals.join("\n") || "(없음)"}
 
 JSON으로:
-{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"],"user_knows":"known|unknown — 내(char) 일정만"}],"schedule_updates":[{"id":0,"time_hint":"14:30","user_knows":"known"}],"relation":{"advance":{"go":true,"basis":"근거 한 줄"}|null,"firsts":[{"kind":"처음 코드","keep":true},{"kind":"처음 코드","by":"user","keep":true}],"intent":{"dig":"파고들 것","share":"흘릴 내 얘기","move":"플러팅 코드","move_note":"어떤 자리에서 어떻게","lead_tone":"결 코드","thread":"이어갈 자리","basis":{"dig":"출처"}}}}
+{"memories":[{"item_type":"fact|ongoing|person","owner":"char|user","area":"영역","subject":"무엇","value":"사실 한두 문장","tags":["관련어"],"user_knows":"known|unknown — '나'(char) 쪽만","relation":"person만 — 어떤 사이","contact_mode":"person만 — 만나는 결(직장에서 매일, 가끔 연락 등)","region":"person만 — 어디 사람인지","end_condition":"ongoing만 — 끝났다고 볼 조건","interest":"high|medium|low — '나' 쪽 기억에 상대의 관심이 뚜렷할 때만","occurred_on":"YYYY-MM-DD — 그 일이 있었던 날, 모르면 넣지 않는다"}],"relationship":{"speech_note":"상대에게 쓰는 말투","rapport":"잘 통하는 것","cautions":"조심할 것","history":"지나온 이야기","feelings":"지금 마음"},"user_profile":{"job":"상대가 하는 일","region":"상대가 사는 지역"},"schedules":[{"who":"user 또는 char","date":"YYYY-MM-DD","time_hint":"오전/저녁/14:00 등 또는 null","content":"무슨 일정인지","tags":["관련어"],"user_knows":"known|unknown — 내(char) 일정만"}],"schedule_updates":[{"id":0,"time_hint":"14:30","user_knows":"known"}],"relation":{"advance":{"go":true,"basis":"근거 한 줄"}|null,"firsts":[{"kind":"처음 코드","keep":true},{"kind":"처음 코드","by":"user","keep":true}],"intent":{"dig":"파고들 것","share":"흘릴 내 얘기","move":"플러팅 코드","move_note":"어떤 자리에서 어떻게","lead_tone":"결 코드","thread":"이어갈 자리","basis":{"dig":"출처"}}}}
 
 memories 규칙:
 - 남길 것 = 다음에 대화할 때 알고 있어야 자연스러운 사실만. 잡담 전부가 아니라 이어질 것만.
@@ -268,6 +268,7 @@ memories 규칙:
 - 같은 주제가 [이미 있는 키]에 있으면 반드시 그 키를 그대로 쓴다. 같은 키에 쓰면 값이 통째로 갈아 끼워지니, 다시 쓸 때는 위에 적힌 앞 값에 있던 원인 추정·장소·이름·숫자 같은 세부를 그대로 두고 이번에 새로 안 것을 합쳐 쓴다. 앞 값과 모순되는 부분만 새 값으로 바꾼다. 이미 아는 내용과 같은 것은 다시 넣지 않는다.
 - 합친 값이 길어지면 지나간 상태와 되풀이된 감상부터 줄이고, 원인·장소·이름·숫자처럼 한 번 지우면 되찾을 수 없는 것은 남긴다. 값은 두 문장 안에 둔다.
 - 한 번 있었던 일은 날짜를 붙인 사건으로 적는다(예: ${g.diaryDate} 저녁에 야근했다). 평소 그렇다는 성향 문장은 같은 모습이 앞 값에도 있어 여러 번 나왔을 때만 쓴다.
+- occurred_on: 값이 가리키는 일이 있었던 날. 오늘 있었던 일이면 ${g.diaryDate}, 며칠 전 일이면 그 날을 YYYY-MM-DD로 적는다. 언제인지 대화에서 안 나오거나 평소 그렇다는 성향·계속되는 상태면 넣지 않는다 — 어림으로 채운 날짜는 비워 두는 것보다 나쁘다. 앞 값과 같은 일을 다시 적는 것이면 이 칸을 넣지 않는다 — 처음 적힌 날이 그대로 남는다.
 - 값에는 사실만 적고, 그날 대화에서 누가 무엇을 묻고 어떻게 답했는지 같은 장면은 넣지 않는다. 그런 장면은 일기의 몫이다.
 - person: 영역=갈래(가족·직장·친구 등), 무엇=이름(모르면 호칭 그대로). 상대가 흘리듯 언급한 상대 쪽 사람도 빠뜨리지 않는다. 이미 아는 인물은 내용이 달라졌을 때만 같은 키로 다시 쓴다.
 - "~라고 불러줘" 같은 지시·부탁은 사실 문장으로 바꿔 저장한다 (예: 상대는 OO라고 불리는 걸 좋아한다).

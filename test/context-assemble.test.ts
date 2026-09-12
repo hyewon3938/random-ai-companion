@@ -51,6 +51,7 @@ const identityRow = (id: number, subject: string, value: string): MemoryRow => (
   last_mentioned_at: null,
   end_condition: null,
   interest: null,
+  occurred_on: null,
   last_retrieved_at: null,
   retrieval_count: 0,
   updated_at: "2026-08-30 12:00:00",
@@ -168,6 +169,22 @@ test("3층은 안정도 순이고 앞 두 층만 캐시한다", () => {
   assert.ok(!daily.text.includes("집에서 쉼"), "당일에 닥치는 일은 미리 아는 흐름에 넣지 않는다");
   assert.ok(daily.text.includes('[너의 최근 일기 — 기억의 원본]\n2026-09-05: {"summary":"조용한 하루"}'));
   assert.ok(!daily.text.includes(COLD_START_SEED));
+});
+
+test("정체성 절에도 날짜 읽는 규칙이 붙는다", () => {
+  // 새벽 정리는 주인을 가리지 않고 있었던 날을 적어서, 대화로 쌓인 캐릭터 쪽 사실에도
+  // 날짜가 붙는다. 규칙이 없으면 그 줄의 두 날짜를 무엇으로 읽어야 할지 알 수 없다.
+  const grown = {
+    ...identityRow(3, "이사", "회사 근처로 옮겼다"),
+    origin: "conversation" as const,
+    occurred_on: "2026-09-10",
+    updated_at: "2026-09-12 04:00:00",
+  };
+  const [stable] = assembleSystemBlocks(
+    input({ identity: [identityRow(1, "이름", "한도윤"), grown] }),
+  );
+  assert.ok(stable.text.includes("(9/10에 있었던 일 · 9/12 갱신)"));
+  assert.ok(stable.text.includes("'갱신'은 그 줄을 마지막으로 고친 날이다"));
 });
 
 const WORK_HEAD = "[작품 — 네가 보거나 읽는 것에서 확인된 사실]";

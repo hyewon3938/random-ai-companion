@@ -141,6 +141,10 @@ const TABLES: Record<string, string> = {
   //
   // 캐릭터를 만들 때 정한 값(origin='creation')과 대화로 쌓인 값(origin='conversation')은
   // 같은 키에 두 행으로 나란히 놓인다. 저장 함수는 언제나 conversation 행에만 쓴다.
+  //
+  // occurred_on은 그 값이 가리키는 일이 실제로 있었던 날(YYYY-MM-DD)이다. updated_at은 이 행을
+  // 마지막으로 고친 날이라, 며칠 전 일을 오늘 다시 말하면 오늘로 바뀐다 — 두 날짜를 갈라 둬야
+  // 지난 일을 방금 있었던 일처럼 말하지 않는다(이슈 #388). 언제인지 모르면 비워 둔다.
   memory_items: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   character_id INTEGER NOT NULL REFERENCES characters(id),
@@ -157,6 +161,7 @@ const TABLES: Record<string, string> = {
   last_mentioned_at TEXT,
   end_condition TEXT,
   interest TEXT CHECK (interest IN ('high','medium','low')),
+  occurred_on TEXT,
   last_retrieved_at TEXT,
   retrieval_count INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
@@ -479,7 +484,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -1025,6 +1030,25 @@ const migrateToV13 = (): void => {
   console.log(`[db] 스키마를 v13으로 옮겼다`);
 };
 
+// v14: memory_items에 그 일이 있었던 날 occurred_on을 더한다(#388).
+//
+// 이미 쌓인 행은 전부 비운 채로 시작한다. 값 안에 날짜가 적힌 행이 있긴 하지만 문장에서 날짜를
+// 뽑아 채우면 틀린 날이 섞이고, 틀린 날은 비어 있는 것보다 나쁘다 — 비어 있으면 프롬프트가
+// 시기를 단정하지 말라고 이르는데 틀린 날은 그대로 믿는다. 새벽 정리가 그 기억을 다시 쓸 때
+// 채워진다. 붙이는 칸이 비어 있어도 되므로 표를 다시 만들지 않고 ALTER로 붙인다(v12와 같은 꼴).
+const migrateToV14 = (): void => {
+  db.transaction(() => {
+    const cols = (
+      db.pragma(`table_info(memory_items)`) as { name: string }[]
+    ).map((c) => c.name);
+    if (!cols.includes("occurred_on"))
+      db.exec(`ALTER TABLE memory_items ADD COLUMN occurred_on TEXT`);
+    db.pragma(`user_version = 14`);
+  })();
+
+  console.log(`[db] 스키마를 v14로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < 5) migrateToV5();
 if (schemaVersion() < 6) migrateToV6();
@@ -1034,7 +1058,8 @@ if (schemaVersion() < 9) migrateToV9();
 if (schemaVersion() < 10) migrateToV10();
 if (schemaVersion() < 11) migrateToV11();
 if (schemaVersion() < 12) migrateToV12();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV13();
+if (schemaVersion() < 13) migrateToV13();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV14();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를

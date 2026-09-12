@@ -27,9 +27,8 @@ const {
   UPCOMING_SCHEDULE_DAYS,
   UPCOMING_SCHEDULE_MAX,
 } = await import("../src/thresholds.js");
-const { listCharacters, runTagSearch } = await import(
-  "../src/tools/db-tag-search.js"
-);
+const { listCharacters, runTagSearch } =
+  await import("../src/tools/db-tag-search.js");
 
 after(() => {
   db.close();
@@ -272,7 +271,9 @@ test("발화에 글자가 맞는 태그는 matched에 들어가고 고른 태그
   assert.deepEqual(r.matched, ["프로젝트"]);
   assert.deepEqual(r.tags, ["일", "프로젝트"]);
   assert.equal(r.memories.length, 1);
-  assert.equal(r.memories[0].label, "fact/user 일/프로젝트");
+  // 화면 이름표는 저장 항목을 앞에 붙인다 — 프롬프트는 항목마다 절이 갈리지만 이 화면은
+  // 한 목록에 섞어 보여준다.
+  assert.equal(r.memories[0].label, "사실 · 상대 · 일 · 프로젝트");
   assert.equal(r.memories[0].detail, "마감을 앞두고 있다");
   assert.equal(r.memories[0].hits, 2);
   assert.deepEqual(r.memories[0].tags, ["일", "프로젝트"]);
@@ -284,11 +285,11 @@ test("캐릭터 쪽 사실은 검색에서 빼고 사유를 남긴다", () => {
   const r = search(charA, ["영화"]);
   assert.deepEqual(
     r.memories.map((m) => m.label),
-    ["ongoing/char 취미/영화모임"],
+    ["진행 중인 일 · 너 · 취미 · 영화모임"],
   );
   const identity = r.excluded.find((e) => e.reason.includes("캐릭터 쪽 사실"));
   assert.ok(identity);
-  assert.deepEqual(identity.rows, ["fact/char 취미/영화"]);
+  assert.deepEqual(identity.rows, ["너 · 취미 · 영화"]);
   assert.deepEqual(r.dropped, []);
 });
 
@@ -328,8 +329,8 @@ test("기억 상한을 넘는 후보는 dropped에 키로 남는다", () => {
   const r = search(charA, ["취향"]);
   assert.equal(r.memories.length, SEARCH_LIMIT.fact);
   // 갱신 시각이 가장 오래된 행이 밀린다.
-  assert.deepEqual(r.dropped, ["fact/user 취향/항목1"]);
-  assert.ok(!r.memories.some((m) => m.label === "fact/user 취향/항목1"));
+  assert.deepEqual(r.dropped, ["상대 · 취향 · 항목1"]);
+  assert.ok(!r.memories.some((m) => m.label === "상대 · 취향 · 항목1"));
 });
 
 test("다가오는 일정 슬롯에 실린 행은 빼고 그 밖의 것만 싣는다", () => {

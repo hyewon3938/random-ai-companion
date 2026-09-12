@@ -110,6 +110,8 @@ export interface CallContext {
     oldDiaries?: string[];
     /** 주제로 찾아 넣은 일정 — 날짜와 내용. */
     schedules?: string[];
+    /** 이번 호출이 읽은 [다가오는 일정] — 주인과 날짜, 내용. */
+    upcoming?: string[];
     dropped?: string[];
   };
   turns?: number;
@@ -418,12 +420,26 @@ const searchLines = (ctx: CallContext): string[] => {
     found ? `기억 ${found}건 — ${s.memories?.join(" / ")}` : "기억 0건",
   );
   if (s.oldDiaries?.length) bits.push(`옛 일기 ${s.oldDiaries.join("·")}`);
-  if (s.schedules?.length) bits.push(`일정 ${s.schedules.join(" / ")}`);
+  // 주제로 걸린 일정은 아래 참고한 일정 줄과 이름표를 갈라 둔다 — 둘 다 '일정'이면
+  // 검색으로 걸려 들어온 지난 일정과 하루 고정 덩이의 앞일이 한 줄로 읽힌다.
+  if (s.schedules?.length)
+    bits.push(`주제로 걸린 일정 ${s.schedules.join(" / ")}`);
   if (s.dropped?.length)
     bits.push(
       `개수 상한에 걸려 빠짐 ${s.dropped.length}건 — ${s.dropped.join(" / ")}`,
     );
-  return [`*검색* ${esc(bits.join(" · "))}`];
+  const upcoming = s.upcoming ?? [];
+  return [
+    // 토막을 가르는 글자는 기억 이름 안의 ' · '와 달라야 한다 — 같은 글자로 이으면
+    // '상대 · 가족 · 어머니 · 주제로 걸린 일정'에서 이름이 어디서 끝나는지 안 보인다.
+    `*검색* ${esc(bits.join(" | "))}`,
+    // 0건도 적는다 — 줄이 사라지면 앞일이 없는 날인지 기록이 안 된 것인지 구별되지 않는다.
+    `*참고한 일정* ${
+      upcoming.length
+        ? esc(`${upcoming.length}건 — ${upcoming.join(" / ")}`)
+        : "0건"
+    }`,
+  ];
 };
 
 const outcomeLines = (ctx: CallContext): string[] => {

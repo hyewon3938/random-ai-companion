@@ -71,6 +71,7 @@ const row = (id: number, over: Partial<MemoryRow> = {}): MemoryRow => ({
   last_mentioned_at: null,
   end_condition: null,
   interest: null,
+  occurred_on: null,
   last_retrieved_at: null,
   retrieval_count: 0,
   updated_at: "2026-09-01 12:00:00",
@@ -563,4 +564,40 @@ test("키가 형식에 안 맞으면 저장이 예외로 막힌다", () => {
     /키를 만들 수 없다\(일\/이\/프로젝트\): 키 한 자리에 여러 낱말을 묶지 않는다/,
   );
   assert.equal(memoryRowsOf(id).length, 0);
+});
+
+// ── 있었던 날(occurred_on) ────────────────────────────────────────────────
+
+test("있었던 날은 YYYY-MM-DD만 받고 꼴이 다르면 비운다", () => {
+  const id = makeCharacter("chat-occurred-format");
+  const save = (occurredOn: string | null | undefined, subject: string): number =>
+    saveMemory({
+      characterId: id,
+      itemType: "fact",
+      owner: "user",
+      area: "일",
+      subject,
+      value: "마감을 앞뒀다",
+      occurredOn,
+    });
+
+  assert.equal(getMemoryItemById(save("2026-09-10", "가"))?.occurred_on, "2026-09-10");
+  // 사람이 말하는 꼴로 오면 날짜로 쓸 수 없다 — 비워 두고 절 끝 규칙에 맡긴다.
+  for (const [i, bad] of ["9/10", "2026-9-10", "어제", "  ", null, undefined].entries())
+    assert.equal(getMemoryItemById(save(bad, `나${i}`))?.occurred_on, null);
+});
+
+test("아직 오지 않은 날은 있었던 날로 받지 않는다", () => {
+  const id = makeCharacter("chat-occurred-future");
+  // 있었던 일을 적는 자리라 앞으로의 날짜는 틀린 값이다. 앞일은 일정 표가 갖는다.
+  const memoryId = saveMemory({
+    characterId: id,
+    itemType: "fact",
+    owner: "user",
+    area: "일",
+    subject: "발표",
+    value: "다음 달에 있다",
+    occurredOn: "2099-01-01",
+  });
+  assert.equal(getMemoryItemById(memoryId)?.occurred_on, null);
 });

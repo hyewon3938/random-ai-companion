@@ -71,7 +71,7 @@ const scriptRows = (): number =>
     .c;
 
 test("v12 DB가 지금 스키마 버전까지 올라간다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 13);
+  assert.equal(db.pragma("user_version", { simple: true }), 14);
 });
 
 test("있던 캐릭터와 일정은 그대로 남는다", () => {

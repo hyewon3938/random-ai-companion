@@ -42,9 +42,16 @@ export const searchable = (r: MemoryRow): boolean =>
 /** 꺼내는 순서 — 지금 진행 중인 것부터. */
 export const TYPE_ORDER: MemoryItemType[] = ["ongoing", "person", "fact"];
 
-/** 기억 한 건을 한 줄로 가리키는 키 — 호출 기록에 무엇을 넣고 무엇을 뺐는지 적을 때 쓴다. */
+/**
+ * 기억 한 건을 한 줄로 가리키는 키 — 호출 기록에 무엇을 넣고 무엇을 뺐는지 적을 때 쓴다.
+ *
+ * 프롬프트 줄의 앞부분과 같은 글자로 적는다. 게시된 호출 기록에서 이 글자를 그대로 복사해
+ * 스레드를 검색하면 그 기억이 실린 답장이 걸린다 — 항목 이름을 영문 그대로 두면 프롬프트에
+ * 없는 글자라 검색이 빗나갔다(이슈 #397). 저장 항목은 프롬프트에서 절 제목으로 갈리므로
+ * 여기서는 빼고, 주인·영역·항목만 적는다.
+ */
 export const memoryKeyOf = (r: MemoryRow): string =>
-  `${r.item_type}/${r.owner} ${r.area}/${r.subject}`;
+  `${MEMORY_OWNER_IN_PROMPT[r.owner]} · ${r.area} · ${r.subject}`;
 
 export interface PickOptions {
   /** 어떤 저장 항목에서 고를지. 안 주면 검색으로 골라 넣는 것 전부. */
@@ -164,10 +171,34 @@ const dayLabel = (updatedAt: string): string => {
   return y && m && d ? `${Number(m)}/${Number(d)}` : updatedAt.slice(0, 10);
 };
 
+// 그 일이 있었던 날 — 갱신 날짜와 해가 다르면 해까지 적는다. 갱신 날짜는 언제나 최근이라
+// 해를 버려도 되지만, 있었던 날은 몇 해 전일 수 있다. 해를 버리면 작년 9/12가 올해 9/12와
+// 같은 글자가 되고, 그 줄은 오늘 있었던 일로 읽힌다.
+const occurredLabel = (occurredOn: string, updatedAt: string): string =>
+  occurredOn.slice(0, 4) === updatedAt.slice(0, 4)
+    ? dayLabel(occurredOn)
+    : `${occurredOn.slice(0, 4)}년 ${dayLabel(occurredOn)}`;
+
+// 줄 끝 괄호 — 그 일이 있었던 날과 줄을 마지막으로 고친 날을 갈라 적는다.
+//
+// 갱신 날짜만 적으면 며칠 전 일을 오늘 다시 말했을 때 날짜가 오늘로 바뀌어 방금 있었던 일로
+// 읽힌다(이슈 #388). 둘이 같은 날이면 갱신을 접는다 — 같은 날짜를 두 번 적는 줄이 되고,
+// 그 줄에서 갱신 날짜가 더 알려주는 것이 없다. 접을지는 이름표가 아니라 날짜 자체로 가른다:
+// 이름표로 가르면 해만 다른 두 날이 같은 줄로 접힌다. 있었던 날을 모르면 예전처럼 갱신만
+// 적고, 시기를 단정하지 말라는 것은 절 끝 규칙이 맡는다.
+const dateNote = (r: MemoryRow): string => {
+  const updated = dayLabel(r.updated_at);
+  if (!r.occurred_on) return `${updated} 갱신`;
+  const occurred = occurredLabel(r.occurred_on, r.updated_at);
+  return r.occurred_on.slice(0, 10) === r.updated_at.slice(0, 10)
+    ? `${occurred}에 있었던 일`
+    : `${occurred}에 있었던 일 · ${updated} 갱신`;
+};
+
 // 주인 표시는 검색 기억에만 붙인다 — 정체성 층은 전부 캐릭터 쪽 사실이라 줄마다 '너'가
 // 붙으면 같은 말이 반복될 뿐이고, 검색 기억은 진행 중인 일과 주변 인물에서 양쪽이 섞인다.
 const renderLine = (r: MemoryRow, owner: boolean): string =>
-  `- ${owner ? `${MEMORY_OWNER_IN_PROMPT[r.owner]} · ` : ""}${r.area} · ${r.subject}: ${r.value} (${dayLabel(r.updated_at)} 갱신)`;
+  `- ${owner ? `${MEMORY_OWNER_IN_PROMPT[r.owner]} · ` : ""}${r.area} · ${r.subject}: ${r.value} (${dateNote(r)})`;
 
 export const memoryLine = (r: MemoryRow): string => renderLine(r, false);
 
@@ -188,9 +219,20 @@ export const memoryBlock = (rows: MemoryRow[], owner = true): string => {
     .join("\n\n");
 };
 
+/**
+ * 줄 끝 괄호의 두 날짜가 무엇인지 이르는 규칙. 날짜가 붙은 기억 줄을 싣는 절이 끝에 붙인다.
+ * 정체성 절도 memoryLine으로 줄을 만들어서 같은 규칙을 쓴다(context/assemble.ts).
+ *
+ * 대화 기록에 남은 `[어제 22:10]` 표시는 그 말이 기록 창 안에 있는 동안만 근거가 된다. 창에서
+ * 밀려난 일은 기억 줄만 남으므로, 그 줄의 날짜를 어떻게 읽어야 하는지를 같은 자리에서 적는다.
+ */
+export const MEMORY_DATE_RULE = `- 괄호의 '있었던 일'이 그 일이 실제로 있었던 날이고, '갱신'은 그 줄을 마지막으로 고친 날이다. 오늘 다시 말해 갱신돼도 있었던 날은 그대로다. '있었던 일'이 없는 줄은 언제 일인지 모르는 것이니 아까·방금·어제처럼 시점을 단정하지 않는다.`;
+
 /** 태그로 찾은 기억 절. 넣을 것이 없으면 빈 문자열이라 조립하는 쪽에서 그대로 빠진다. */
 export const memorySection = (rows: MemoryRow[]): string =>
-  rows.length ? `[지금 얘기와 관련해 기억나는 것]\n${memoryBlock(rows)}` : "";
+  rows.length
+    ? `[지금 얘기와 관련해 기억나는 것]\n${memoryBlock(rows)}\n${MEMORY_DATE_RULE}`
+    : "";
 
 /**
  * 태그 없이 고르는 상대 쪽 기억 — 먼저 거는 말의 사물을 상대가 전에 한 말에서 가져오는 재료다.
@@ -214,7 +256,9 @@ export const pickUserMemories = (
 
 /** 선톡 문안이 받는 상대 쪽 기억 절. 주인 표시는 빼는데 절 제목이 이미 상대 것이라고 밝힌다. */
 export const userMemorySection = (rows: MemoryRow[]): string =>
-  rows.length ? `[상대가 전에 한 말]\n${memoryBlock(rows, false)}` : "";
+  rows.length
+    ? `[상대가 전에 한 말]\n${memoryBlock(rows, false)}\n${MEMORY_DATE_RULE}`
+    : "";
 
 export interface DiaryRow {
   date: string;

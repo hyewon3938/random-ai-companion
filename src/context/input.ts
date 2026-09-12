@@ -77,6 +77,14 @@ export interface BuildTrace {
   oldDiaries: string[];
   /** 주제로 찾아 넣은 일정 — 날짜와 내용. */
   schedules: string[];
+  /**
+   * 이번 호출이 읽은 [다가오는 일정] — 주인과 날짜, 내용.
+   *
+   * 이 절은 하루 한 번 굳는 덩이에 들어가서 답장 스레드에 붙는 마지막 덩이에는 없다. 그래서
+   * 캐릭터가 앞일을 날짜까지 말해도 저장된 일정을 읽은 것인지 그 자리에서 지어낸 것인지
+   * 게시함만 보고는 갈리지 않았다 — 본문에 한 줄로 적어 가른다(이슈 #397).
+   */
+  upcoming: string[];
   /** 태그는 맞았지만 개수 상한에 걸려 빠진 후보 — 기억 키와 옛 일기 날짜. */
   dropped: string[];
 }
@@ -292,6 +300,14 @@ export const readContextInput = (
     opts.trace.memories = found.map(memoryKeyOf);
     opts.trace.oldDiaries = oldDiaries.map((d) => d.date);
     opts.trace.schedules = foundSchedules.map((r) => `${r.date} ${r.content}`);
+    // 프롬프트에 적히는 것과 같은 꼴로 적되 주인을 앞에 둔다 — 절에서는 '너의 예정'과
+    // '상대의 예정'으로 갈려 있어서, 한 줄로 옮기면 주인이 사라진다.
+    opts.trace.upcoming = upcoming.map(
+      (r) =>
+        `${r.owner === "user" ? "상대" : "너"} ${r.date}${
+          r.time_hint ? ` ${r.time_hint}` : ""
+        } ${r.content}`,
+    );
     opts.trace.dropped = dropped;
   }
 

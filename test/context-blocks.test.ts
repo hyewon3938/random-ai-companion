@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, mock, test } from "node:test";
 
+import type { BuildTrace } from "../src/context.js";
 import type { DayPlan, PlanBlock } from "../src/day-plan.js";
 import type { ActivityCategory, Responsiveness } from "../src/labels.js";
 import { BLOCK_END_JITTER_MS } from "../src/thresholds.js";
@@ -26,7 +27,9 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 // 모델 클라이언트는 모듈을 읽을 때 이 주소를 잡는다. 아무것도 듣지 않는 포트라 연결이 바로 끊긴다.
 process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:1";
 
-const { db, saveDayPlan, setSpeechLevel } = await import("../src/db.js");
+const { addSchedule, db, saveDayPlan, setSpeechLevel } = await import(
+  "../src/db.js"
+);
 const { createFixtureCharacter } = await import("../src/eval/fixture-character.js");
 const { buildSystemBlocks, currentBlock } = await import("../src/context.js");
 const { readTodayPlan } = await import("../src/context/input.js");
@@ -147,6 +150,34 @@ test("signals를 켜면 실시간 꼬리 맨 끝에 형식 문단이 붙는다",
   assert.ok(blocks[2].text.endsWith(REPLY_ENVELOPE));
   assert.equal(blocks[0].text.includes(REPLY_ENVELOPE), false);
   assert.equal(blocks[1].text.includes(REPLY_ENVELOPE), false);
+});
+
+test("이번 조립이 읽은 다가오는 일정이 호출 기록에 남는다", () => {
+  const { chatId, characterId } = roomWith(DAY);
+  setClock("10:30");
+  // 일정 절은 하루 한 번 굳는 덩이에 있어 답장 스레드에 안 붙는다 — 본문에 적을 값을
+  // 조립하는 자리에서 받아 둔다(#397).
+  addSchedule(
+    characterId,
+    "char",
+    "2026-09-13",
+    "14:00",
+    "치과",
+    `${PLAN_DATE} 10:00:00`,
+    "conversation",
+  );
+  const trace: BuildTrace = {
+    tags: [],
+    tagPool: 0,
+    memories: [],
+    oldDiaries: [],
+    schedules: [],
+    upcoming: [],
+    dropped: [],
+  };
+  const blocks = buildSystemBlocks(characterId, chatId, { trace });
+  assert.deepEqual(trace.upcoming, ["너 2026-09-13 14:00 치과"]);
+  assert.ok(blocks[1].text.includes("2026-09-13 14:00 치과"));
 });
 
 test("말투가 반말로 저장돼 있으면 반말 안내가 들어간다", () => {
