@@ -57,7 +57,7 @@ const waiting = (characterId: number, chatId: string, kind: string): number =>
     characterId,
     userMsgAt: "2026-09-11 19:58:00",
     bubbles: ["곧 답할게"],
-    noteToSave: null,
+    notesToSave: [],
     sendAt: "2026-09-11 20:05:00",
     kind,
     createdAt: NOW,
@@ -155,7 +155,7 @@ test("거둔 행은 걸어 둔 타이머가 울려도 나가지 않는다", asyn
     characterId,
     userMsgAt: "2026-09-11 19:58:00",
     bubbles: ["나가면 안 되는 말"],
-    noteToSave: null,
+    notesToSave: [],
     waitMs: 200,
     kind: "reply",
   });

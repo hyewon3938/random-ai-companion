@@ -15,7 +15,7 @@ import {
   getRecentDiaries,
   getDiariesByIds,
   getDayPlan,
-  getUpcomingSchedules,
+  getUpcomingWindow,
   getSchedulesByIds,
   type ScheduleRow,
   type ScheduleStateRow,
@@ -219,7 +219,9 @@ export const readContextInput = (
   // 오늘 날짜는 한 번만 읽어 두 자리가 같은 값을 쓴다 — [다가오는 일정]이 싣는 경계와 아래
   // 검색 결과에 '지난 일'을 붙이는 경계가 어긋나면 같은 일정이 두 자리에서 다르게 읽힌다.
   const today = kstDateString();
-  const upcoming = getUpcomingSchedules(characterId, today);
+  // 범위는 오늘부터 2주다(thresholds.UPCOMING_SCHEDULE_DAYS). 그 뒤의 일정은 주제로 걸릴 때만
+  // 들어오고, 캐릭터가 먼저 아는 앞일은 이 창 안의 것뿐이다.
+  const upcoming = getUpcomingWindow(characterId, today);
   const diaries = getRecentDiaries(characterId, RECENT_DIARY_DAYS);
   // 저장된 기억 전부를 한 번만 읽어 두 자리가 나눠 쓴다 — 첫 대화인지 보는 데도, 선톡이
   // 태그 없이 상대 쪽 기억을 고르는 데도 같은 목록이 필요하다.

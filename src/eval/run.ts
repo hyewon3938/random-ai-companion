@@ -148,10 +148,14 @@ interface Result {
   /** 케이스가 노린 것이 답에 안 나온 경우. 위반은 아니고, 못 쟀다는 표시다. */
   missed: string;
   /**
-   * 오늘 메모를 재는 케이스에서 note 신호가 실려 왔는지. 재지 않는 케이스는 undefined다.
-   * 메모를 만드는 자리가 답장 호출 밖으로 옮겨 가면 이 값을 채우는 줄만 바꾼다(이슈 #257).
+   * 오늘 메모를 재는 케이스에서 온 note 신호. 재지 않는 케이스는 undefined다. 값이 배열인
+   * 이유는 한 답장이 여러 건을 남기기 때문이다(이슈 #399) — 건수까지 보는 케이스가 있어서
+   * 왔는지만으로는 안 갈린다. 메모를 만드는 자리가 답장 호출 밖으로 옮겨 가면 이 값을
+   * 채우는 줄만 바꾼다(이슈 #257).
    */
-  gotNote?: string | null;
+  gotNote?: string[];
+  /** 그 케이스가 바라는 메모 건수. gotNote가 있는 줄에만 있다. */
+  noteMin?: number;
   /** 플러팅을 재는 케이스에서 move 신호가 실려 왔는지. 재지 않는 케이스는 undefined다. */
   gotMove?: string | null;
   /**
@@ -198,7 +202,9 @@ for (const kase of cases) {
       bubbles: out.bubbles,
       violations: checkOutputRules(out.bubbles, kase),
       missed: missing.length ? `  ${missing.join(" · ")}(못 잼)` : "",
-      ...(kase.wantsNote ? { gotNote: out.signals.note } : {}),
+      ...(kase.wantsNote
+        ? { gotNote: out.signals.note, noteMin: kase.wantsNotes ?? 1 }
+        : {}),
       ...(kase.wantsMove ? { gotMove: out.signals.move } : {}),
       ...(out.parse === "plain" || out.parse === "empty"
         ? {}
@@ -220,8 +226,16 @@ for (const r of results) {
   const ok = r.violations.length === 0;
   // 메모는 표기와 별개로 세므로 표시도 따로 붙인다 — 표기를 지켰는데 메모가 안 온 줄이 ○ 하나로
   // 보이면, 고치려는 자리가 리포트에서 사라진다.
+  // 건수를 보는 케이스는 몇 건 왔는지까지 적는다 — 바라는 것이 둘인 자리에서 한 건만 오면
+  // ○ 하나로는 안 갈린다(이슈 #399).
+  const noteMin = r.noteMin ?? 1;
+  const noteHit = r.gotNote !== undefined && r.gotNote.length >= noteMin;
+  const noteCount =
+    r.gotNote !== undefined && noteMin > 1
+      ? ` (${r.gotNote.length}/${noteMin})`
+      : "";
   const noteMark =
-    r.gotNote === undefined ? "" : r.gotNote ? "  메모 ○" : "  메모 ✕";
+    r.gotNote === undefined ? "" : `  메모 ${noteHit ? "○" : "✕"}${noteCount}`;
   const moveMark =
     r.gotMove === undefined
       ? ""
@@ -247,11 +261,11 @@ for (const r of results) {
   if (
     !ok ||
     r.missed ||
-    (r.gotNote !== undefined && !r.gotNote) ||
+    (r.gotNote !== undefined && !noteHit) ||
     (r.gotMove !== undefined && !r.gotMove)
   )
     console.log(`      ${r.bubbles.join(" / ")}`);
-  if (r.gotNote) console.log(`      메모: ${r.gotNote}`);
+  if (r.gotNote?.length) console.log(`      메모: ${r.gotNote.join(" / ")}`);
   for (const line of r.suspects)
     console.log(`      물음표 확인(점수 밖) ${line}`);
 }
@@ -263,7 +277,9 @@ const jsonRate = asJson / results.length;
 
 // 메모는 재는 케이스에서만 센다. 케이스가 하나도 없으면 100%로 두고 하한을 안 건드린다.
 const noteCases = results.filter((r) => r.gotNote !== undefined);
-const noteHits = noteCases.filter((r) => r.gotNote).length;
+const noteHits = noteCases.filter(
+  (r) => (r.gotNote?.length ?? 0) >= (r.noteMin ?? 1),
+).length;
 const noteRate = noteCases.length ? noteHits / noteCases.length : 1;
 
 const moveCases = results.filter((r) => r.gotMove !== undefined);

@@ -20,10 +20,16 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다.
 const { db } = await import("../src/db.js");
 const { kstDateString, shiftDate } = await import("../src/kst.js");
-const { RECENT_DIARY_DAYS, SEARCH_LIMIT, TAG_PICK_MAX } =
-  await import("../src/thresholds.js");
-const { listCharacters, runTagSearch, UPCOMING_LIMIT } =
-  await import("../src/tools/db-tag-search.js");
+const {
+  RECENT_DIARY_DAYS,
+  SEARCH_LIMIT,
+  TAG_PICK_MAX,
+  UPCOMING_SCHEDULE_DAYS,
+  UPCOMING_SCHEDULE_MAX,
+} = await import("../src/thresholds.js");
+const { listCharacters, runTagSearch } = await import(
+  "../src/tools/db-tag-search.js"
+);
 
 after(() => {
   db.close();
@@ -194,9 +200,9 @@ const DIARY_TAGS: Record<string, string[]> = {
 };
 for (const date of DIARY_DATES) diary(charA, date, DIARY_TAGS[date] ?? []);
 
-// A의 일정 — 다가오는 일정 슬롯(UPCOMING_LIMIT)보다 하나 많은 앞날 일정, 지난 일정 하나,
+// A의 일정 — 다가오는 일정 슬롯(UPCOMING_SCHEDULE_MAX)보다 하나 많은 앞날 일정, 지난 일정 하나,
 // 취소한 앞날 일정 하나. 전부 같은 태그다.
-for (let n = 1; n <= UPCOMING_LIMIT + 1; n += 1)
+for (let n = 1; n <= UPCOMING_SCHEDULE_MAX + 1; n += 1)
   schedule(charA, {
     owner: "char",
     date: shiftDate(TODAY, n),
@@ -330,7 +336,7 @@ test("다가오는 일정 슬롯에 실린 행은 빼고 그 밖의 것만 싣�
   const r = search(charA, ["치과"]);
   const upcoming = r.excluded.find((e) => e.reason.includes("[다가오는 일정]"));
   assert.ok(upcoming);
-  assert.equal(upcoming.rows.length, UPCOMING_LIMIT);
+  assert.equal(upcoming.rows.length, UPCOMING_SCHEDULE_MAX);
   assert.ok(
     upcoming.rows.every(
       (row) => row.startsWith("일정 ") && row.endsWith(" 치과 진료"),
@@ -342,7 +348,7 @@ test("다가오는 일정 슬롯에 실린 행은 빼고 그 밖의 것만 싣�
     [
       `${shiftDate(TODAY, -10)} 치과 검진`,
       `${shiftDate(TODAY, 2)} 오후 치과 예약`,
-      `${shiftDate(TODAY, UPCOMING_LIMIT + 1)} 치과 진료`,
+      `${shiftDate(TODAY, UPCOMING_SCHEDULE_MAX + 1)} 치과 진료`,
     ].sort(),
   );
   const cancelled = r.schedules.find((s) => s.label.endsWith("치과 예약"));
@@ -351,6 +357,33 @@ test("다가오는 일정 슬롯에 실린 행은 빼고 그 밖의 것만 싣�
   assert.equal(r.schedules.length, SEARCH_LIMIT.schedule);
   assert.deepEqual(r.dropped, []);
   assert.ok(r.prompt.includes("[지금 얘기와 관련 있는 일정]"));
+});
+
+// 슬롯이 싣는 범위는 건수보다 날수가 먼저 자른다(이슈 #398). 이 도구가 범위를 따로 계산하면
+// 화면에서 뺀 행과 실제 프롬프트에 실린 행이 갈려서, 그 뒤의 일정이 검색에서도 사라진다.
+test("창 밖의 앞날 일정은 슬롯에서 빠지고 검색 결과로 온다", () => {
+  const charD = newCharacter("chat-tag-window");
+  schedule(charD, {
+    owner: "char",
+    date: shiftDate(TODAY, UPCOMING_SCHEDULE_DAYS),
+    content: "창 마지막 날 검진",
+    tags: ["검진"],
+  });
+  schedule(charD, {
+    owner: "char",
+    date: shiftDate(TODAY, UPCOMING_SCHEDULE_DAYS + 1),
+    content: "창 밖 검진",
+    tags: ["검진"],
+  });
+  const r = search(charD, ["검진"]);
+  const upcoming = r.excluded.find((e) => e.reason.includes("[다가오는 일정]"));
+  assert.ok(upcoming);
+  assert.equal(upcoming.rows.length, 1);
+  assert.ok(upcoming.rows[0]?.endsWith(" 창 마지막 날 검진"));
+  assert.deepEqual(
+    r.schedules.map((sc) => sc.label),
+    [`${shiftDate(TODAY, UPCOMING_SCHEDULE_DAYS + 1)} 창 밖 검진`],
+  );
 });
 
 test("다른 캐릭터의 태그와 기억은 섞이지 않는다", () => {
@@ -386,7 +419,7 @@ test("listCharacters는 캐릭터마다 태그를 kind별로 세고 태그가 �
   );
   assert.deepEqual(
     a.tags.find((t) => t.tag === "치과"),
-    { tag: "치과", memory: 0, diary: 0, schedule: UPCOMING_LIMIT + 3 },
+    { tag: "치과", memory: 0, diary: 0, schedule: UPCOMING_SCHEDULE_MAX + 3 },
   );
   assert.deepEqual(
     a.tags.find((t) => t.tag === "프로젝트"),

@@ -1132,7 +1132,7 @@ const respond = async (
       userMsgAt: turn.at,
       bubbles,
       // 객체의 note 신호(NOTE_RULE) — 발송이 성공하면 pending.ts가 saveTodayNote로 저장한다.
-      noteToSave: signals.note,
+      notesToSave: signals.note,
       waitMs: timing.waitMs,
       kind,
       // 발송·폐기 결과를 이 답장을 만든 호출의 트레이스에 잇는다.
@@ -1304,7 +1304,7 @@ setWakeHandler(async (row: PendingReplyRow) => {
           : {}),
       },
     );
-    if (signals.note) saveTodayNote(row.character_id, signals.note, messageId);
+    saveTodayNote(row.character_id, signals.note, messageId);
     setRecoveryMark(chatId, turn.at);
     if (signals.promise) {
       const kept = keepPromise(
@@ -1548,7 +1548,7 @@ setPromiseHandler(async (row: PendingReplyRow) => {
           : {}),
       },
     );
-    if (signals.note) saveTodayNote(row.character_id, signals.note, messageId);
+    saveTodayNote(row.character_id, signals.note, messageId);
     setRecoveryMark(chatId, turn.at);
     trace("replied", reply.callId ? `답장 #${reply.callId}` : undefined);
     if (signals.promise) {

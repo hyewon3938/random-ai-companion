@@ -13,6 +13,11 @@ import type {
   ScheduleParentKind,
   ScheduleStatus,
 } from "../labels.js";
+import { shiftDate } from "../kst.js";
+import {
+  UPCOMING_SCHEDULE_DAYS,
+  UPCOMING_SCHEDULE_MAX,
+} from "../thresholds.js";
 import { DEFAULT_LOCALE } from "./culture-scripts.js";
 
 // 삶의 큰 흐름: 연/계절/월/주 단위 이벤트 아크. 하루 각본이 이를 참고한다
@@ -87,18 +92,48 @@ export interface ScheduleRow {
   content: string;
 }
 
+// untilDate를 주면 그 날짜까지만 읽는다(경계 포함). 안 주면 끝을 열어 두고 건수로만 자른다 —
+// 하루 각본과 새벽 정리는 앞일 전부가 아니라 그날 것·가까운 것만 쓰므로 범위가 필요 없다.
 export const getUpcomingSchedules = (
   characterId: number,
   fromDate: string,
-  limit = 12,
+  limit = UPCOMING_SCHEDULE_MAX,
+  untilDate?: string,
 ): ScheduleRow[] =>
   db
     .prepare(
       `SELECT id, owner, date, time_hint, content FROM schedules
        WHERE character_id = ? AND status = 'active' AND date >= ?
+         AND (? IS NULL OR date <= ?)
        ORDER BY date, id LIMIT ?`,
     )
-    .all(characterId, fromDate, limit) as ScheduleRow[];
+    .all(
+      characterId,
+      fromDate,
+      untilDate ?? null,
+      untilDate ?? null,
+      limit,
+    ) as ScheduleRow[];
+
+/**
+ * 프롬프트의 [다가오는 일정] 슬롯이 싣는 앞일 — 오늘부터 UPCOMING_SCHEDULE_DAYS일 안의 행을
+ * 최대 UPCOMING_SCHEDULE_MAX건. 답장 경로(context/input.ts)가 이 함수를 부른다.
+ *
+ * 같은 화면을 다시 그리는 도구(tools/db-tag-search.ts)는 읽기 전용으로 따로 연 연결을 써서
+ * 이 함수를 못 부르고 질의를 따로 적는다. 대신 경계값 둘을 thresholds에서 같이 가져간다 —
+ * 여기 실린 행은 주제 검색 결과에서 빼는 기준이라, 두 자리가 각자 범위를 정하면 같은 일정이
+ * 두 자리에 겹쳐 들어간다.
+ */
+export const getUpcomingWindow = (
+  characterId: number,
+  today: string,
+): ScheduleRow[] =>
+  getUpcomingSchedules(
+    characterId,
+    today,
+    UPCOMING_SCHEDULE_MAX,
+    shiftDate(today, UPCOMING_SCHEDULE_DAYS),
+  );
 
 // 각본 블록이 가리키는 원본 일정 한 건. 붙잡기 판정이 '유저가 아는가'를 원본에서 읽는다 —
 // 각본에는 이 값이 없고, 블록의 출처(source_id)를 따라와야 나온다.

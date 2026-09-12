@@ -22,15 +22,15 @@ import {
   searchable,
   type DiaryRow,
 } from "../recall.js";
-import { RECENT_DIARY_DAYS, SEARCH_LIMIT, TAG_PICK_MAX } from "../thresholds.js";
-import { kstDateString } from "../kst.js";
+import {
+  RECENT_DIARY_DAYS,
+  SEARCH_LIMIT,
+  TAG_PICK_MAX,
+  UPCOMING_SCHEDULE_DAYS,
+  UPCOMING_SCHEDULE_MAX,
+} from "../thresholds.js";
+import { kstDateString, shiftDate } from "../kst.js";
 import type { MemoryRow, ScheduleStateRow } from "../db.js";
-
-/**
- * [다가오는 일정] 슬롯이 싣는 최대 행 수. src/db.ts의 getUpcomingSchedules 기본값과 같은 값이고,
- * 여기 실린 행은 태그 검색 결과에서 빠지므로 그 경계를 화면에서도 같게 잡아야 한다.
- */
-export const UPCOMING_LIMIT = 12;
 
 export interface CharacterBrief {
   id: number;
@@ -255,15 +255,24 @@ export const runTagSearch = (
         )
         .all(characterId, ...schedHitRows.map((h) => h.ref_id)) as ScheduleStateRow[])
     : [];
+  // [다가오는 일정] 슬롯이 싣는 행. 질의는 위 주석대로 여기 따로 적되 경계값 둘은
+  // thresholds에서 가져온다 — 여기 실린 행은 검색 결과에서 빼므로, 범위를 이 파일에서 따로
+  // 정하면 화면과 실제 프롬프트가 조용히 갈린다(src/db/life.ts의 getUpcomingWindow와 같은 값).
   const upcomingIds = new Set(
     (
       db
         .prepare(
           `SELECT id FROM schedules
-            WHERE character_id = ? AND status = 'active' AND date >= ?
+            WHERE character_id = ? AND status = 'active'
+              AND date >= ? AND date <= ?
             ORDER BY date, id LIMIT ?`,
         )
-        .all(characterId, today, UPCOMING_LIMIT) as { id: number }[]
+        .all(
+          characterId,
+          today,
+          shiftDate(today, UPCOMING_SCHEDULE_DAYS),
+          UPCOMING_SCHEDULE_MAX,
+        ) as { id: number }[]
     ).map((r) => r.id),
   );
   const bySchedId = new Map(schedRows.map((r) => [r.id, r]));

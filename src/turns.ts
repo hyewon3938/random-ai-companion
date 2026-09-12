@@ -25,10 +25,11 @@
 // 메모 칸만 있으면, note를 붙이기 전과 같은 어긋남이 그 둘에 그대로 생긴다.
 //
 // 그 턴에 실제로 적은 메모는 칸에 그대로 적는다(이슈 #346). 위 두 문단이 잰 것은 빈 칸을
-// 심었을 때의 값이라 메모를 남긴 턴까지 null이었고, 그 모양이 스무 턴 이어지면 모델이 남길
-// 것이 뚜렷한 자리에서도 메모를 안 냈다 — 9/9은 답장 21번에 메모 2건이다. 여기서 null로
+// 심었을 때의 값이라 메모를 남긴 턴까지 비어 있었고, 그 모양이 스무 턴 이어지면 모델이 남길
+// 것이 뚜렷한 자리에서도 메모를 안 냈다 — 9/9은 답장 21번에 메모 2건이다. 여기서 빈 배열로
 // 남는 턴은 둘이다: 남길 것이 없었던 턴과, 새벽 정리가 하루치 메모를 기억으로 옮기며 지운
-// 뒤의 어제 턴.
+// 뒤의 어제 턴. 한 턴에 메모가 여럿이면 원소를 여럿 적는다(이슈 #399) — 한 줄로 몰아 쓰지
+// 말라는 지시를 기록의 모양으로도 보여야 한다.
 //
 // 봇 모듈에서 떼어 둔 이유는 하나다. bot.ts는 불러오는 것만으로 봇을 만들어서 이 변환만
 // 따로 돌려 볼 수 없다.
@@ -42,8 +43,8 @@ type Role = "user" | "assistant";
 interface Chunk {
   marker: string | null;
   lines: string[];
-  /** 이 덩이의 답장에서 적은 오늘 메모. 없으면 null이다. */
-  note: string | null;
+  /** 이 덩이의 답장에서 적은 오늘 메모. 없으면 빈 배열이다. */
+  note: string[];
 }
 
 export interface TurnOptions {
@@ -66,10 +67,10 @@ export interface TurnOptions {
   /**
    * 캐릭터 발화 번호로 찾는 오늘 메모(memory.ts의 todayNotesByMessage).
    *
-   * 넘기지 않으면 메모 칸이 전부 null이 된다. 검사에서는 넘기지 않는 쪽이 기본이라 모양만
+   * 넘기지 않으면 메모 칸이 전부 빈 배열이 된다. 검사에서는 넘기지 않는 쪽이 기본이라 모양만
    * 재고, 운영 답장 경로(reply-compose.ts의 replyHistory)에서만 실제 값을 넘긴다.
    */
-  notes?: Map<number, string>;
+  notes?: Map<number, string[]>;
 }
 
 const bubblesOf = (lines: string[]): string[] =>
@@ -94,7 +95,7 @@ const bubblesOf = (lines: string[]): string[] =>
  */
 export const assistantTurnText = (
   bubbles: string[],
-  note: string | null = null,
+  note: string[] = [],
 ): string => JSON.stringify({ reply: bubbles, note, move: null, first: null });
 
 // 마커는 객체 밖 앞자리에 둔다. 안에 넣으면 모델이 그 칸을 흉내 내 말풍선에 시각을 찍고,
@@ -147,7 +148,7 @@ export const toTurns = (
     const role: Role = row.role === "user" ? "user" : "assistant";
     // 메모는 캐릭터 발화에만 딸린다 — 유저 발화는 번호가 같은 자리에 있어도 찾지 않는다.
     const note =
-      role === "assistant" ? (opts.notes?.get(row.id) ?? null) : null;
+      role === "assistant" ? (opts.notes?.get(row.id) ?? []) : [];
     let marker = timeMarkerFor(row.sent_at, prevTs, opts.todayLogical);
     // 기준 시각을 넘어선 첫 메시지는 간격이 모자라도 마커를 받는다. 앞이 없는 것처럼 불러
     // 오늘·어제 표기를 같은 함수에서 그대로 가져온다. 한 번 준 뒤 기준을 내리는 이유는
@@ -164,13 +165,13 @@ export const toTurns = (
     }
     const last = group.chunks[group.chunks.length - 1];
     // 마커가 붙는 자리마다 객체를 나눈다 — 캐릭터가 몇 시간 뒤에 먼저 말을 건 자리가 여기다.
-    // 메모가 이미 있는 덩이에 메모를 또 만나도 나눈다. 메모는 답장 하나에 하나라, 둘을 한
-    // 객체에 담으면 답장으로 올 수 없는 모양이 기록에 생긴다.
-    if (!last || marker || (note && last.note))
+    // 메모가 이미 있는 덩이에 메모를 또 만나도 나눈다. 한 덩이는 답장 한 통이고 메모 묶음도
+    // 답장 한 통이 남긴 것이라, 둘을 한 배열에 합치면 어느 답장이 무엇을 적었는지가 섞인다.
+    if (!last || marker || (note.length && last.note.length))
       group.chunks.push({ marker, lines: [row.text], note });
     else {
       last.lines.push(row.text);
-      last.note ??= note;
+      if (!last.note.length) last.note = note;
     }
   }
 

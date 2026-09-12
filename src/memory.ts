@@ -296,14 +296,20 @@ export const ensureCoreAreas = (characterId: number): void => {
 // 대화 중에는 저장 항목도 키도 판정하지 않고, 남길 내용을 문장 그대로 적어 둔다.
 // 판정을 대화 경로에 넣으면 답장이 느려지고, 한 번의 대화로는 어느 주제에 속할지도 이르다.
 
+// 한 답장이 여러 건을 남길 수 있어서 배열로 받는다(이슈 #399). 한 턴에 상대가 말해 준 사실과
+// 캐릭터가 처음 꺼낸 자기 이야기가 같이 나오면 둘 다 적어야 하고, 그걸 한 줄에 몰아 쓰면 다음에
+// 기억으로 옮길 때 한 줄이 두 주제에 걸친다. 여기서 한 건이 한 행이다.
 export const saveTodayNote = (
   characterId: number,
-  note: string,
+  notes: string[],
   messageId?: number | null,
 ): void => {
-  const text = tidy(note);
-  if (!text) return;
-  addTodayNote(characterId, kstStamp(), text, messageId);
+  const at = kstStamp();
+  for (const note of notes) {
+    const text = tidy(note);
+    if (!text) continue;
+    addTodayNote(characterId, at, text, messageId);
+  }
 };
 
 /** 오늘(새벽 5시 경계) 적어 둔 메모. */
@@ -316,6 +322,9 @@ export const todayNotes = (characterId: number): string[] =>
  *
  * 오늘 것만 나오는 이유는 새벽 정리가 하루치를 기억으로 옮긴 뒤 지우기 때문이다. 대화 기록이
  * 어제까지 걸치면 어제 턴은 메모를 적었더라도 빈 칸으로 보인다.
+ *
+ * 한 발화에 메모가 여럿 달릴 수 있어서 값이 배열이다(이슈 #399).
  */
-export const todayNotesByMessage = (characterId: number): Map<number, string> =>
-  getNotesByMessage(characterId, logicalDayStartTs());
+export const todayNotesByMessage = (
+  characterId: number,
+): Map<number, string[]> => getNotesByMessage(characterId, logicalDayStartTs());

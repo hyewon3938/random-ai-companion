@@ -68,7 +68,7 @@ const insertWake = (p: {
     characterId,
     userMsgAt: "2026-09-10 21:38:00",
     bubbles: [],
-    noteToSave: null,
+    notesToSave: [],
     sendAt: "2026-09-10 22:05:30",
     kind: p.kind,
     metaJson: JSON.stringify({
