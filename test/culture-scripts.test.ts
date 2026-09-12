@@ -12,6 +12,9 @@
 // 나가면 표는 있는데 실제 캐릭터에는 아무것도 안 걸리므로(이슈 #411), 수집 결과가 달마다 그 달에
 // 걸린 절차와 번호 붙은 진행 중인 일을 들고 나가는지도 같은 무게로 본다.
 //
+// 명절은 달력에서 걸린다(이슈 #415). 결혼·이사와 달리 아무도 먼저 적어 주지 않는 일이라 그 달의
+// 공휴일을 재료에 넣어야 걸리고, 수집 결과를 보는 검사는 실행하는 달에 따라 명절이 함께 실린다.
+//
 // DB는 임시 파일로 새로 만든다. 모델도 텔레그램도 부르지 않아 값이 안 든다.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
@@ -57,7 +60,17 @@ const rolesInTable = (event: string): string[] =>
 const { createFixtureCharacter } =
   await import("../src/eval/fixture-character.js");
 const { saveMemory } = await import("../src/memory.js");
-const { applyMonthPlan, culturePrompt } = await import("../src/life-plan.js");
+const { applyMonthPlan, culturePrompt, rhythmMaterial } =
+  await import("../src/life-plan.js");
+const { holidaysInMonth } = await import("../src/kst.js");
+
+// 그 달의 달력만으로 걸리는 이벤트. 지금은 명절 하나뿐이다.
+const fromCalendar = (ym: string): string[] =>
+  holidaysInMonth(ym).some(
+    (h) => h.name.startsWith("추석") || h.name.startsWith("설날"),
+  )
+    ? ["명절"]
+    : [];
 const { gatherNightlyInput } = await import("../src/nightly.js");
 
 let char = 0;
@@ -307,8 +320,14 @@ test("수집 결과의 달마다 걸린 일의 절차가 실린다", () => {
         `${m.ym}에 결혼 ${role} 역할이 빠졌다`,
       );
     assert.ok(m.culture.includes("### 이사 —"), `${m.ym}에 이사가 빠졌다`);
+    const hooked = new Set(["결혼", "이사", ...fromCalendar(m.ym)]);
+    for (const event of fromCalendar(m.ym))
+      assert.ok(
+        m.culture.includes(`### ${event} —`),
+        `${m.ym}은 달력에 ${event}가 있는데 절차가 빠졌다`,
+      );
     for (const event of eventsInTable())
-      if (event !== "결혼" && event !== "이사")
+      if (!hooked.has(event))
         assert.ok(
           !m.culture.includes(`### ${event} —`),
           `${m.ym}에 안 걸린 ${event}가 실렸다`,
@@ -319,8 +338,36 @@ test("수집 결과의 달마다 걸린 일의 절차가 실린다", () => {
 test("걸린 것이 없으면 절차 자리가 빈 문자열이라 크기가 그대로다", () => {
   const g = gatherNightlyInput(rowOf(plainChar));
   assert.ok(g.rhythmNeeded.length > 0, "생성할 달이 없어 아무것도 못 본다");
-  for (const m of g.rhythmNeeded)
-    assert.equal(m.culture, "", `${m.ym}에 안 걸린 절차가 실렸다`);
+  for (const m of g.rhythmNeeded) {
+    const hooked = new Set(fromCalendar(m.ym));
+    if (hooked.size === 0)
+      assert.equal(m.culture, "", `${m.ym}에 안 걸린 절차가 실렸다`);
+    for (const event of eventsInTable())
+      if (!hooked.has(event))
+        assert.ok(
+          !m.culture.includes(`### ${event} —`),
+          `${m.ym}에 안 걸린 ${event}가 실렸다`,
+        );
+  }
+});
+
+// ── 달력에서 걸리는 명절 ───────────────────────────────────────────────────
+
+test("아무것도 안 걸린 캐릭터도 추석이 든 달에는 명절 절차를 받는다", () => {
+  // 명절은 아크에도 진행 중인 일에도 안 적히는 일이라, 달력을 재료에 안 넣으면 추석 당일에도
+  // 캐릭터가 평소처럼 출근한다(이슈 #415).
+  const sep = rhythmMaterial(plainChar, "2026-09");
+  assert.ok(sep.culture.includes("### 명절 — 본인"), "9월에 명절이 안 걸렸다");
+  assert.ok(sep.culture.includes("승차권"), "명절 단계가 안 실렸다");
+
+  const feb = rhythmMaterial(plainChar, "2026-02");
+  assert.ok(feb.culture.includes("### 명절 — 본인"), "설날이 안 걸렸다");
+});
+
+test("공휴일이 명절이 아니면 절차가 걸리지 않는다", () => {
+  // 한글날·개천절은 절차가 있는 일이 아니다. 공휴일이라는 이유만으로 걸리면 안 된다.
+  assert.equal(rhythmMaterial(plainChar, "2026-10").culture, "");
+  assert.equal(rhythmMaterial(plainChar, "2026-11").culture, "");
 });
 
 test("번호 붙은 진행 중인 일은 상대가 모르는 것까지 담는다", () => {

@@ -11,6 +11,8 @@ import {
   clockLabel,
   dayLabel,
   dayLabelOf,
+  holidayGapYear,
+  holidaysInMonth,
   kstLogicalClock,
   kstLogicalDate,
   kstVerbalTime,
@@ -41,10 +43,20 @@ const BEFORE_BOUNDARY = `${hh(DAY_BOUNDARY_HOUR - 1)}:59`;
 
 // ── dayLabel · dayLabelOf ─────────────────────────────────────────────
 
-test("공휴일은 요일과 상관없이 공휴일이다", () => {
+test("공휴일은 요일과 상관없이 공휴일이고 이름이 함께 붙는다", () => {
   // 2026-10-09 한글날은 금요일이다 — 평일 판정보다 공휴일이 앞선다.
-  assert.equal(dayLabel(new Date("2026-10-09T00:00:00Z")), "공휴일(휴무)");
-  assert.equal(dayLabelOf("2026-10-09"), "공휴일(휴무)");
+  assert.equal(dayLabel(new Date("2026-10-09T00:00:00Z")), "한글날(휴무)");
+  assert.equal(dayLabelOf("2026-10-09"), "한글날(휴무)");
+});
+
+test("음력 명절과 대체공휴일도 이름표를 받는다", () => {
+  // 이름이 없으면 하루 각본도 월 리듬도 추석을 그냥 쉬는 날로 읽는다(이슈 #415).
+  assert.equal(dayLabelOf("2026-09-24"), "추석 연휴(휴무)");
+  assert.equal(dayLabelOf("2026-09-25"), "추석(휴무)");
+  assert.equal(dayLabelOf("2026-09-26"), "추석 연휴(휴무)");
+  assert.equal(dayLabelOf("2026-02-17"), "설날(휴무)");
+  // 3월 1일이 일요일이라 다음 날이 대체공휴일이다.
+  assert.equal(dayLabelOf("2026-03-02"), "삼일절 대체공휴일(휴무)");
 });
 
 test("토요일과 일요일은 주말이다", () => {
@@ -59,7 +71,24 @@ test("공휴일도 주말도 아니면 평일이다", () => {
 });
 
 test("UTC 필드를 KST 값으로 읽는다 — 밤 늦은 시각도 그날이다", () => {
-  assert.equal(dayLabel(new Date("2026-10-09T23:59:00Z")), "공휴일(휴무)");
+  assert.equal(dayLabel(new Date("2026-10-09T23:59:00Z")), "한글날(휴무)");
+});
+
+// ── holidaysInMonth · holidayGapYear ──────────────────────────────────
+
+test("그 달의 공휴일만 날짜순으로 준다", () => {
+  assert.deepEqual(holidaysInMonth("2026-09"), [
+    { date: "2026-09-24", name: "추석 연휴" },
+    { date: "2026-09-25", name: "추석" },
+    { date: "2026-09-26", name: "추석 연휴" },
+  ]);
+  // 공휴일이 하나도 없는 달은 빈 배열이다 — 월 리듬 재료가 이 값을 그대로 이어 붙인다.
+  assert.deepEqual(holidaysInMonth("2026-11"), []);
+});
+
+test("표가 안 덮은 해는 그 해를 알린다", () => {
+  assert.equal(holidayGapYear("2026-09"), null);
+  assert.equal(holidayGapYear("2027-02"), "2027");
 });
 
 // ── workdayContext ────────────────────────────────────────────────────
@@ -71,7 +100,7 @@ test("오늘과 내일의 요일 표기를 한 줄로 준다", () => {
   );
   assert.equal(
     atKst("2026-10-08", "22:00", workdayContext),
-    "오늘은 평일, 내일은 공휴일(휴무)",
+    "오늘은 평일, 내일은 한글날(휴무)",
   );
 });
 
