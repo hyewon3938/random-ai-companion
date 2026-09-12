@@ -23,3 +23,4 @@
 | [0015](0015-relationship-stages-and-firsts.md) | 관계를 내부 단계 4개로 두고 유저에게 보이지 않게 올리기 | Accepted |
 | [0016](0016-affection-contact-grounded-in-intent.md) | 애정 연락의 근거를 관계 의도로 옮기고 근거 없는 연락 금지를 없애기 | Accepted |
 | [0017](0017-reaction-score-per-user.md) | 반응 점수를 유저 단위로 두고 프롬프트에 숫자를 넣지 않기 | Accepted |
+| [0018](0018-holiday-calendar-as-rhythm-material.md) | 공휴일을 이름까지 적은 표로 두고 월 리듬 재료에 넣기 | Accepted |
