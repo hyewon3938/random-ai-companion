@@ -147,7 +147,7 @@ export interface CallContext {
     /** 오늘의 관계 의도가 정한 시도할 플러팅. 답장이 쓴 것과 나란히 적어 누락을 보인다. */
     todayMove?: string | null;
     move?: Move | null;
-    /** 이 답장이 쓴 의도 줄. 시도할 플러팅은 move 칸이 맡아 여기 오지 않는다. */
+    /** 이 답장이 쓴 의도 줄. 시도할 플러팅은 move 칸이 맡지만 모델이 섞어 보낸 날은 여기에도 온다. */
     intentLines?: IntentLine[];
     first?: { kind: FirstKind; by?: FirstBy; confirmed?: boolean } | null;
   };
