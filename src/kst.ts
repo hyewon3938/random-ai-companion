@@ -99,11 +99,14 @@ export const dayLabel = (d: Date): string => {
   return "평일";
 };
 
-// "YYYY-MM"에 든 공휴일. 월 리듬이 달력만 아는 이벤트를 재료로 쓰는 자리다 — 명절은 아크나
-// 진행 중인 일이 먼저 적어 주지 않아서, 이 목록이 없으면 추석이 든 달에도 명절 절차가 안 걸린다.
+// "YYYY-MM"에 든 공휴일을 날짜순으로. 월 리듬이 달력만 아는 이벤트를 재료로 쓰는 자리다 —
+// 명절은 아크나 진행 중인 일이 먼저 적어 주지 않아서, 이 목록이 없으면 추석이 든 달에도 명절
+// 절차가 안 걸린다. 표에 적힌 차례가 아니라 날짜로 정렬한다 — 손으로 채우는 표라 새 해를
+// 중간에 끼워 넣으면 적힌 차례가 날짜순이 아니게 된다.
 export const holidaysInMonth = (ym: string): { date: string; name: string }[] =>
   Object.entries(KR_HOLIDAYS)
     .filter(([date]) => date.startsWith(`${ym}-`))
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, name]) => ({ date, name }));
 
 // 공휴일 표가 그 달의 해를 안 덮으면 그 해를, 덮으면 null을 준다. 표를 손으로 채우다 보니
@@ -264,8 +267,7 @@ export const contactGapOf = (
   firstUserTs: string,
   minGapMs: number = CONTACT_GAP_NOTICE_MS,
 ): ContactGap | null => {
-  const gap =
-    kstDateOf(firstUserTs).getTime() - kstDateOf(lastCharTs).getTime();
+  const gap = kstDateOf(firstUserTs).getTime() - kstDateOf(lastCharTs).getTime();
   const halves = Math.round(gap / 1_800_000);
   const hours = Math.floor(halves / 2);
   const clock = firstUserTs.slice(11, 16);
@@ -293,7 +295,9 @@ export const contactGapOf = (
 
 // 날짜 문자열을 며칠 옮긴다.
 export const shiftDate = (date: string, days: number): string =>
-  kstDateString(new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000));
+  kstDateString(
+    new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000),
+  );
 
 // 각본 표기 시각을 그 논리일의 벽시계 문자열로 되돌린다. 24시 이상이면 다음 달력일이다.
 export const logicalClockToTs = (date: string, hhmm: string): string => {
