@@ -129,7 +129,10 @@ export const upsertMemoryItem = (w: MemoryWrite): number => {
          last_mentioned_at = excluded.last_mentioned_at,
          end_condition = excluded.end_condition,
          interest = excluded.interest,
-         occurred_on = excluded.occurred_on,
+         -- 있었던 날만 갈아 끼우지 않고 받침을 깐다. 다른 칸은 그 줄을 다시 쓸 때 같이
+         -- 바뀌는 값이지만, 그 일이 실제로 있었던 날은 줄을 고쳐도 그대로다. 값만 새로
+         -- 적는 자리(새벽 정리의 진행 반영)가 이 칸을 안 넘겨도 전에 적힌 날이 남는다.
+         occurred_on = COALESCE(excluded.occurred_on, occurred_on),
          updated_at = excluded.updated_at
        RETURNING id`,
     )

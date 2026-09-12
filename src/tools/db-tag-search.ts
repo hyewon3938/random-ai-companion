@@ -30,6 +30,7 @@ import {
   UPCOMING_SCHEDULE_MAX,
 } from "../thresholds.js";
 import { kstDateString, shiftDate } from "../kst.js";
+import { MEMORY_ITEM_TYPE_NAME } from "../labels.js";
 import type { MemoryRow, ScheduleStateRow } from "../db.js";
 
 export interface CharacterBrief {
@@ -321,7 +322,9 @@ export const runTagSearch = (
     memories: picked.map((r) => ({
       hits: hitCount.get("memory")?.get(r.id) ?? 0,
       tags: memTags.get(r.id) ?? [],
-      label: memoryKeyOf(r),
+      // 화면에는 저장 항목을 앞에 붙인다 — 프롬프트는 항목마다 절이 갈리지만 이 화면은
+      // 한 목록에 섞어 보여줘서, 이름만 두면 항목만 다른 두 행이 같은 글자가 된다.
+      label: `${MEMORY_ITEM_TYPE_NAME[r.item_type]} · ${memoryKeyOf(r)}`,
       detail: r.value,
     })),
     diaries: oldDiaries.map((d) => ({

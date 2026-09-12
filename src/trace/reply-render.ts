@@ -430,7 +430,9 @@ const searchLines = (ctx: CallContext): string[] => {
     );
   const upcoming = s.upcoming ?? [];
   return [
-    `*검색* ${esc(bits.join(" · "))}`,
+    // 토막을 가르는 글자는 기억 이름 안의 ' · '와 달라야 한다 — 같은 글자로 이으면
+    // '상대 · 가족 · 어머니 · 주제로 걸린 일정'에서 이름이 어디서 끝나는지 안 보인다.
+    `*검색* ${esc(bits.join(" | "))}`,
     // 0건도 적는다 — 줄이 사라지면 앞일이 없는 날인지 기록이 안 된 것인지 구별되지 않는다.
     `*참고한 일정* ${
       upcoming.length

@@ -324,3 +324,23 @@ test("참고한 일정 줄은 검색으로 걸린 일정과 갈라 적고 앞일
   const none = renderReply(row(), { search: { tags: [], tagPool: 0 } });
   assert.ok(none.includes("*참고한 일정* 0건"));
 });
+
+test("검색 줄의 토막은 기억 이름 안의 구분자와 다른 글자로 이어진다", () => {
+  const line = renderReply(row(), {
+    search: {
+      tags: ["가족"],
+      tagPool: 3,
+      memories: ["상대 · 가족 · 어머니", "너 · 건강 · 운동"],
+      schedules: ["2026-08-20 건강검진"],
+    },
+  })
+    .split("\n")
+    .find((l) => l.startsWith("*검색*"));
+  // 이름 끝과 다음 토막의 시작이 같은 글자로 붙으면 어디까지가 이름인지 안 보인다.
+  assert.ok(
+    line?.includes("너 · 건강 · 운동 | 주제로 걸린 일정"),
+    `토막 경계가 안 보인다: ${line}`,
+  );
+  // 이름 자체는 프롬프트 줄과 같은 글자로 남는다.
+  assert.ok(line?.includes("기억 2건 — 상대 · 가족 · 어머니 / 너 · 건강 · 운동"));
+});

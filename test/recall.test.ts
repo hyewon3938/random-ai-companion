@@ -266,6 +266,26 @@ test("있었던 날이 있으면 갱신 날짜와 갈라 적고 같은 날이면
   );
 });
 
+test("해가 다른 날은 해까지 적고 월·일이 같아도 접지 않는다", () => {
+  const base = {
+    item_type: "fact" as const,
+    owner: "user" as const,
+    area: "일",
+    subject: "이직",
+    value: "이직했다",
+    updated_at: "2026-09-12 12:00:00",
+  };
+  // 월·일이 갱신 날짜와 같은 작년 일 — 해를 버리면 오늘 있었던 일과 같은 글자가 된다.
+  assert.equal(
+    memoryLine(row(4, { ...base, occurred_on: "2025-09-12" })),
+    "- 일 · 이직: 이직했다 (2025년 9/12에 있었던 일 · 9/12 갱신)",
+  );
+  assert.equal(
+    memoryLine(row(5, { ...base, occurred_on: "2020-02-15" })),
+    "- 일 · 이직: 이직했다 (2020년 2/15에 있었던 일 · 9/12 갱신)",
+  );
+});
+
 test("옛 일기 절은 날짜와 본문을 한 줄씩 잇고 없으면 빈 문자열이다", () => {
   assert.equal(oldDiarySection([]), "");
   assert.equal(

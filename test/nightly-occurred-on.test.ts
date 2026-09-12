@@ -117,3 +117,40 @@ test("있었던 날을 한 번도 안 적은 기억은 비어 있다", () => {
     null,
   );
 });
+
+// 진행 반영은 캐릭터 쪽 진행 중인 일의 값만 새로 적는 자리라, 그 행의 나머지 값을 읽어서 그대로
+// 다시 넘긴다. 있었던 날도 그 대상이다 — 안 넘기면 저장이 빈 값으로 갈아 끼운다.
+test("진행 반영이 값만 새로 적어도 있었던 날은 남는다", () => {
+  const g = gatherNightlyInput(character, DAY(5));
+  applyNightlyOutput(g, {
+    entry,
+    extract: {
+      memories: [
+        {
+          item_type: "ongoing" as const,
+          owner: "char" as const,
+          area: "일",
+          subject: "이직 준비",
+          value: "면접을 봤다",
+          occurred_on: "2026-09-08",
+        },
+      ],
+      schedules: [],
+    },
+  });
+  const before = listMemoryItems(character.id).find(
+    (r) => r.subject === "이직 준비",
+  );
+  assert.equal(before?.occurred_on, "2026-09-08");
+
+  const g2 = gatherNightlyInput(character, DAY(6));
+  applyNightlyOutput(g2, {
+    entry,
+    progress: [{ id: before!.id, value: "결과를 기다리고 있다" }],
+  });
+  const after = listMemoryItems(character.id).find(
+    (r) => r.subject === "이직 준비",
+  );
+  assert.equal(after?.value, "결과를 기다리고 있다");
+  assert.equal(after?.occurred_on, "2026-09-08");
+});

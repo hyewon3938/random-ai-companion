@@ -770,8 +770,10 @@ const applyNightlyTxn = db.transaction(
           lastMentionedAt: m.item_type === "person" ? g.diaryDate : undefined,
           endCondition: m.end_condition ?? prev?.end_condition ?? undefined,
           interest: m.interest ?? prev?.interest ?? undefined,
-          // 있었던 날은 한 번 정해지면 바뀌지 않는다 — 이번 추출이 안 적었으면 전에 적힌 날을 지킨다.
-          occurredOn: m.occurred_on ?? prev?.occurred_on ?? undefined,
+          // 있었던 날은 한 번 정해지면 바뀌지 않는다. 이번 추출이 안 적었으면 저장 쪽이
+          // 전에 적힌 날을 지킨다(db/memory-items.ts의 upsertMemoryItem) — 여기서 받침을
+          // 깔면 같은 규칙이 두 자리에 생긴다.
+          occurredOn: m.occurred_on,
         });
         memCount++;
         if (m.owner === "char")

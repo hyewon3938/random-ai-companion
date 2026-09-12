@@ -171,17 +171,26 @@ const dayLabel = (updatedAt: string): string => {
   return y && m && d ? `${Number(m)}/${Number(d)}` : updatedAt.slice(0, 10);
 };
 
+// 그 일이 있었던 날 — 갱신 날짜와 해가 다르면 해까지 적는다. 갱신 날짜는 언제나 최근이라
+// 해를 버려도 되지만, 있었던 날은 몇 해 전일 수 있다. 해를 버리면 작년 9/12가 올해 9/12와
+// 같은 글자가 되고, 그 줄은 오늘 있었던 일로 읽힌다.
+const occurredLabel = (occurredOn: string, updatedAt: string): string =>
+  occurredOn.slice(0, 4) === updatedAt.slice(0, 4)
+    ? dayLabel(occurredOn)
+    : `${occurredOn.slice(0, 4)}년 ${dayLabel(occurredOn)}`;
+
 // 줄 끝 괄호 — 그 일이 있었던 날과 줄을 마지막으로 고친 날을 갈라 적는다.
 //
 // 갱신 날짜만 적으면 며칠 전 일을 오늘 다시 말했을 때 날짜가 오늘로 바뀌어 방금 있었던 일로
 // 읽힌다(이슈 #388). 둘이 같은 날이면 갱신을 접는다 — 같은 날짜를 두 번 적는 줄이 되고,
-// 그 줄에서 갱신 날짜가 더 알려주는 것이 없다. 있었던 날을 모르면 예전처럼 갱신만 적고,
-// 시기를 단정하지 말라는 것은 절 끝 규칙이 맡는다.
+// 그 줄에서 갱신 날짜가 더 알려주는 것이 없다. 접을지는 이름표가 아니라 날짜 자체로 가른다:
+// 이름표로 가르면 해만 다른 두 날이 같은 줄로 접힌다. 있었던 날을 모르면 예전처럼 갱신만
+// 적고, 시기를 단정하지 말라는 것은 절 끝 규칙이 맡는다.
 const dateNote = (r: MemoryRow): string => {
   const updated = dayLabel(r.updated_at);
   if (!r.occurred_on) return `${updated} 갱신`;
-  const occurred = dayLabel(r.occurred_on);
-  return occurred === updated
+  const occurred = occurredLabel(r.occurred_on, r.updated_at);
+  return r.occurred_on.slice(0, 10) === r.updated_at.slice(0, 10)
     ? `${occurred}에 있었던 일`
     : `${occurred}에 있었던 일 · ${updated} 갱신`;
 };
