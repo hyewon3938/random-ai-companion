@@ -11,10 +11,11 @@
 //            "arcs": {...}|null, "rhythm": [...]|null,
 //            "work_facts": [{"title","summary","scenes":[...],"differences"?}]|null}}
 // 사용: cat out.json | docker exec -i random-ai-companion npx tsx src/tools/nightly-write.ts
+// 반영하면서 모델을 한 번 부른다 — 새로 붙일 태그 이름을 이미 쓰는 이름과 대조하는 자리다(#142).
 import { getCharacterById } from "../db.js";
 import {
   gatherNightlyInput,
-  applyNightlyOutput,
+  applyNightlyWithCanon,
   type NightlyOutput,
 } from "../nightly.js";
 
@@ -31,5 +32,5 @@ if (!row) {
   console.log(`error: character ${input.characterId} not found`);
 } else {
   const g = gatherNightlyInput(row);
-  console.log(applyNightlyOutput(g, input.output));
+  console.log(await applyNightlyWithCanon(g, input.output));
 }

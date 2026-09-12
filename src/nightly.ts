@@ -1,7 +1,8 @@
 // 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 //
 // gather와 apply를 나눠 둬서, 봇 밖 스케줄러(tools/nightly-read·write)와 봇 안 폴백 크론
-// (05:40)이 같은 함수를 쓴다. 기본 경로는 밖이라 봇은 API를 쓰지 않는다.
+// (05:40)이 같은 함수를 쓴다. 기본 경로는 밖이라 일기·기억·각본을 만드는 호출은 봇이 하지
+// 않고, 반영할 때 태그 이름 판정으로 한 번만 부른다.
 //
 // 하는 일 — 일기 쓰기, 기억 정리, 다음 날 각본, 월 리듬(rhythmNeeded 신호가 오면),
 // 아크 이어쓰기(arcs.ts가 달력 경계에서 정한다), 내일 선톡 문안 준비.
@@ -10,6 +11,11 @@
 //
 // 일기에는 기억과 같은 어휘의 주제 태그를 최대 8개 붙인다. 생성 프롬프트에 이미 쓰는 태그
 // 목록을 넣어서, 지난 일기도 같은 태그로 걸린다.
+//
+// 그렇게 만든 태그 이름은 저장 직전에 한 번 더 이미 쓰는 이름과 대조한다(이슈 #142). 판정 표는
+// tag-canon.ts가 모델에게 물어 만들고, applyNightlyWithCanon이 그 표를 받아 일기·기억·일정
+// 세 자리에 같은 이름으로 넘긴다. 표를 안 넘기면 후보가 적힌 대로 등록되므로, 모델을 부르지
+// 않는 검사와 폴백 경로도 그대로 돌아간다.
 //
 // 기억 정리 프롬프트에는 이미 있는 키 목록과 함께, 그날 대화·메모에 태그가 걸린 상대 쪽 사실의
 // 지금 값도 싣는다. 캐릭터 쪽 사실·인물·진행 중인 일은 값까지 다 실리는데 상대 쪽 사실은 키만
@@ -90,6 +96,7 @@ import {
   normalizePlan,
   planOngoingLines,
 } from "./day-plan.js";
+import { canonTags, resolveTagCanon, type TagCanon } from "./tag-canon.js";
 import {
   saveMemory,
   moveMemory,
@@ -704,7 +711,7 @@ export const gatherNightlyInput = (
 // 영구히 빠진다 — 전부 반영되거나 전부 롤백되어 재실행이 항상 안전하게.
 // (saveMemory 내부의 태그 트랜잭션은 better-sqlite3가 세이브포인트로 중첩 처리한다.)
 const applyNightlyTxn = db.transaction(
-  (g: NightlyGathered, out: NightlyOutput): string => {
+  (g: NightlyGathered, out: NightlyOutput, canon: TagCanon): string => {
     const ts = kstStamp();
 
     if (hasDiaryOn(g.characterId, g.diaryDate))
@@ -717,7 +724,7 @@ const applyNightlyTxn = db.transaction(
     );
     // 일기도 기억과 같은 태그로 찾는다 — 이 줄이 없으면 옛 일기를 태그로 꺼내는
     // 경로(context.ts)가 늘 빈손으로 돌아온다.
-    const diaryTagList = diaryTags(out.entry);
+    const diaryTagList = canonTags(canon, diaryTags(out.entry));
     if (diaryTagList.length)
       setTags(g.characterId, "diary", diaryId, diaryTagList);
 
@@ -774,6 +781,7 @@ const applyNightlyTxn = db.transaction(
           // 전에 적힌 날을 지킨다(db/memory-items.ts의 upsertMemoryItem) — 여기서 받침을
           // 깔면 같은 규칙이 두 자리에 생긴다.
           occurredOn: m.occurred_on,
+          canon,
         });
         memCount++;
         if (m.owner === "char")
@@ -849,7 +857,7 @@ const applyNightlyTxn = db.transaction(
             "conversation",
             s.user_knows === "known" ? "known" : "unknown",
           );
-          const schedTagList = cleanTags(s.tags);
+          const schedTagList = canonTags(canon, cleanTags(s.tags));
           if (schedTagList.length)
             setTags(g.characterId, "schedule", schedId, schedTagList);
           schedTagCount += schedTagList.length;
@@ -1028,7 +1036,7 @@ const applyNightlyTxn = db.transaction(
       (relNow.user_state_since ?? "") < `${nextDate(g.diaryDate)} 05:00:00`;
     if (stateCleared) setUserState(g.characterId, null);
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.advanceRejected ? `, 단계 전이 건너뜀(${rel.advanceRejected})` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${workFactCount ? ` + 작품 카드 ${workFactCount}건` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${canon.size ? `, 새 태그 이름 ${canon.size}개는 기존 이름으로` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.advanceRejected ? `, 단계 전이 건너뜀(${rel.advanceRejected})` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${workFactCount ? ` + 작품 카드 ${workFactCount}건` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 
@@ -1039,11 +1047,49 @@ const applyNightlyTxn = db.transaction(
 export const applyNightlyOutput = (
   g: NightlyGathered,
   out: NightlyOutput,
+  canon: TagCanon = new Map(),
 ): string => {
   const snap = beforeNightlyTrace(g, out);
-  const result = applyNightlyTxn(g, out);
+  const result = applyNightlyTxn(g, out, canon);
   afterNightlyTrace(g, out, snap, result);
   return result;
+};
+
+/**
+ * 이번 회차가 붙일 태그 이름 후보 전부 — 기억(키의 두 낱말과 태그), 일기, 일정에서 모은다.
+ *
+ * 세 종류가 이름 공간을 함께 쓰므로 한 번에 모아 한 번만 묻는다. 저장 쪽에서 걸러질 줄
+ * (키가 규칙에 안 맞거나 이미 있는 일정)의 후보가 섞일 수 있는데, 판정만 받고 안 쓰이므로
+ * 저장되는 이름은 달라지지 않는다.
+ */
+export const nightlyTagCandidates = (out: NightlyOutput): string[] => {
+  const names = [...diaryTags(out.entry)];
+  for (const m of out.extract?.memories ?? []) {
+    if (!m.value?.trim() || !m.area || !m.subject) continue;
+    names.push(m.area, m.subject, ...cleanTags(m.tags));
+  }
+  for (const s of out.extract?.schedules ?? [])
+    if (s.date && s.content) names.push(...cleanTags(s.tags));
+  return names;
+};
+
+/**
+ * 태그 이름 판정을 받아 반영까지 한 번에 — 밖에서 부르는 두 경로(tools/nightly-write, 폴백
+ * 크론)가 이 함수를 쓴다.
+ *
+ * 판정은 모델 호출이고 반영은 트랜잭션 하나라 두 자리를 나눠 둔다. applyNightlyOutput을
+ * 그대로 부르면 판정 없이 후보 이름이 저장된다 — 검사처럼 모델을 부르지 않는 자리만 그렇게 쓴다.
+ */
+export const applyNightlyWithCanon = async (
+  g: NightlyGathered,
+  out: NightlyOutput,
+): Promise<string> => {
+  // 이미 일기가 있는 날짜면 반영이 통째로 건너뛰므로 판정도 부르지 않는다 — 같은 날짜를 두 번
+  // 돌리는 경로(백필, 실패 뒤 재실행)가 아무것도 안 저장하면서 호출만 하나 쓰는 것을 막는다.
+  const canon = hasDiaryOn(g.characterId, g.diaryDate)
+    ? new Map<string, string>()
+    : await resolveTagCanon(g.characterId, nightlyTagCandidates(out));
+  return applyNightlyOutput(g, out, canon);
 };
 
 // 최근 결번 날짜들: 원시 대화는 있는데 일기가 안 써진 날(오래된 순, '어제' 포함).
@@ -1309,7 +1355,7 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
       };
       backfilled += 1;
       console.log(
-        `[nightly] 백필 ${applyNightlyOutput(bg, { entry, extract: backfillExtract })}`,
+        `[nightly] 백필 ${await applyNightlyWithCanon(bg, { entry, extract: backfillExtract })}`,
       );
     } catch (e) {
       // 백필 하루 실패가 오늘(어제 일기) 처리까지 막지 않게 — 다음 새벽에 같은 날짜를 재시도한다
@@ -1397,12 +1443,12 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
         null,
         extract?.relation?.intent ?? null,
       );
-    return `${applyNightlyOutput(g, { entry, extract, progress, send })} (침묵 ${g.silenceDays}일 — ${plan.reason})`;
+    return `${await applyNightlyWithCanon(g, { entry, extract, progress, send })} (침묵 ${g.silenceDays}일 — ${plan.reason})`;
   }
   // 재연결 단계: 아침 인사 대신 저녁 안부 1통만 준비한다
   if (g.silenceTier === "checkin") {
     send = await draftReconnect(g);
-    return applyNightlyOutput(g, { entry, extract, progress, send });
+    return applyNightlyWithCanon(g, { entry, extract, progress, send });
   }
 
   // 오늘 각본을 먼저 만들고, 아침 선톡의 발송 시점을 그 각본의 삶(기상·첫 일과)과 연동한다.
@@ -1423,6 +1469,11 @@ export const runNightly = async (character: CharacterRow): Promise<string> => {
       extract?.relation?.intent ?? null,
     );
 
-  const result = applyNightlyOutput(g, { entry, extract, progress, send });
+  const result = await applyNightlyWithCanon(g, {
+    entry,
+    extract,
+    progress,
+    send,
+  });
   return result;
 };
