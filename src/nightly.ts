@@ -192,6 +192,8 @@ export interface MemoryExtract {
   region?: string;
   end_condition?: string;
   interest?: Interest;
+  // 그 값이 가리키는 일이 실제로 있었던 날(YYYY-MM-DD). 언제인지 모르면 안 적는다.
+  occurred_on?: string;
 }
 
 // 관계 갱신분 — 넣은 항목만 갱신된다. 여기 없는 세 항목(stage·speech_level·address_terms)은
@@ -768,6 +770,8 @@ const applyNightlyTxn = db.transaction(
           lastMentionedAt: m.item_type === "person" ? g.diaryDate : undefined,
           endCondition: m.end_condition ?? prev?.end_condition ?? undefined,
           interest: m.interest ?? prev?.interest ?? undefined,
+          // 있었던 날은 한 번 정해지면 바뀌지 않는다 — 이번 추출이 안 적었으면 전에 적힌 날을 지킨다.
+          occurredOn: m.occurred_on ?? prev?.occurred_on ?? undefined,
         });
         memCount++;
         if (m.owner === "char")

@@ -221,6 +221,7 @@ export const composeReply = async (
     memories: [],
     oldDiaries: [],
     schedules: [],
+    upcoming: [],
     dropped: [],
   };
   // 상대 상태 판정은 검색 태그와 나란히 돈다 — 둘 다 짧은 호출이고 서로 모른다. 바뀐 값은

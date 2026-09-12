@@ -300,3 +300,27 @@ test("바뀐 절은 대괄호 제목으로 세고 넷부터는 줄여 적는다"
   assert.equal(changeLabel(["가", "나"], 0), "가 · 나");
   assert.equal(changeLabel(["가", "나", "다", "라", "마"], 1), "가 · 나 · 다 외 2곳");
 });
+
+test("참고한 일정 줄은 검색으로 걸린 일정과 갈라 적고 앞일이 없으면 0건이다", () => {
+  const withUpcoming = renderReply(row(), {
+    search: {
+      tags: ["일"],
+      tagPool: 3,
+      memories: ["상대 · 일 · 프로젝트"],
+      schedules: ["2026-08-20 건강검진"],
+      upcoming: ["너 2026-09-13 14:00 치과", "상대 2026-09-15 발표"],
+    },
+  });
+  // 기억 이름은 프롬프트 줄과 같은 글자다 — 이 글자로 스레드를 검색해 찾는다(#397).
+  assert.ok(withUpcoming.includes("기억 1건 — 상대 · 일 · 프로젝트"));
+  assert.ok(withUpcoming.includes("주제로 걸린 일정 2026-08-20 건강검진"));
+  assert.ok(
+    withUpcoming.includes(
+      "*참고한 일정* 2건 — 너 2026-09-13 14:00 치과 / 상대 2026-09-15 발표",
+    ),
+  );
+
+  // 앞일이 없는 날에도 줄이 남는다 — 줄이 사라지면 기록이 안 된 것과 구별되지 않는다.
+  const none = renderReply(row(), { search: { tags: [], tagPool: 0 } });
+  assert.ok(none.includes("*참고한 일정* 0건"));
+});

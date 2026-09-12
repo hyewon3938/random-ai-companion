@@ -86,6 +86,13 @@ const memoryExtras = {
     `SELECT COUNT(*) AS n FROM memory_items WHERE item_type = 'ongoing' AND end_condition IS NOT NULL`,
   ),
   retrieved: count(`SELECT COUNT(*) AS n FROM memory_items WHERE retrieval_count > 0`),
+  // 있었던 날 — 대화로 쌓인 행만 센다. 생성 때 정한 행은 그 일이 있었던 날이 없다.
+  fromConvo: count(
+    `SELECT COUNT(*) AS n FROM memory_items WHERE origin = 'conversation'`,
+  ),
+  occurredFilled: count(
+    `SELECT COUNT(*) AS n FROM memory_items WHERE origin = 'conversation' AND occurred_on IS NOT NULL`,
+  ),
   untagged: count(
     `SELECT COUNT(*) AS n FROM memory_items m
      WHERE NOT EXISTS (SELECT 1 FROM tags t WHERE t.kind = 'memory' AND t.ref_id = m.id)`,
@@ -362,6 +369,9 @@ line(
 );
 line(
   `  기간 안 인물 등장 갱신 ${memoryExtras.personMentioned}건 · 검색된 적 있는 기억 ${memoryExtras.retrieved}건 · 태그 없는 기억 ${memoryExtras.untagged}건`,
+);
+line(
+  `  있었던 날이 찬 기억 ${memoryExtras.occurredFilled}/${memoryExtras.fromConvo}건 (대화로 쌓인 행 기준)`,
 );
 if (memoryRecent.length === 0) line("  기간 안에 대화로 저장된 기억 없음");
 for (const r of memoryRecent) {

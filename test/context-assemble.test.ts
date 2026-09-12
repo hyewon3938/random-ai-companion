@@ -51,6 +51,7 @@ const identityRow = (id: number, subject: string, value: string): MemoryRow => (
   last_mentioned_at: null,
   end_condition: null,
   interest: null,
+  occurred_on: null,
   last_retrieved_at: null,
   retrieval_count: 0,
   updated_at: "2026-08-30 12:00:00",

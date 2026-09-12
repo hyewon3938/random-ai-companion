@@ -38,6 +38,7 @@ const row = (id: number, over: Partial<MemoryRow> = {}): MemoryRow => ({
   last_mentioned_at: null,
   end_condition: null,
   interest: null,
+  occurred_on: null,
   last_retrieved_at: null,
   retrieval_count: 0,
   updated_at: "2026-09-01 12:00:00",
@@ -120,7 +121,7 @@ test("항목별 상한을 넘긴 후보는 빠지고 그 키가 dropped에 적�
     pickMemories(ongoing, { dropped }).map((r) => r.id),
     [4, 3, 2],
   );
-  assert.deepEqual(dropped, ["ongoing/user 일/작업1"]);
+  assert.deepEqual(dropped, ["상대 · 일 · 작업1"]);
 
   const droppedTight: string[] = [];
   assert.deepEqual(
@@ -131,9 +132,9 @@ test("항목별 상한을 넘긴 후보는 빠지고 그 키가 dropped에 적�
     [4],
   );
   assert.deepEqual(droppedTight, [
-    "ongoing/user 일/작업3",
-    "ongoing/user 일/작업2",
-    "ongoing/user 일/작업1",
+    "상대 · 일 · 작업3",
+    "상대 · 일 · 작업2",
+    "상대 · 일 · 작업1",
   ]);
 });
 
@@ -170,7 +171,9 @@ test("itemTypes를 주면 그 항목만 고르고 다른 항목은 dropped에도
     pickMemories(candidates, { itemTypes: ["fact"] }).map((r) => r.id),
     [7],
   );
-  assert.equal(memoryKeyOf(candidates[6]), "fact/user 일/프로젝트");
+  // 프롬프트 줄의 앞부분과 같은 글자다 — 이 글자로 스레드를 검색해 그 기억을 찾는다(#397).
+  assert.equal(memoryKeyOf(candidates[6]), "상대 · 일 · 프로젝트");
+  assert.ok(memoryBlock([candidates[6]]).includes(memoryKeyOf(candidates[6])));
 });
 
 test("두 글자 이상 태그는 글자 포함으로 맞추고 한 글자 태그는 어절로만 맞춘다", () => {
@@ -226,9 +229,40 @@ test("기억 줄은 영역·무엇·값과 갱신 날짜를 적고 검색 블록
     ].join("\n\n"),
   );
   assert.equal(memorySection([]), "");
+  const section = memorySection([ongoing]);
+  assert.ok(
+    section.startsWith(
+      "[지금 얘기와 관련해 기억나는 것]\n[진행 중인 일]\n- 너 · 일 · 이직 준비: 면접 앞둠 (9/1 갱신)\n",
+    ),
+  );
+  // 절 끝에 두 날짜를 어떻게 읽는지 이르는 줄이 붙는다 — 시점이 빈 줄에서 아까·방금으로
+  // 단정하지 않게 하는 자리다(#388).
+  assert.ok(section.includes("'있었던 일'이 없는 줄은 언제 일인지 모르는 것이니"));
+});
+
+test("있었던 날이 있으면 갱신 날짜와 갈라 적고 같은 날이면 한 번만 적는다", () => {
+  const base = {
+    item_type: "ongoing" as const,
+    owner: "char" as const,
+    area: "일",
+    subject: "이직 준비",
+    value: "면접 앞둠",
+    updated_at: "2026-09-12 12:00:00",
+  };
+  // 며칠 전 일을 오늘 다시 말해 갱신된 줄 — 있었던 날이 남아야 방금 일로 읽히지 않는다.
   assert.equal(
-    memorySection([ongoing]),
-    "[지금 얘기와 관련해 기억나는 것]\n[진행 중인 일]\n- 너 · 일 · 이직 준비: 면접 앞둠 (9/1 갱신)",
+    memoryLine(row(1, { ...base, occurred_on: "2026-09-10" })),
+    "- 일 · 이직 준비: 면접 앞둠 (9/10에 있었던 일 · 9/12 갱신)",
+  );
+  // 있었던 날과 고친 날이 같으면 같은 날짜를 두 번 적지 않는다.
+  assert.equal(
+    memoryLine(row(2, { ...base, occurred_on: "2026-09-12" })),
+    "- 일 · 이직 준비: 면접 앞둠 (9/12에 있었던 일)",
+  );
+  // 모르면 비워 두고 예전처럼 갱신 날짜만 적는다.
+  assert.equal(
+    memoryLine(row(3, { ...base, occurred_on: null })),
+    "- 일 · 이직 준비: 면접 앞둠 (9/12 갱신)",
   );
 });
 

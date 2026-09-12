@@ -87,7 +87,7 @@ const { db, openFeedback, feedbackByIds, resolveFeedback } =
   await import("../src/db.js");
 
 test("v11 DB가 지금 스키마 버전까지 올라간다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 13);
+  assert.equal(db.pragma("user_version", { simple: true }), 14);
 });
 
 test("이미 쌓인 표시는 그대로 남고 처리 여부 세 칸이 붙는다", () => {

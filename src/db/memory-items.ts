@@ -33,6 +33,8 @@ export interface MemoryRow {
   last_mentioned_at: string | null;
   end_condition: string | null;
   interest: Interest | null;
+  /** 그 값이 가리키는 일이 실제로 있었던 날(YYYY-MM-DD). 언제인지 모르면 null이다. */
+  occurred_on: string | null;
   last_retrieved_at: string | null;
   retrieval_count: number;
   updated_at: string;
@@ -52,6 +54,7 @@ export interface MemoryWrite {
   lastMentionedAt?: string | null;
   endCondition?: string | null;
   interest?: Interest | null;
+  occurredOn?: string | null;
   updatedAt: string;
 }
 
@@ -72,7 +75,7 @@ const fitToItem = (w: MemoryWrite) => {
 };
 
 const MEMORY_COLUMNS = `character_id, item_type, owner, area, subject, value, origin, user_knows,
-   relation, contact_mode, region, last_mentioned_at, end_condition, interest, updated_at`;
+   relation, contact_mode, region, last_mentioned_at, end_condition, interest, occurred_on, updated_at`;
 
 const memoryValues = (w: MemoryWrite, origin: MemoryOrigin): unknown[] => {
   const f = fitToItem(w);
@@ -91,6 +94,7 @@ const memoryValues = (w: MemoryWrite, origin: MemoryOrigin): unknown[] => {
     f.lastMentionedAt,
     f.endCondition,
     f.interest,
+    w.occurredOn ?? null,
     w.updatedAt,
   ];
 };
@@ -115,7 +119,7 @@ export const upsertMemoryItem = (w: MemoryWrite): number => {
   const r = db
     .prepare(
       `INSERT INTO memory_items (${MEMORY_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (character_id, item_type, owner, area, subject, origin) DO UPDATE SET
          value = excluded.value,
          user_knows = excluded.user_knows,
@@ -125,6 +129,7 @@ export const upsertMemoryItem = (w: MemoryWrite): number => {
          last_mentioned_at = excluded.last_mentioned_at,
          end_condition = excluded.end_condition,
          interest = excluded.interest,
+         occurred_on = excluded.occurred_on,
          updated_at = excluded.updated_at
        RETURNING id`,
     )
@@ -139,7 +144,7 @@ export const insertCreationMemory = (w: MemoryWrite): number => {
   const r = db
     .prepare(
       `INSERT OR IGNORE INTO memory_items (${MEMORY_COLUMNS})
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING id`,
     )
     .get(...memoryValues(w, "creation")) as { id: number } | undefined;
@@ -203,6 +208,7 @@ export const moveMemoryItemType = (
     lastMentionedAt: cur.last_mentioned_at,
     endCondition: cur.end_condition,
     interest: cur.interest,
+    occurredOn: cur.occurred_on,
     updatedAt,
   });
   if (moved === id) return moved;

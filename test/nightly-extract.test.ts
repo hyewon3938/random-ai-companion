@@ -118,6 +118,16 @@ test("합치기·사건 날짜·장면 배제 규칙이 프롬프트에 있다",
   );
 });
 
+test("있었던 날 규칙이 프롬프트의 JSON 꼴과 규칙 줄에 함께 있다", () => {
+  // 기억 줄이 갱신 날짜와 그 일이 있었던 날을 갈라 적으려면 추출이 그 날을 적어야 한다(#388).
+  assert.match(prompt, /"occurred_on":"YYYY-MM-DD — 그 일이 있었던 날/);
+  assert.match(
+    prompt,
+    new RegExp(`- occurred_on: 값이 가리키는 일이 있었던 날\. 오늘 있었던 일이면 ${DIARY_DATE}`),
+  );
+  assert.match(prompt, /어림으로 채운 날짜는 비워 두는 것보다 나쁘다/);
+});
+
 test("겹치는 태그가 없으면 빈 절로 남는다", () => {
   assert.deepEqual(touchedUserFactLines(character.id, "오늘 날씨 좋다"), []);
   const quiet = gatherNightlyInput(character, "2026-09-01");

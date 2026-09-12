@@ -103,7 +103,22 @@ export interface MemoryInput {
   endCondition?: string | null;
   /** 유저가 이 주제에 보이는 관심 수준. 캐릭터 쪽 기억에만 쓴다. */
   interest?: Interest | null;
+  /** 그 값이 가리키는 일이 실제로 있었던 날. YYYY-MM-DD가 아니면 비워 둔다. */
+  occurredOn?: string | null;
 }
+
+/**
+ * 있었던 날을 성한 것만 받는다 — 날짜 꼴이 아니거나 아직 오지 않은 날이면 비운다.
+ *
+ * 이 값은 프롬프트 줄에 그대로 찍혀 모델이 시기를 가르는 근거가 된다. 틀린 날은 비어 있는
+ * 것보다 나쁘다: 비어 있으면 절 끝 규칙이 시기를 단정하지 말라고 이르는데, 틀린 날은 그대로
+ * 믿고 말한다. 앞으로의 날짜를 막는 것은 있었던 일을 적는 자리이기 때문이다(이슈 #388).
+ */
+const checkedOccurredOn = (v?: string | null): string | null => {
+  const d = v?.trim();
+  if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  return d > kstStamp().slice(0, 10) ? null : d;
+};
 
 const toWrite = (m: MemoryInput, area: string, subject: string) => ({
   characterId: m.characterId,
@@ -119,6 +134,7 @@ const toWrite = (m: MemoryInput, area: string, subject: string) => ({
   lastMentionedAt: m.lastMentionedAt,
   endCondition: m.endCondition,
   interest: m.interest,
+  occurredOn: checkedOccurredOn(m.occurredOn),
   updatedAt: kstStamp(),
 });
 
