@@ -1083,12 +1083,14 @@ export const nightlyTagCandidates = (out: NightlyOutput): string[] => {
 export const applyNightlyWithCanon = async (
   g: NightlyGathered,
   out: NightlyOutput,
-): Promise<string> =>
-  applyNightlyOutput(
-    g,
-    out,
-    await resolveTagCanon(g.characterId, nightlyTagCandidates(out)),
-  );
+): Promise<string> => {
+  // 이미 일기가 있는 날짜면 반영이 통째로 건너뛰므로 판정도 부르지 않는다 — 같은 날짜를 두 번
+  // 돌리는 경로(백필, 실패 뒤 재실행)가 아무것도 안 저장하면서 호출만 하나 쓰는 것을 막는다.
+  const canon = hasDiaryOn(g.characterId, g.diaryDate)
+    ? new Map<string, string>()
+    : await resolveTagCanon(g.characterId, nightlyTagCandidates(out));
+  return applyNightlyOutput(g, out, canon);
+};
 
 // 최근 결번 날짜들: 원시 대화는 있는데 일기가 안 써진 날(오래된 순, '어제' 포함).
 // 새벽 정리가 며칠 안 돌면(외부 경로·폴백 모두 실패) 생기며, 소급하지 않으면 그 날짜의

@@ -63,8 +63,11 @@ export const canonTags = (
  * 모델 답에서 후보 → 기존 이름 표를 만든다. 물어본 후보와 이미 쓰는 이름에 둘 다 걸린 줄만 받는다.
  *
  * 목록에 없는 이름으로 옮기라는 답은 버린다 — 그 이름은 아직 아무 기억에도 안 붙어 있어서,
- * 합치는 대신 이름을 하나 더 만드는 셈이 된다.
+ * 합치는 대신 이름을 하나 더 만드는 셈이 된다. 합치지 말라는 답(새로)도 같은 자리에서 뺀다.
  */
+/** 합치지 말라는 답으로 프롬프트가 정해 둔 말. 태그 이름으로 오해하지 않게 따로 뺀다. */
+const KEEP_ANSWER = "새로";
+
 export const parseCanon = (
   out: string,
   asked: string[],
@@ -77,6 +80,7 @@ export const parseCanon = (
     const m = /^[-*\s]*(.+?)\s*(?:->|→|=>)\s*(.+?)\s*$/.exec(line);
     if (!m) continue;
     const [, from, to] = m;
+    if (to === KEEP_ANSWER) continue;
     if (!askedSet.has(from) || !nameSet.has(to) || from === to) continue;
     canon.set(from, to);
   }
