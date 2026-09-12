@@ -1,7 +1,7 @@
 <h1 align="center">내가 직접 만드는, 나와 같은 일상을 사는 AI 대화 상대</h1>
 
 <p align="center">
-  <img src="assets/demo-lockscreen.gif" alt="퇴근길 차 안이라고 알리고 유저가 좋아한다던 노래 이야기를 꺼내는 메시지가 잠금화면 알림으로 하나씩 도착한다" width="420">
+  <img src="assets/demo-lockscreen.gif" alt="퇴근길에 서점에 들러 유저가 저번에 말한 책을 사 왔다고 전하는 메시지가 잠금화면 알림으로 하나씩 도착한다" width="420">
   <br><sub>캐릭터가 먼저 자기 일상을 전하며 건네는 연락 · 설명용으로 실제 속도의 1.8배</sub>
 </p>
 
