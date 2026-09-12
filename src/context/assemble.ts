@@ -32,6 +32,7 @@ import { orderedIdentity, memoryLine } from "../memory.js";
 // 검색 결과를 프롬프트 절로 옮기는 자리는 recall.ts 하나다 — 관리 대시보드의 태그 검색
 // 화면도 같은 함수를 불러 같은 문안을 보여준다.
 import {
+  MEMORY_DATE_RULE,
   memorySection,
   oldDiarySection,
   scheduleSearchSection,
@@ -128,6 +129,9 @@ const scheduleSection = (rows: ScheduleRow[]): string => {
 
 // 정체성 — 캐릭터 쪽 사실 전부. 줄 순서(creation 먼저·conversation 뒤, 뒤가 최신)는
 // memory.ts orderedIdentity가 정한다. 이 층은 새벽 정리 때만 바뀐다.
+//
+// 날짜 읽는 규칙을 여기에도 붙인다. 캐릭터를 만들 때 정한 줄에는 있었던 날이 비어 있지만,
+// 새벽 정리는 주인을 가리지 않고 그 칸을 적어서 대화로 쌓인 줄에는 날짜가 붙는다.
 const identitySection = (rows: MemoryRow[]): string => {
   const ordered = orderedIdentity(rows);
   if (!ordered.length) return "";
@@ -135,6 +139,7 @@ const identitySection = (rows: MemoryRow[]): string => {
     `[너 — 정체성]`,
     ...ordered.map(memoryLine),
     `- 같은 항목이 두 줄이면 아래쪽이 최신이다.`,
+    MEMORY_DATE_RULE,
   ].join("\n");
 };
 
