@@ -5,12 +5,15 @@
 //   즉답     — 0~2분, 짧은 쪽으로 몰린다
 //   틈틈이   — 개인 20초~2.5분 / 사회 30초~4분 / 공적 1~8분
 //   불가     — 그 일정이 끝날 때 + 0~1분 지터
-// 예외 둘 — 자는 중이면 첫 연락은 틈틈이·개인 칸이고 깬 뒤로는 즉답, 이미 붙잡혀 접힌 일정이면 즉답.
+// 예외 둘 — 자는 중이면 첫 연락은 틈틈이·개인 칸이고 깬 뒤로는 즉답, 이미 붙잡혀 취소하거나 미룬
+// 일정이면 즉답.
 //
 // 불가면 지금 답장을 만들지 않고 TimingDecision.gather로 넘겨 구간 끝 몰아 답장에 맡긴다.
-// 개인·사회 불가에 온 메시지는 붙잡기 판정 한 콜(16토큰)로 갈라, 붙잡혔으면 개인은 취소·
-// 사회는 미룸을 day_actuals에 적는다. 공적은 못 접는다. 상한은 없다. 판정에는 지금 하는 일,
-// 상대가 그 일정을 아는지, 내 답이 없는 채로 이어 보낸 말과 그 수·기다린 시간을 넣는다.
+// 개인·사회 불가에 온 메시지는 붙잡기 판정 한 콜(16토큰)로 지금 답할지만 정한다. 판정은 대화를
+// 안 보고 한 낱말로 답하므로 일정을 어떻게 할지는 정하지 않는다 — 개인은 취소·사회는 미룸을
+// day_actuals에 적는 것은 답장 모델이 stay 신호를 실었을 때 recordHold 한 곳이다. 공적은 못
+// 취소하고 못 미룬다. 상한은 없다. 판정에는 지금 하는 일, 상대가 그 일정을 아는지, 내 답이 없는
+// 채로 이어 보낸 말과 그 수·기다린 시간을 넣는다.
 //
 // 텀이 나온 경위는 TimingTrace로 남겨 판단 근거에 적는다.
 
@@ -64,7 +67,7 @@ import {
 //
 // 블록의 두 태그를 그대로 읽지 않는 예외가 둘이고, 둘 다 표의 다른 칸을 빌려 쓴다. 자는 시간에
 // 처음 온 연락은 폰을 집어 드는 만큼만 두고 틈틈이·개인 칸으로 답하며, 한 번 깬 뒤로는 즉답 칸을
-// 쓴다. 이미 붙잡혀 일정을 접어 둔 상태에서도 즉답이다.
+// 쓴다. 이미 붙잡혀 일정을 취소하거나 미룬 상태에서도 즉답이다.
 //
 // 숫자는 thresholds.ts가 갖는다. 유저 말이 다 도착할 때까지 기다리는 20~40초는 답장 텀에
 // 넣지 않는다(bot.ts의 도착 대기).
@@ -318,8 +321,6 @@ export interface TimingTrace {
 export interface TimingDecision {
   /** 답장이 나가기까지 기다릴 시간. */
   waitMs: number;
-  /** 유저가 붙잡아 일정을 접었으면 무엇을 어떻게 했는지. 오늘 실제 기록에 이미 적혀 있다. */
-  held: { outcome: string; activity: string } | null;
   /**
    * 답장 불가 구간이라 지금 만들지 않고 구간 끝에 몰아 답해야 하면 그 구간 정보.
    * 이 값이 있으면 waitMs는 구간이 끝나는 시각까지의 시간이다 — 답장을 만드는 대신
@@ -351,7 +352,6 @@ export const decideReplyTiming = async (
   if (!b)
     return {
       waitMs: skewLow(0, INSTANT_MAX_MS),
-      held: null,
       gather: null,
       trace: { path: "no_plan", block: null, asked: false },
     };
@@ -391,7 +391,6 @@ export const decideReplyTiming = async (
       waitMs: awake
         ? tableDelay("instant", "personal")
         : tableDelay("intermittent", "personal"),
-      held: null,
       gather: null,
       trace: {
         path: "sleeping",
@@ -404,7 +403,6 @@ export const decideReplyTiming = async (
   if (isHeldNow(characterId))
     return {
       waitMs: 0,
-      held: null,
       gather: null,
       trace: { path: "already_held", block: seen, asked: false },
     };
@@ -412,7 +410,6 @@ export const decideReplyTiming = async (
   if (resp !== "unavailable")
     return {
       waitMs: tableDelay(resp, cat),
-      held: null,
       gather: null,
       trace: { path: "table", block: seen, asked: false },
     };
@@ -426,7 +423,6 @@ export const decideReplyTiming = async (
   if (cat === "official")
     return {
       waitMs: untilBlockEndMs(b),
-      held: null,
       gather,
       trace: { path: "until_end", block: seen, asked: false },
     };
@@ -440,7 +436,6 @@ export const decideReplyTiming = async (
   if (!judged.held)
     return {
       waitMs: untilBlockEndMs(b),
-      held: null,
       gather,
       trace: {
         path: "until_end",
@@ -452,21 +447,11 @@ export const decideReplyTiming = async (
       },
     };
 
-  // 붙잡혔다 — 개인 일정은 취소하고, 사회 일정은 만나기로 한 상대에게 양해를 구해 미룬다.
-  const outcome =
-    cat === "personal" ? HOLD_OUTCOME.cancelled : HOLD_OUTCOME.deferred;
-  recordDayActual(
-    characterId,
-    kstLogicalDate(),
-    b.start,
-    b.activity,
-    outcome,
-    "유저가 붙잡아서",
-    kstStamp(),
-  );
+  // 붙잡는 말이다 — 지금 답한다. 일정을 취소하거나 미룰지, 짧게 답하고 하던 일로 돌아갈지는
+  // 답장 모델이 대화를 보고 정하고 그 stay 신호를 recordHold가 적는다. 판정은 대화를 안 보고
+  // 한 낱말로 답하므로 여기서는 기록하지 않는다(이슈 #430).
   return {
     waitMs: rand(INTERMITTENT_PERSONAL_MIN_MS, INTERMITTENT_PERSONAL_MAX_MS),
-    held: { outcome, activity: b.activity },
     gather: null,
     trace: {
       path: "held",
@@ -479,8 +464,9 @@ export const decideReplyTiming = async (
 };
 
 /**
- * 모델이 답장에 stay 신호를 실었을 때 — 붙잡기 판정을 거치지 않고 스스로 일정을 접기로 한 경우다.
- * 판정이 이미 접어 둔 블록이면 그대로 두고, 공적 일정은 접지 못하므로 넘어간다.
+ * 모델이 답장에 stay 신호를 실었을 때 지금 블록의 일을 취소(개인)나 미룸(사회)으로 적는다.
+ * 일정을 바꾸는 기록은 이 자리 하나다 — 붙잡기 판정은 지금 답할지만 정한다. 이미 취소하거나
+ * 미룬 블록이면 그대로 두고, 공적 일정은 취소하거나 미룰 수 없으므로 넘어간다.
  */
 export const recordHold = (
   characterId: number,
@@ -501,7 +487,7 @@ export const recordHold = (
     "유저가 붙잡아서",
     kstStamp(),
   );
-  console.log(`[hold] ${b.activity} → ${outcome} (답장 표시)`);
+  console.log(`[hold] ${b.activity} → ${outcome} (stay 신호)`);
   return { blockStart: b.start, activity: b.activity, outcome };
 };
 

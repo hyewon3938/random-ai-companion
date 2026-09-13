@@ -119,7 +119,6 @@ test("오늘 각본이 없으면 즉답 범위에서 텀을 정한다", async ()
   const d = await decideReplyTiming(characterId, "뭐 해?");
   assert.equal(d.trace.path, "no_plan");
   assert.equal(d.trace.block, null);
-  assert.equal(d.held, null);
   assert.equal(d.gather, null);
   assert.ok(inRange(d.waitMs, INSTANT_MIN_MS, INSTANT_MAX_MS));
 });
@@ -171,7 +170,7 @@ test("같은 잠 블록에서 이미 깼으면 즉답 칸으로 답하고 깸 �
   assert.equal(actualsOf(characterId).length, 1);
 });
 
-test("이미 붙잡혀 접힌 블록이면 텀 없이 바로 답한다", async () => {
+test("이미 붙잡혀 취소하거나 미룬 블록이면 텀 없이 바로 답한다", async () => {
   const cancelled = roomWith([
     block("10:00", "12:00", "달리기", "intermittent", "personal"),
   ]);
@@ -202,7 +201,6 @@ test("이미 붙잡혀 접힌 블록이면 텀 없이 바로 답한다", async (
     const d = await decideReplyTiming(characterId, "그래서?");
     assert.equal(d.trace.path, "already_held");
     assert.equal(d.waitMs, 0);
-    assert.equal(d.held, null);
     assert.equal(d.gather, null);
   }
 });
@@ -246,7 +244,6 @@ test("공적 불가 블록은 판정 없이 구간 끝까지 미루고 몰아 �
   const d = await decideReplyTiming(characterId, "회의 언제 끝나?");
   assert.equal(d.trace.path, "until_end");
   assert.equal(d.trace.asked, false);
-  assert.equal(d.held, null);
   assert.deepEqual(d.gather, {
     activity: "팀 회의",
     blockStart: "13:00",
@@ -328,7 +325,7 @@ test("기다린 시간은 1분이 안 되면 한 번에 보낸 것으로, 한 �
   assert.equal(line(""), "상대가 방금 보낸 말: 있어?");
 });
 
-test("개인 불가 블록에서 요청이 나오면 취소 행을 적고 틈틈이·개인 칸으로 바로 답한다", async () => {
+test("개인 불가 블록에서 요청이 나오면 실제 기록에 적지 않고 틈틈이·개인 칸으로 바로 답한다", async () => {
   const { characterId } = roomWith([
     block("13:00", "14:00", "헬스장 운동", "unavailable", "personal"),
   ]);
@@ -342,10 +339,6 @@ test("개인 불가 블록에서 요청이 나오면 취소 행을 적고 틈틈
   assert.equal(d.trace.asked, true);
   assert.equal(d.trace.heldJudged, true);
   assert.equal(d.gather, null);
-  assert.deepEqual(d.held, {
-    outcome: HOLD_OUTCOME.cancelled,
-    activity: "헬스장 운동",
-  });
   assert.ok(
     inRange(
       d.waitMs,
@@ -353,10 +346,8 @@ test("개인 불가 블록에서 요청이 나오면 취소 행을 적고 틈틈
       INTERMITTENT_PERSONAL_MAX_MS,
     ),
   );
-  const rows = actualsOf(characterId);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]?.outcome, HOLD_OUTCOME.cancelled);
-  assert.equal(rows[0]?.block_start, "13:00");
+  // 일정을 취소할지는 답장 모델이 stay 신호로 정한다 — 판정은 기록하지 않는다
+  assert.equal(actualsOf(characterId).length, 0);
 
   // 판정은 한 번만 물었고, 문안에 두 답과 요청으로 볼 신호·경계 예시가 있으며, 글에는
   // 지금 하는 일과 이어 보낸 통 수·기다린 시간이 들어간다
@@ -383,7 +374,7 @@ test("개인 불가 블록에서 요청이 나오면 취소 행을 적고 틈틈
   );
 });
 
-test("사회 불가 블록에서 요청이 나오면 미룸 행을 적는다", async () => {
+test("사회 불가 블록에서 요청이 나와도 미룸 행을 적지 않는다", async () => {
   const { characterId } = roomWith([
     block("19:00", "21:00", "친구와 저녁", "unavailable", "social"),
   ]);
@@ -392,11 +383,8 @@ test("사회 불가 블록에서 요청이 나오면 미룸 행을 적는다", a
     judge: judgeWith("요청").judge,
   });
   assert.equal(d.trace.path, "held");
-  assert.deepEqual(d.held, {
-    outcome: HOLD_OUTCOME.deferred,
-    activity: "친구와 저녁",
-  });
-  assert.equal(actualsOf(characterId)[0]?.outcome, HOLD_OUTCOME.deferred);
+  assert.equal(d.gather, null);
+  assert.equal(actualsOf(characterId).length, 0);
 });
 
 test("판정 답은 요청이라는 낱말로 읽되 아님이 같이 오면 요청으로 세지 않는다", async () => {
@@ -417,7 +405,7 @@ test("판정 답은 요청이라는 낱말로 읽되 아님이 같이 오면 요
     assert.equal(d.trace.path, held ? "held" : "until_end", answer);
     assert.equal(d.trace.heldJudged, held, answer);
     assert.ok(!d.trace.holdFailed, answer);
-    assert.equal(actualsOf(characterId).length, held ? 1 : 0, answer);
+    assert.equal(actualsOf(characterId).length, 0, answer);
   }
 });
 
@@ -434,7 +422,6 @@ test("아님이 나오면 일정을 그대로 두고 구간 끝까지 미루며 
   assert.equal(d.trace.asked, true);
   assert.equal(d.trace.heldJudged, false);
   assert.equal(d.trace.holdFailed, false);
-  assert.equal(d.held, null);
   assert.deepEqual(d.gather, {
     activity: "헬스장 운동",
     blockStart: "13:00",
@@ -458,7 +445,6 @@ test("빈 답과 호출 실패는 아님과 갈라 표시하고 일정은 그대
     assert.equal(d.trace.asked, true);
     assert.equal(d.trace.heldJudged, false);
     assert.equal(d.trace.holdFailed, true, String(answer));
-    assert.equal(d.held, null);
     assert.ok(d.gather);
     assert.equal(actualsOf(characterId).length, 0);
   }
