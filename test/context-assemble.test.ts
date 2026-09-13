@@ -109,6 +109,7 @@ const input = (over: Partial<ContextInput> = {}): ContextInput => ({
     toldPlanAt: null,
     toldPlanWhat: null,
     intent: null,
+    usedIntentLines: [],
   },
   ...over,
 });
@@ -328,6 +329,36 @@ test("첫 만남·첫 대화·연락 텀·상황 문단·답장 형식은 켤 �
   assert.ok(live.text.includes("- 말투: 서로 반말"));
   assert.ok(live.text.includes("지금은 몰아 답장 자리다.\n\n"));
   assert.ok(live.text.endsWith(REPLY_ENVELOPE));
+});
+
+test("오늘의 관계 의도는 오늘 이미 쓴 줄에만 썼다는 표시를 붙인다", () => {
+  const base = input().relationship;
+  const [, , live] = assembleSystemBlocks(
+    input({
+      relationship: {
+        ...base,
+        intent: {
+          id: 1,
+          character_id: 1,
+          date: "2026-09-06",
+          dig: "왜 그 팀을 그만뒀는지",
+          share: "요즘 새벽에 러닝 나가는 얘기",
+          move: "laugh",
+          move_note: "퇴근길 얘기 나오면",
+          lead_tone: null,
+          thread: "다음 주 발표 준비",
+          basis_json: null,
+          created_at: "2026-09-06 04:00:00",
+        },
+        usedIntentLines: ["share", "move"],
+      },
+    }),
+  );
+  const mark = "(오늘 이미 했다. 다시 꺼내지 않는다)";
+  assert.ok(live.text.includes("  · 파고들 것: 왜 그 팀을 그만뒀는지\n"));
+  assert.ok(live.text.includes(`  · 흘릴 내 얘기: 요즘 새벽에 러닝 나가는 얘기 ${mark}`));
+  assert.ok(live.text.includes(`퇴근길 얘기 나오면 ${mark}`));
+  assert.ok(!live.text.includes(`다음 주 발표 준비 ${mark}`));
 });
 
 test("긴 텀에는 기다렸다는 말 규칙이 붙고 바빴으면 접으라는 줄은 빠진다", () => {
