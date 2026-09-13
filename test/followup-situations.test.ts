@@ -158,6 +158,15 @@ test("의도 문단은 고른 줄의 이름과 내용을 적고 그대로 읊지
   assert.match(out, SEND_OR_FOLD);
 });
 
+test("의도 문단은 지금 하는 일과 이어질 때만 옛말을 꺼내게 하고 메모가 새벽에 적힌 것을 밝힌다", () => {
+  const out = intentSituation("move", "기억해서 챙기기 카페 앞을 지날 때");
+  assert.match(out, /새벽에 지난 대화를 읽고 적어 둔 메모다/);
+  assert.match(out, /아까·방금 한 얘기라고 부르지 않는다/);
+  assert.match(out, /네가 하는 일 안에 그것이 실제로 있을 때만이다/);
+  assert.match(out, /지금이 그 장면일 때만 쓴다\. 아니면 send=false/);
+  assert.doesNotMatch(out, /떠올라서 먼저 거는/);
+});
+
 test("여섯 문단은 서로 다르고 같은 인자에 같은 값을 돌려준다", () => {
   const all = [
     goodnightSituation(null),

@@ -247,4 +247,9 @@ test("relationSection은 문턱 조건·처음·추천 플러팅을 이름 붙�
   assert.ok(p.includes('"relation":{"advance":{"go":true,"basis":"근거 한 줄"}|null'));
   assert.ok(p.includes("relation 규칙 — [관계 단계]를 읽고 적는다"));
   assert.ok(p.includes("단계를 내리거나 두 단계를 한 번에 올리는 출력은 반영되지 않는다"));
+  assert.ok(p.includes("재료 줄의 문구를 그대로 옮기지 않고 상대에게 말하듯 적는다"));
+  assert.ok(p.includes("상대가 모르는 인물은 나와 어떤 사이인지 함께 적고 이름만 두지 않는다"));
+  assert.ok(p.includes("오늘의 대화에서 이미 상대에게 한 얘기는 두지 않는다"));
+  assert.ok(p.includes("내 하루의 어떤 장면에서 그 말이 떠오를지 함께 적는다"));
+  assert.ok(p.includes("사진을 찍어 보내거나 서로 주고받는 약속은 적지 않는다"));
 });

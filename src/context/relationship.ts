@@ -9,6 +9,12 @@
 //
 // 오늘 쓴 플러팅과 오늘 일정을 말했는지는 캐릭터 답장 행의 meta_json(move·told_plan)에서 읽는다. 답장
 // 신호가 그 값을 적는 자리는 reply-compose.ts와 pending.ts다.
+//
+// 의도 4줄 가운데 오늘 이미 쓴 줄에는 썼다는 표시를 붙인다. 어느 줄을 썼는지는 의도 선톡이 안 쓴
+// 줄을 고를 때와 같은 함수(proactive-policy의 usedIntentLines)로 세서, 답장과 선톡이 같은 줄을 쓴
+// 것으로 본다. 줄을 빼지 않고 표시만 하는 까닭은 무슨 얘기를 이미 했는지 알아야 다음 답장이 앞뒤를
+// 맞출 수 있어서다. 표시가 없던 때는 하루 내내 같은 흘릴 내 얘기 줄이 남아 한 번 한 얘기를 다음
+// 답장이 다시 꺼냈다(이슈 #438).
 
 import type {
   FirstBy,
@@ -39,6 +45,7 @@ import {
   logicalDateOf,
   logicalDayStartTs,
 } from "../kst.js";
+import { usedIntentLines } from "../proactive-policy.js";
 
 /** 이미 일어난 처음 하나. date는 논리일(YYYY-MM-DD)이다. */
 export interface DoneFirst {
@@ -67,6 +74,8 @@ export interface RelationshipInput {
   /** 그때 말한 일정의 내용. 오늘 일정이 없으면 null. */
   toldPlanWhat: string | null;
   intent: RelationshipIntentRow | null;
+  /** 오늘 답장이나 선톡이 이미 쓴 의도 줄. */
+  usedIntentLines: IntentLine[];
 }
 
 /** 단계마다 열리는 처음. 낮은 단계의 처음은 위 단계에서도 열려 있다. */
@@ -161,7 +170,8 @@ export const readRelationshipInput = (
 
   const todayMoves: TodayMove[] = [];
   let toldPlanAt: string | null = null;
-  for (const row of getAssistantMetaSince(chatId, characterId, logicalDayStartTs())) {
+  const dayStart = logicalDayStartTs();
+  for (const row of getAssistantMetaSince(chatId, characterId, dayStart)) {
     const meta = parseMeta(row.meta_json);
     const at = clockLabel(logicalClockOf(row.sent_at));
     if (isMove(meta.move)) todayMoves.push({ move: meta.move, at });
@@ -183,6 +193,7 @@ export const readRelationshipInput = (
     toldPlanAt,
     toldPlanWhat,
     intent: getRelationshipIntent(characterId, logicalToday) ?? null,
+    usedIntentLines: usedIntentLines(chatId, characterId, dayStart),
   };
 };
 
@@ -215,13 +226,20 @@ export const intentLineText = (
 
 const INTENT_ORDER: IntentLine[] = ["dig", "share", "move", "thread"];
 
-/** 오늘의 관계 의도 4줄. 없는 줄은 뺀다. */
-const intentLines = (i: RelationshipIntentRow | null): string[] => {
+/** 오늘 이미 쓴 의도 줄 끝에 붙는 표시. */
+export const USED_INTENT_MARK = " (오늘 이미 했다. 다시 꺼내지 않는다)";
+
+/** 오늘의 관계 의도 4줄. 없는 줄은 빼고, 오늘 이미 쓴 줄은 썼다고 표시한다. */
+const intentLines = (
+  i: RelationshipIntentRow | null,
+  used: IntentLine[],
+): string[] => {
   if (!i) return [];
   const out: string[] = [];
   for (const line of INTENT_ORDER) {
     const text = intentLineText(i, line);
-    if (text) out.push(`  · ${INTENT_LINE_NAME[line]}: ${text}`);
+    const mark = used.includes(line) ? USED_INTENT_MARK : "";
+    if (text) out.push(`  · ${INTENT_LINE_NAME[line]}: ${text}${mark}`);
     // 플러팅 코드도 자리도 없이 앞세울 결만 적힌 날은 그 결만 낸다.
     else if (line === "move" && i.lead_tone)
       out.push(`  · 앞세울 결: ${LEAD_TONE_NAME[i.lead_tone]}`);
@@ -250,7 +268,7 @@ export const relationshipNowSection = (r: RelationshipInput): string => {
     lines.push(
       `- 오늘 내 일정 말함: ${r.toldPlanAt}${r.toldPlanWhat ? ` (${r.toldPlanWhat})` : ""}`,
     );
-  const intent = intentLines(r.intent);
+  const intent = intentLines(r.intent, r.usedIntentLines);
   if (intent.length) lines.push("- 오늘의 관계 의도", ...intent);
   return `[지금 관계]\n${lines.join("\n")}`;
 };
