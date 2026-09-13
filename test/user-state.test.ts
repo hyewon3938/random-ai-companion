@@ -113,7 +113,7 @@ test("직전에 쓴 플러팅은 판정할 상대 말 바로 앞 캐릭터 말�
   // 앞선 상대 말보다 먼저 쓴 플러팅은 그 상대 말이 이미 받았다
   log("assistant", "그 카페 또 갔어?", "2026-09-08 12:00:00", { move: "laugh" });
   log("user", "응 갔지", "2026-09-08 12:05:00");
-  const remember = log("assistant", "저번에 말한 면접 어떻게 됐어", "2026-09-08 12:06:00", {
+  const remember = log("assistant", "저번에 말한 전시 어땠어", "2026-09-08 12:06:00", {
     move: "remember",
   });
   // 플러팅 뒤에 말이 한 번 더 나가도 앞 플러팅을 놓치지 않는다
@@ -122,7 +122,7 @@ test("직전에 쓴 플러팅은 판정할 상대 말 바로 앞 캐릭터 말�
     move: "laugh",
   });
   log("assistant", "목록에 없는 코드", "2026-09-08 12:12:00", { move: "hug" });
-  log("user", "붙었어", "2026-09-08 12:30:00");
+  log("user", "사람 많았어", "2026-09-08 12:30:00");
 
   const rows = getRecentMessages(chat, characterId, 24);
   const moves = pendingMoves(chat, characterId, rows);

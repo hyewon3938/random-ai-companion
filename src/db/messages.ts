@@ -153,7 +153,8 @@ export const lastUserTs = (
       .get(chatId, characterId) as { sent_at: string } | undefined
   )?.sent_at;
 
-// 캐릭터가 마지막으로 말한 시각 — 자리 비움 복귀 인사가 침묵 길이를 재는 기준.
+// 캐릭터가 마지막으로 말한 시각 — 자리 비움 복귀 인사가 침묵 길이를 재는 기준이고,
+// 답장이 한 유저 턴의 열림 신호 행을 바꿔 적을 때 지울 행의 경계다.
 export const lastAssistantTs = (
   chatId: string,
   characterId: number,
@@ -297,21 +298,6 @@ export const countAssistantMeta = (
     }
   ).c;
 };
-
-/** 캐릭터의 마지막 말. 답장이 한 유저 턴의 열림 신호 행을 바꿔 적을 때 그 시각을 경계로 쓴다. */
-export const lastAssistantMessage = (
-  chatId: string,
-  characterId: number,
-): { id: number; sent_at: string; meta_json: string | null } | undefined =>
-  db
-    .prepare(
-      `SELECT id, sent_at, meta_json FROM messages
-        WHERE chat_id = ? AND character_id = ? AND role = 'assistant'
-        ORDER BY id DESC LIMIT 1`,
-    )
-    .get(chatId, characterId) as
-    | { id: number; sent_at: string; meta_json: string | null }
-    | undefined;
 
 /** 캐릭터 말 가운데 조건에 맞는 행의 시각과 meta_json을 보낸 순서로 돌려준다.
  *  오늘 답장이 쓴 플러팅과 일정을 말한 시각을 「지금 관계」 절이 읽는 자리다. */
