@@ -11,7 +11,7 @@
 //
 // 하루 고정 두 덩이가 하루 중에 바뀌었을 때 어느 대목이 바뀌었는지 이름을 대는 것
 // (changedSections·changeLabel)도 여기 있다. 줄 단위 비교 자체는 trace/diff.ts에 있고,
-// 무엇을 언제 게시함에 쌓을지는 trace/reply-post.ts가 정한다.
+// 무엇을 언제 트레이스 표에 쌓을지는 trace/reply-post.ts가 정한다.
 
 import { getBlob, getLlmCallBrief, type LlmCallRow } from "../db.js";
 import {
@@ -525,7 +525,7 @@ const outcomeLines = (ctx: CallContext): string[] => {
   // 메모는 붙었는지와 무엇을 적었는지를 같은 줄에서 본다 — 다른 신호와 묶어 두면
   // '메모 없음' 세 글자가 줄 안에 묻혀 저장 여부를 확인하러 스레드를 뒤지게 된다.
   // 여러 건이면 건수를 앞에 적는다 — 한 줄로 몰아 쓴 답장과 한 건만 적은 답장이 구분되어야
-  // 메모가 빠지는 자리를 게시함에서 바로 센다(이슈 #399).
+  // 메모가 빠지는 자리를 트레이스에서 바로 센다(이슈 #399).
   const notes = Array.isArray(ctx.note) ? ctx.note : ctx.note ? [ctx.note] : [];
   out.push(
     notes.length

@@ -44,7 +44,7 @@
 - `src/db/messages.ts` — 대화 기록 표의 저장·조회 함수와 답장 복구 표시.
 - `src/db/relationship.ts` — 관계가 쌓이면서 늘어나는 표 넷의 저장 함수.
 - `src/db/sends.ts` — 예약 발송과 대기 중인 답장 표의 저장 함수.
-- `src/db/trace-events.ts` — 게시함 표의 저장 함수와 보관 기간.
+- `src/db/trace-events.ts` — 트레이스 표의 저장 함수와 보관 기간.
 
 ### 2. 기억 · 1,016줄
 
@@ -98,20 +98,20 @@
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 - `src/relationship-stage.ts` — 관계 단계 전이 — 어제까지의 값을 세어 문턱을 재고, 모델의 결정을 받아 단계·처음·의도를 저장한다.
 - `src/prompts/nightly.ts` — 새벽 정리가 모델에 넘기는 문안 — 일기·기억 정리·진행 반영 프롬프트와 선톡 상황 문단을 한 파일에 둔다.
-- `src/nightly-trace.ts` — 새벽 정리 트레이스 — 하루를 닫은 새벽 정리가 무엇을 바꿨는지 게시함에 쌓는다.
+- `src/nightly-trace.ts` — 새벽 정리 트레이스 — 하루를 닫은 새벽 정리가 무엇을 바꿨는지 트레이스 표에 쌓는다.
 - `src/tools/nightly-read.ts` — 새벽 정리 수집 도구: 활성 캐릭터의 새벽 정리 입력(어제 대화·기억·관계·관계 단계·각본·아크 등)을 JSON으로 출력한다.
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
 ### 7. 관측과 운영 · 8,244줄
 
-- `src/trace.ts` — 슬랙 트레이스 게시함 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
-- `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고와 틈새 한 줄, 연락 약속의 단계를 게시함에 쌓는다.
+- `src/trace.ts` — 슬랙 트레이스 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
+- `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고와 틈새 한 줄, 연락 약속의 단계를 트레이스 표에 쌓는다.
 - `src/feedback.ts` — 슬랙 트레이스 채널에 사람이 남긴 표시를 모은다.
 - `src/trace/diff.ts` — 슬랙 게시용 비교 — 두 글에서 달라진 자리만 표시하는 줄 단위·낱말 단위 비교.
 - `src/trace/format.ts` — 슬랙 게시 문안이 공통으로 쓰는 표기 도우미 — 이스케이프·날짜·자르기·인용·토큰 줄.
 - `src/trace/morning-plan.ts` — 아침 각본 게시 — 새벽 정리가 만든 오늘 각본을 아침에 슬랙 스레드로 올린다.
-- `src/trace/reply-post.ts` — 답장 게시 준비 — 아직 안 올린 모델 호출을 번호 순서대로 게시함(trace_events)에 쌓는다.
+- `src/trace/reply-post.ts` — 답장 게시 준비 — 아직 안 올린 모델 호출을 번호 순서대로 트레이스 표(trace_events)에 쌓는다.
 - `src/trace/reply-render.ts` — 답장 게시 문안 그리기 — 호출 행과 판단 근거를 슬랙 본문 한 장으로 옮긴다.
 - `src/tools/analyze.ts` — 애착 신호 분석: messages 원시 로그에서 행동 신호를 날짜별로 집계한다 (README의 신호 표 대응).
 - `src/tools/archive/demo-send.ts` — 데모 발송 도구 (발표 시연용): 활성 캐릭터로 선톡 문안을 실제 발송 경로(sendProactive)로 보낸다.
@@ -163,7 +163,7 @@
 
 ### 1. 기반과 저장
 
-config는 환경변수, kst는 한국 시간과 논리일 경계, labels는 닫힌 목록의 이름표, thresholds는 숫자 기준값이다. db.ts는 `src/db/` 아래 표 묶음 9개를 다시 내보내는 입구라 부르는 쪽은 이 파일 하나만 import한다. 연결과 스키마·마이그레이션은 db/connection.ts에 있고, 캐릭터·관계·유저 프로필은 characters, 대화 기록은 messages, 아크·월 리듬·일정·각본·일기는 life, 예약 발송과 대기 중인 답장은 sends, 호출 기록과 본문 보관은 llm-calls, 게시함은 trace-events, 슬랙에서 모은 표시는 feedback, 기억·태그·오늘 메모·오늘 실제는 memory-items가 갖는다. 묶음 파일끼리는 connection과 형제만 부르고 db.ts를 부르지 않는다. SQL 문장은 이 폴더와 손으로 돌리는 도구·평가에만 있고, 그 밖의 파일은 저장 함수를 부르거나 여러 저장을 하나로 묶는 `db.transaction`만 쓴다. 저장 함수 사이에 있던 판단 4개 중 셋은 4번으로 갔고(말투 높낮이는 speech-level.ts, 유저가 이어 보내는 텀은 reply-timing.ts, 선제 발화를 가르는 meta_json 패턴은 proactive-policy.ts), 게시함 행의 보관 기한은 저장 규칙이라 db/trace-events.ts에 남겼다. llm.ts는 chat·chatJson 둘만 내보내는 얇은 게이트웨이다.
+config는 환경변수, kst는 한국 시간과 논리일 경계, labels는 닫힌 목록의 이름표, thresholds는 숫자 기준값이다. db.ts는 `src/db/` 아래 표 묶음 9개를 다시 내보내는 입구라 부르는 쪽은 이 파일 하나만 import한다. 연결과 스키마·마이그레이션은 db/connection.ts에 있고, 캐릭터·관계·유저 프로필은 characters, 대화 기록은 messages, 아크·월 리듬·일정·각본·일기는 life, 예약 발송과 대기 중인 답장은 sends, 호출 기록과 본문 보관은 llm-calls, 트레이스 표는 trace-events, 슬랙에서 모은 표시는 feedback, 기억·태그·오늘 메모·오늘 실제는 memory-items가 갖는다. 묶음 파일끼리는 connection과 형제만 부르고 db.ts를 부르지 않는다. SQL 문장은 이 폴더와 손으로 돌리는 도구·평가에만 있고, 그 밖의 파일은 저장 함수를 부르거나 여러 저장을 하나로 묶는 `db.transaction`만 쓴다. 저장 함수 사이에 있던 판단 4개 중 셋은 4번으로 갔고(말투 높낮이는 speech-level.ts, 유저가 이어 보내는 텀은 reply-timing.ts, 선제 발화를 가르는 meta_json 패턴은 proactive-policy.ts), 트레이스 표 행의 보관 기한은 저장 규칙이라 db/trace-events.ts에 남겼다. llm.ts는 chat·chatJson 둘만 내보내는 얇은 게이트웨이다.
 
 kst는 파일 25개, config 18개, thresholds 14개, labels 14개, llm 11개, db는 24개가 읽어서 고칠 때 같이 보는 곳이 넓다. 컬럼을 더하면 erd.md와 tools/check-writes·tools/db-view가 따라온다.
 
@@ -219,7 +219,7 @@ bot.ts가 텔레그램과 주고받고, pending.ts가 만들어 둔 답장을 �
 
 ### 6. 새벽 정리
 
-nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 applyNightlyTxn 579-867, 발송 시각 계산 903-1085, runNightly 1087-1234다. 모델에 넘기는 문안은 prompts/nightly.ts에 있다. 일기·대화 없던 날 일기·진행 반영·기억 정리 프롬프트 4종과 선톡 상황 문단 4종이 수집 결과를 받아 글자만 만든다. 4번의 prompts/reply.ts와 같은 꼴이지만 새벽 정리 규칙과 함께 바뀌어서 6번이다. 봇 안의 05:40 크론과 봇 밖의 외부 스케줄러 경로가 수집·반영 함수를 공유하므로 쓰기 코드는 한 벌이다. nightly-trace.ts가 무엇을 바꿨는지 게시함에 쌓는다.
+nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 applyNightlyTxn 579-867, 발송 시각 계산 903-1085, runNightly 1087-1234다. 모델에 넘기는 문안은 prompts/nightly.ts에 있다. 일기·대화 없던 날 일기·진행 반영·기억 정리 프롬프트 4종과 선톡 상황 문단 4종이 수집 결과를 받아 글자만 만든다. 4번의 prompts/reply.ts와 같은 꼴이지만 새벽 정리 규칙과 함께 바뀌어서 6번이다. 봇 안의 05:40 크론과 봇 밖의 외부 스케줄러 경로가 수집·반영 함수를 공유하므로 쓰기 코드는 한 벌이다. nightly-trace.ts가 무엇을 바꿨는지 트레이스 표에 쌓는다.
 
 고칠 때 같이 보는 곳은 네 군데로, 추출 결과가 memory_items로 가므로 2번, 진행 중인 일과 일정 시각을 옮기고 아크를 이어 쓰라고 부르므로 3번, 선톡 문안이 buildSystemBlocks를 쓰므로 4번, 만들어 둔 예약 발송 행을 내보내는 5번 dispatch다. 여기에 repo 밖의 외부 스케줄러 지시서가 더해진다. 지시서의 프롬프트 규칙은 이 영역의 문안과 맞춰야 한다.
 
@@ -230,7 +230,7 @@ nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 app
 
 ### 7. 관측과 운영
 
-trace.ts는 게시함 trace_events에 쌓고 1분 틱으로 슬랙에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 16개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 87개, scripts 5개, 워크플로 2개, 커밋 훅이 여기다.
+trace.ts는 트레이스 표 trace_events에 쌓고 1분 틱으로 트레이스 채널에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 16개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 87개, scripts 5개, 워크플로 2개, 커밋 훅이 여기다.
 
 고칠 때 같이 보는 곳은 슬랙 채널의 글 형식과 호출부 전부다. 검사는 proactive-fail-trace·reply-render·morning-plan·feedback 4개고, trace는 테스트가 없다. 설계 원본은 ADR 0008·0009다.
 

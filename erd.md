@@ -825,7 +825,7 @@ plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한�
 - **firsts · relationship_signals의 message_id와 call_id** — 처음이 일어난 메시지와 그렇게 표시한 호출을 번호로만 가리킨다. 호출 기록은 90일이 지나면 지우는 자리라, 참조를 걸면 그 정리가 관계 기록에 막힌다.
 - **llm_calls의 세 해시** — system_hashes · turns_hash · output_hash가 prompt_blobs.hash를 가리킨다. 본문을 90일 뒤에 지우면서 호출 메타와 사용량은 남기므로, 가리키는 본문이 없는 행이 정상으로 생긴다.
 - **today_notes.message_id** — 메모의 원문이 있는 messages 행을 가리킨다. 나중에 원문을 확인할 때만 쓰는 참조라 FK 없이 id만 적는다.
-- **call_feedback.slack_ts** — 표시가 달린 글의 게시 기록(trace_events)을 시각으로 찾는다. 게시함은 30일이 지나면 행을 지우므로 가리키는 게시 기록이 없는 표시가 정상으로 남고, 어느 호출이었는지는 저장할 때 call_id에 옮겨 적어 둔다.
+- **call_feedback.slack_ts** — 표시가 달린 글의 게시 기록(trace_events)을 시각으로 찾는다. 트레이스 표는 30일이 지나면 행을 지우므로 가리키는 게시 기록이 없는 표시가 정상으로 남고, 어느 호출이었는지는 저장할 때 call_id에 옮겨 적어 둔다.
 
 messages와 send_failures의 character_id도 FK 없이 번호만 적는다. 두 컬럼 모두 비워둘 수 있는 자리라 FK를 걸지 않았고, 기록을 캐릭터별로 가려 볼 때만 쓴다.
 

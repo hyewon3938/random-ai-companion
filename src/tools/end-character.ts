@@ -5,7 +5,7 @@
 //
 // 상태만 바꾸고 대화 기록은 그대로 둔다. 대화방을 그대로 두고 새 캐릭터를 시작해도 읽는
 // 함수가 캐릭터 번호로 거르므로(db/messages.ts), 앞 캐릭터의 대화가 섞이지 않는다.
-// 슬랙에는 게시함 행만 쌓고, 내보내는 일은 봇의 1분 틱이 맡는다.
+// 슬랙에는 트레이스 표 행만 쌓고, 내보내는 일은 봇의 1분 틱이 맡는다.
 import {
   endCharacter,
   getActiveCharacter,
@@ -90,4 +90,4 @@ recordTraceEvent({
 console.log(
   `\n끝냈다: ${ended ? "ended" : "이미 ended였다"} · 대기 답장 ${superseded}건 · 예약 선톡 ${skipped}건 거둠`,
 );
-console.log("종료 게시는 게시함에 쌓았다 — 봇의 1분 틱이 슬랙으로 내보낸다.");
+console.log("종료 게시는 트레이스 표에 쌓았다 — 봇의 1분 틱이 슬랙으로 내보낸다.");

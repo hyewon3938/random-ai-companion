@@ -1,4 +1,4 @@
-// 새벽 정리 트레이스 — 하루를 닫은 새벽 정리가 무엇을 바꿨는지 게시함에 쌓는다.
+// 새벽 정리 트레이스 — 하루를 닫은 새벽 정리가 무엇을 바꿨는지 트레이스 표에 쌓는다.
 //
 // 훅은 applyNightlyOutput 한 자리다. 봇 밖 스케줄러(tools/nightly-write)와 봇 안 폴백 크론이
 // 둘 다 그 함수를 지나므로 한 곳이면 두 경로가 다 걸린다.
@@ -477,7 +477,7 @@ const headText = (
     );
   const notes = listSection("오늘 메모", g.todayNotes, "없음");
   if (notes) parts.push(notes);
-  // 수집이 붙여 둔 목록 표시(- )는 게시함에서 인용 부호와 겹쳐 떼고 넣는다.
+  // 수집이 붙여 둔 목록 표시(- )는 트레이스에서 인용 부호와 겹쳐 떼고 넣는다.
   const actuals = listSection(
     "각본과 달라진 하루",
     g.dayActuals.map((s) => s.replace(/^-\s*/, "")),
@@ -766,7 +766,7 @@ const callChildren = (g: NightlyGathered, parentKey: string): void => {
 // ── 반영 뒤 게시 ────────────────────────────────────────────────────────
 
 /**
- * 반영이 끝난 뒤 게시함에 쌓는다. 트랜잭션 바깥에서 부른다 —
+ * 반영이 끝난 뒤 트레이스 표에 쌓는다. 트랜잭션 바깥에서 부른다 —
  * 여기서 무슨 일이 나도 그날 새벽 정리는 이미 저장되어 있다.
  */
 export const afterNightlyTrace = (

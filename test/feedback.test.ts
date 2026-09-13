@@ -2,7 +2,7 @@
 //
 // syncReactions와 recordThreadReplies에 손으로 만든 리액션·답글 목록을 넣고 어떤 행이 생기는지,
 // 뗀 표시는 지우지 않고 뗀 시각만 적는지, 같은 표시를 다시 읽어도 행이 늘지 않는지 본다.
-// 우리가 올린 글은 게시함(trace_events)에 행을 넣고 보낸 것으로 표시해 흉내 낸다.
+// 우리가 올린 글은 트레이스 표(trace_events)에 행을 넣고 보낸 것으로 표시해 흉내 낸다.
 // 슬랙을 읽어 오는 틱(runFeedbackTick)은 돌리지 않는다.
 // 처리 표시(resolved_at·issue_no·resolution)는 사람이 찍는 값이라 저장 함수를 직접 부른다.
 
@@ -64,7 +64,7 @@ const rowsOf = (slackTs: string): FeedbackRow[] =>
     )
     .all(slackTs) as FeedbackRow[];
 
-// 우리가 슬랙에 올린 글 하나를 흉내 낸다 — 게시함에 행을 넣고 보낸 것으로 표시해 slack_ts를 단다.
+// 우리가 슬랙에 올린 글 하나를 흉내 낸다 — 트레이스 표에 행을 넣고 보낸 것으로 표시해 slack_ts를 단다.
 const posted = (dedupeKey: string, kind: string, slackTs: string): void => {
   insertTraceEvent({
     characterId,

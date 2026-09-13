@@ -69,7 +69,7 @@ const resolveTarget = (slackTs: string): Target | null => {
 
   const matched = row.dedupe_key ? CALL_KEY.exec(row.dedupe_key) : null;
   let callId = matched ? Number(matched[1]) : null;
-  // 게시함은 30일, 호출 기록은 그보다 오래 남지만 순서가 뒤집힐 여지를 남기지 않는다 —
+  // 트레이스 표는 30일, 호출 기록은 그보다 오래 남지만 순서가 뒤집힐 여지를 남기지 않는다 —
   // 없는 호출을 가리키면 외래키에 걸려 그 회차 전체가 멈춘다.
   if (callId !== null && !hasLlmCall(callId)) callId = null;
   return { characterId: row.character_id, callId, traceKind: row.kind };

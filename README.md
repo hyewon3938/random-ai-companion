@@ -403,7 +403,7 @@ graph TB
 | 기억 | `memory_items`(사실·진행 중인 일·주변 인물을 캐릭터 쪽과 유저 쪽으로), `tags`, `areas`, `today_notes` |
 | 시간 | `arcs`, `day_seeds`, `day_plans`, `day_actuals`(각본과 달라진 부분), `schedules`, `diary_entries` |
 | 운영 | `messages`(발송 종류를 메타로 구분), `pending_replies`, `scheduled_messages`, `send_failures`, `recovery_marks` |
-| 확인 | `llm_calls` / `prompt_blobs`(호출 원문), `trace_events`(게시함), `call_feedback`(사람이 남긴 표시), `llm_usage`(날짜별 호출량·캐시 적중) |
+| 확인 | `llm_calls` / `prompt_blobs`(호출 원문), `trace_events`(트레이스 표), `call_feedback`(사람이 남긴 표시), `llm_usage`(날짜별 호출량·캐시 적중) |
 
 </details>
 
@@ -414,7 +414,7 @@ graph TB
 
 | 주기 | 하는 일 | LLM 호출 |
 |---|---|---|
-| 1분 | 답장이 만들어진 과정을 게시함에 쌓고 슬랙으로 발송 | 없음 |
+| 1분 | 답장이 만들어진 과정을 트레이스 표에 쌓고 트레이스 채널로 발송 | 없음 |
 | 2분 | 놓친 답장 복구 | 없음 |
 | 3분 (06–22시) | 준비된 아침·점심·안부 문안 발송 | 없음 |
 | 5분 | 틈새 한 줄 | 판단 + 문안 |
