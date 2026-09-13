@@ -93,10 +93,7 @@ const runId = saveMemory({
 
 test("유저가 아는 캐릭터 쪽 일만 행 번호를 붙여 각본 줄이 된다", () => {
   const rows = planOngoingRows(character.id);
-  assert.deepEqual(
-    rows.map((r) => r.id).sort(),
-    [bookId, runId].sort(),
-  );
+  assert.deepEqual(rows.map((r) => r.id).sort(), [bookId, runId].sort());
   const lines = planOngoingLines(character.id);
   assert.match(
     lines,
@@ -113,8 +110,19 @@ test("유저가 아는 캐릭터 쪽 일만 행 번호를 붙여 각본 줄이 �
 test("각본 프롬프트에 그 줄과 출처 규칙이 들어간다", () => {
   const prompt = buildPlanPrompt(character.id, "2026-09-05");
   assert.match(prompt, new RegExp(`\\[${bookId}\\] 독서/당신 인생의 이야기`));
-  assert.match(prompt, /"ongoing", source_id에 그 줄 앞 \[번호\]를 그대로 적는다/);
+  assert.match(
+    prompt,
+    /"ongoing", source_id에 그 줄 앞 \[번호\]를 그대로 적는다/,
+  );
   assert.match(prompt, /"source":"ongoing","source_id":61/);
+});
+
+test("각본 프롬프트가 활동 이름에 인물 문구를 옮기지 말라고 적는다", () => {
+  const prompt = buildPlanPrompt(character.id, "2026-09-05");
+  assert.match(
+    prompt,
+    /\[인물\]에 적힌 문구를 활동 이름에 그대로 옮기지 않는다/,
+  );
 });
 
 test("source ongoing은 행 번호가 있을 때만 남고, 번호는 문자열이어도 받는다", () => {
@@ -127,8 +135,20 @@ test("source ongoing은 행 번호가 있을 때만 남고, 번호는 문자열�
   const plan = normalizePlan({
     date: "2026-09-05",
     blocks: [
-      { ...base, start: "21:00", activity: "책 읽기", source: "ongoing", source_id: bookId },
-      { ...base, start: "22:00", activity: "달리기", source: "ongoing", source_id: String(runId) as unknown as number },
+      {
+        ...base,
+        start: "21:00",
+        activity: "책 읽기",
+        source: "ongoing",
+        source_id: bookId,
+      },
+      {
+        ...base,
+        start: "22:00",
+        activity: "달리기",
+        source: "ongoing",
+        source_id: String(runId) as unknown as number,
+      },
       { ...base, start: "23:00", activity: "책 읽기", source: "ongoing" },
       { ...base, start: "24:00", activity: "잠" },
     ],

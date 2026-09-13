@@ -20,6 +20,9 @@
 // 유저와는 메시지로만 이어진 사이라 유저와 만나는 블록은 만들지 않는다. 유저가 하루에 들어오는
 // 자리는 메시지를 보내거나 답하는 시간뿐이다(이슈 #322).
 //
+// 활동 이름은 그 시간에 하는 일을 말로 부르는 이름으로 적고, 인물 정체성의 문구를 그대로 옮기지
+// 않는다(이슈 #443).
+//
 // 자리를 비우는 불가 구간(잠 제외)은 밀도를 관계 국면으로 조절한다(이슈 #335). 알리고 나가는 긴
 // 구간은 없는 날이 기본이고, 관계 단계가 1이거나 만난 지 한 달이 안 된 초반에는 출퇴근처럼 뺄 수
 // 없는 것만 하루 1개까지 둬 유저가 마음을 붙일 틈을 끊지 않는다. 그 뒤에는 하루 0~2개로 날마다
@@ -207,8 +210,7 @@ const CANT_LEAVE_HINT =
  * 초반에는 상대가 먼저 권한 것이 아니면 그런 일정을 각본에 넣지 않는 것이 규칙이라 상한을 받는다.
  * 개수 상한은 예외 없이 다 센다. */
 export const awayLengthExempt = (b: PlanBlock, phase: AwayPhase): boolean =>
-  CANT_LEAVE_HINT.test(b.activity) ||
-  (!phase.early && b.source === "schedule");
+  CANT_LEAVE_HINT.test(b.activity) || (!phase.early && b.source === "schedule");
 
 /** 각본 하나의 자리 비움 셈. 잠은 빼고 센다. longCapped는 길이 상한을 받는 긴 구간의 이름과
  * 길이, longExempt는 상한을 안 받는 긴 구간의 수다. minGapMin은 불가 구간 사이에 있는 답할 수
@@ -483,7 +485,7 @@ ${awayRuleLines(phase)}
 
 [JSON 형식 — 이 구조 그대로]
 {"date":"${date}","blocks":[{"start":"05:00","end":"06:03","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"08:00","end":"08:40","activity":"업무 회의","responsiveness":"unavailable","advance_known":true,"category":"official"},{"start":"12:00","end":"13:10","activity":"동료와 점심","responsiveness":"intermittent","advance_known":true,"category":"social","source":"schedule","source_id":12},{"start":"15:00","end":"16:00","activity":"급한 업무","responsiveness":"intermittent","advance_known":false,"category":"official"},{"start":"19:00","end":"19:40","activity":"저녁 산책","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"routine"},{"start":"20:00","end":"20:20","activity":"씻기","responsiveness":"unavailable","advance_known":true,"category":"personal"},{"start":"22:00","end":"23:00","activity":"책 이어 읽기","responsiveness":"intermittent","advance_known":true,"category":"personal","source":"ongoing","source_id":61,"work":"책 제목"},{"start":"24:10","end":"29:00","activity":"잠","responsiveness":"unavailable","advance_known":true,"category":"personal"}]}
-위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑는다. source_id의 12와 61도 예시이니, 실제 번호는 위 [이 날의 확정 일정]과 [진행 중인 일]에 적힌 것을 쓴다. work의 "책 제목"도 자리를 보여주는 예시이고, 실제로 있는 작품의 제목을 적는다.`;
+위 블록의 활동 이름은 형식을 보여주는 예시다. 실제 활동은 [인물]의 직업·생활·취향에서 뽑되, 활동 이름은 그 시간에 하는 일을 사람이 말할 때 쓰는 이름으로 짧게 적는다. [인물]에 적힌 문구를 활동 이름에 그대로 옮기지 않는다 — [인물]에 "여운이 긴 영화를 즐긴다"가 있어도 활동 이름은 "여운 곱씹으며 영화 보기"가 아니라 "집에서 영화 보기"이고, 취향을 설명하는 꾸밈말을 붙이지 않는다. source_id의 12와 61도 예시이니, 실제 번호는 위 [이 날의 확정 일정]과 [진행 중인 일]에 적힌 것을 쓴다. work의 "책 제목"도 자리를 보여주는 예시이고, 실제로 있는 작품의 제목을 적는다.`;
 
 // 행 번호로 쓸 수 있는 값인가. 생성이 숫자를 따옴표에 넣어 답하는 일이 있어 문자열도 받는다.
 const toSourceId = (v: unknown): number | null => {
