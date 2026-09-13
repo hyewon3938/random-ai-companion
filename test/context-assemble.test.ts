@@ -21,7 +21,7 @@ process.env.TELEGRAM_BOT_TOKEN ??= "test-token";
 process.env.ANTHROPIC_API_KEY ??= "test-key";
 
 const { assembleSystemBlocks } = await import("../src/context/assemble.js");
-const { dayProgressOf, sleepGap, wokeNowLine } = await import(
+const { dayProgressOf, heldNowLine, sleepGap, wokeNowLine } = await import(
   "../src/context/day-progress.js"
 );
 const { COLD_START_SEED, PERSON } = await import("../src/prompts/reply.js");
@@ -86,6 +86,7 @@ const input = (over: Partial<ContextInput> = {}): ContextInput => ({
   now: "15:35",
   progress: dayProgressOf(blocks, "15:35"),
   wokeAt: null,
+  held: null,
   nowDescription: "2026년 9월 6일 (일) 15:35",
   nowVerbal: "오후 3시 35분",
   judgedSpeech: null,
@@ -258,6 +259,46 @@ test("자다 깬 자리는 깬 줄로 바꾸고 분째 규칙을 붙이지 않�
   );
   assert.ok(live.text.includes("02:10에 상대 연락에 깼고, 지금 15분째 깨어 있다"));
   assert.ok(!live.text.includes("위 '분째'에 맞게 말한다"));
+});
+
+test("붙잡혀 취소하거나 미룬 블록은 실제 기록대로 적고 분째 규칙을 붙이지 않는다", () => {
+  const holdBlocks: PlanBlock[] = [
+    ...blocks.slice(0, 4),
+    { start: "19:00", end: "20:30", activity: "헬스장 운동", responsiveness: "unavailable", advance_known: true, category: "personal" },
+    { start: "20:30", end: "22:00", activity: "친구와 저녁", responsiveness: "unavailable", advance_known: true, category: "social" },
+  ];
+  const at = (now: string, held: ContextInput["held"]) =>
+    assembleSystemBlocks(
+      input({ now, progress: dayProgressOf(holdBlocks, now), held, nowDescription: `2026년 9월 6일 (일) ${now}`, nowVerbal: now }),
+    )[2].text;
+
+  const cancelled = at("19:30", { outcome: "취소", at: "2026-09-06 19:12:00" });
+  assert.ok(cancelled.includes('19:00~20:30 "헬스장 운동" 시간이지만 19:12에 상대가 붙잡아서 이 일을 취소했다'));
+  assert.ok(cancelled.includes("취소한 일을 지금 하거나 곧 하러 가는 것처럼 말하지 않고"));
+  assert.ok(!cancelled.includes('너는 지금 "헬스장 운동" 중이다'));
+  assert.ok(!cancelled.includes("위 '분째'에 맞게 말한다"));
+
+  const deferred = at("20:45", { outcome: "미룸", at: "2026-09-06 20:40:00" });
+  assert.ok(deferred.includes('20:30~22:00 "친구와 저녁" 시간이지만 20:40에 상대가 붙잡아서 이 일을 미뤘다'));
+  assert.ok(deferred.includes("미룬 일은 나중에 한다는 결로만 말하고"));
+  assert.ok(!deferred.includes("위 '분째'에 맞게 말한다"));
+});
+
+test("자다 깬 기록이 있으면 깬 줄이 붙잡힌 줄보다 앞선다", () => {
+  const sleep: PlanBlock = { start: "24:30", end: "31:00", activity: "잠", responsiveness: "unavailable", advance_known: true, category: "personal" };
+  const line = heldNowLine(sleep, "취소", "2026-09-07 02:10:00");
+  const [, , live] = assembleSystemBlocks(
+    input({
+      now: "26:25",
+      progress: dayProgressOf([...blocks, sleep], "26:25"),
+      wokeAt: "2026-09-06 02:10:00",
+      held: { outcome: "취소", at: "2026-09-07 02:10:00" },
+      nowDescription: "2026년 9월 7일 (월) 02:25",
+      nowVerbal: "새벽 2시 25분",
+    }),
+  );
+  assert.ok(live.text.includes("상대 연락에 깼고"));
+  assert.ok(!live.text.includes(line));
 });
 
 test("첫 만남·첫 대화·연락 텀·상황 문단·답장 형식은 켤 때만 붙는다", () => {

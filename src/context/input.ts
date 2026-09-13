@@ -58,7 +58,7 @@ import {
   kstStampBefore,
   type ContactGap,
 } from "../kst.js";
-import { WOKE_OUTCOME } from "../labels.js";
+import { isHoldOutcome, WOKE_OUTCOME } from "../labels.js";
 import { dayProgressOf, type DayProgress } from "./day-progress.js";
 import { readRelationshipInput, type RelationshipInput } from "./relationship.js";
 
@@ -142,6 +142,8 @@ export interface ContextInput {
   progress: DayProgress;
   /** 잠 블록에서 상대 연락으로 깬 기록의 시각. 없으면 null. */
   wokeAt: string | null;
+  /** 지금 블록을 상대가 붙잡아 취소하거나 미룬 기록의 결과와 시각. 없으면 null. */
+  held: { outcome: string; at: string } | null;
   /** 지금 시각의 숫자 표기와 말 표현. */
   nowDescription: string;
   nowVerbal: string;
@@ -239,15 +241,20 @@ export const readContextInput = (
   const plan = readTodayPlan(characterId, logicalToday);
   const now = kstLogicalClock();
   const progress = plan ? dayProgressOf(plan.blocks, now) : { past: [], cur: null };
-  // 잠 블록인데 오늘 실제 기록에 깸 행이 있으면 깨어 있는 것이다 — 답장 텀 판정(reply-timing)이
-  // 남긴 표시를 같은 키(블록 시작·결과)로 읽는다.
+  // 지금 블록의 오늘 실제 기록 — 답장 텀 판정(reply-timing)과 답장의 stay 신호가 남긴 표시를
+  // 같은 키(블록 시작·결과)로 읽는다. 잠 블록에 깸 행이 있으면 깨어 있는 것이고, 취소·미룸 행이
+  // 있으면 상대가 붙잡아 그 일을 하지 않고 있는 것이다.
   const cur = progress.cur;
+  const actuals = cur
+    ? getDayActuals(characterId, logicalToday).filter(
+        (a) => a.block_start === cur.start,
+      )
+    : [];
   const woke =
     cur && isSleeping(cur)
-      ? getDayActuals(characterId, logicalToday).find(
-          (a) => a.block_start === cur.start && a.outcome === WOKE_OUTCOME,
-        )
+      ? actuals.find((a) => a.outcome === WOKE_OUTCOME)
       : undefined;
+  const held = actuals.find((a) => isHoldOutcome(a.outcome));
 
   // 이번 발화의 태그로 검색한 기억·옛 일기·지난 일정.
   const { tags, pool: tagPool } = opts.pick ?? { tags: [], pool: 0 };
@@ -334,6 +341,7 @@ export const readContextInput = (
     now,
     progress,
     wokeAt: woke?.recorded_at ?? null,
+    held: held ? { outcome: held.outcome, at: held.recorded_at } : null,
     nowDescription: kstDescription(),
     nowVerbal: kstVerbalTime(),
     // 저장된 말투가 반말·존댓말이면 판정하지 않는다 — 판정만으로 정하면 존댓말로 되돌아간다.
