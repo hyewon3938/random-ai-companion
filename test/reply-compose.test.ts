@@ -140,7 +140,7 @@ describe("composeReply", () => {
     assert.ok(text.startsWith("[상대가 붙잡는 중]"));
     assert.ok(text.includes('너는 지금 "헬스장 운동" 중이라'));
     assert.ok(text.includes("짧게 답하고 하던 일로 돌아갈지는 대화를 보고 정한다"));
-    assert.ok(text.includes("남기로 하면 stay 신호를 싣는다"));
+    assert.ok(text.includes("남기로 하면 stay 칸을 true로 준다"));
     // 판정이 정한 결정처럼 쓰지 않는다
     assert.ok(!text.includes("취소하고 남기로 했다"));
   });

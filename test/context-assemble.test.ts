@@ -286,13 +286,13 @@ test("붙잡혀 취소하거나 미룬 블록은 실제 기록대로 적고 분�
 
 test("자다 깬 기록이 있으면 깬 줄이 붙잡힌 줄보다 앞선다", () => {
   const sleep: PlanBlock = { start: "24:30", end: "31:00", activity: "잠", responsiveness: "unavailable", advance_known: true, category: "personal" };
-  const line = heldNowLine(sleep, "취소", "2026-09-07 02:10:00");
+  const line = heldNowLine(sleep, "취소", "2026-09-06 02:10:00");
   const [, , live] = assembleSystemBlocks(
     input({
       now: "26:25",
       progress: dayProgressOf([...blocks, sleep], "26:25"),
       wokeAt: "2026-09-06 02:10:00",
-      held: { outcome: "취소", at: "2026-09-07 02:10:00" },
+      held: { outcome: "취소", at: "2026-09-06 02:10:00" },
       nowDescription: "2026년 9월 7일 (월) 02:25",
       nowVerbal: "새벽 2시 25분",
     }),
