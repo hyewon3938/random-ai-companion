@@ -34,7 +34,7 @@ yarn dev        # 로컬 기동 (long polling)
 
 ## 규칙
 
-- **문체**: 사람이 읽는 한국어 산문(설계 문서·README·이슈·PR 본문·유저에게 보내는 답)은 `writing` 스킬을 먼저 로드하고 쓴다. 코드·주석은 대상이 아니다.
+- **문체**: 설계 문서·README·이슈·PR 본문처럼 사람이 읽는 한국어 산문은 `writing` 스킬을 먼저 로드하고 쓴다. 채팅 답변은 output style을 따르고, 코드·주석은 대상이 아니다.
 - **공개 톤**: 이 repo는 공개되어 있다. 특정 서비스명 비교·개인 맥락·실제 대화 로그를 커밋하지 않는다. 사적 맥락은 전부 LOCAL-CONTEXT.md(gitignored)로.
 - **보안**: `.env`, `*.db`, `logs/`, `data/` 커밋 금지 (gitignore 반영됨).
 - **코드**: TypeScript strict + ESM(import에 `.js` 확장자), named export, kebab-case 파일명, any 금지. 커밋은 Conventional Commits 한글. `src/*.ts`는 파일 맨 위 주석으로 시작한다 — 첫 줄이 한 문장 요약이고, 빈 주석 줄을 두고 그 아래에 자세한 설명을 적는다. 그 파일을 고치면 이 주석도 같은 커밋에서 고친다.
