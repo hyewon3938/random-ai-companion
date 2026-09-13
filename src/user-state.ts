@@ -16,13 +16,19 @@
 // 상태와 달리 바뀌었는지와 상관없이 턴마다 나오고, reply-compose가 relationship_signals에
 // 1행으로 적는다. 읽는 자리(readOpenSignals)를 상태 판정과 갈라 둔 것은 상태 쪽 검사와 호출부가
 // 그대로 남게 하려는 것이다 — 열림 칸이 빠진 답도 상태 판정은 그대로 쓴다.
+//
+// 직전에 쓴 플러팅은 판정할 상대 말 바로 앞, 그 앞 상대 말 뒤로 캐릭터가 이어서 보낸 말들에서
+// 모두 읽는다(pendingMoves, #436). 관계 설계 §6의 표본이 플러팅 답장 하나와 그 뒤 상대의 첫 턴이라,
+// 캐릭터 말 한 건만 보면 플러팅 뒤에 말이 한 번 더 나간 턴을 플러팅이 없던 턴으로 적는다. 대화에도
+// 어느 말이 플러팅이었는지 표시해, 받음을 그 플러팅 자체에 반응했을 때로 좁힌 규칙을 모델이 대화
+// 안에서 가를 수 있게 한다. 그 구간에 플러팅이 있으면 해당 없음은 받지 않는다.
 
 import { chat, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
 import {
+  getAssistantMetaByIdRange,
   getRecentMessages,
   getRelationship,
-  lastAssistantMessage,
   setCallContext,
   type MessageRow,
   type RelationshipRow,
@@ -60,7 +66,7 @@ export interface OpenSignals {
   openedSelf: boolean;
   askedAboutChar: boolean;
   saidAffection: boolean;
-  /** 직전에 캐릭터가 쓴 플러팅. 없으면 null이고 그때 반응은 none이다. */
+  /** 상대 말 바로 앞 캐릭터 말들이 쓴 플러팅. 여럿이면 마지막 것이고, 없으면 null이며 그때 반응은 none이다. */
   prevMove: Move | null;
   moveReaction: MoveReaction;
 }
@@ -80,7 +86,11 @@ const SYSTEM = `너는 두 사람의 메시지 대화를 옆에서 읽는 관찰
 - opened_self: 상대가 묻지 않았는데 자기 얘기(자기 하루·기분·과거·고민)를 꺼냈으면 true.
 - asked_about_char: 상대가 캐릭터의 근황이나 상태를 물었으면 true. 뭐 해?처럼 지금 하는 일을 묻는 것도 포함한다.
 - said_affection: 상대가 캐릭터에게 호감을 말로 드러냈으면 true(좋다·보고 싶다·기다렸다·생각났다 같은 말).
-- move_reaction: [직전에 캐릭터가 쓴 플러팅]이 있을 때, 상대가 그 플러팅을 받아 반응했으면 accepted, 답하지 않고 다른 얘기로 넘어갔으면 ignored, 밀어내거나 싫다고 했으면 rejected. 플러팅이 없었으면 none.
+- move_reaction: [직전에 캐릭터가 쓴 플러팅]에 적힌 플러팅을 상대가 어떻게 받았는지. 그 플러팅은 [최근 대화]에서 캐릭터(플러팅: 이름)으로 표시한 말이다.
+  - accepted: 상대가 그 플러팅 자체에 반응했을 때만. 챙겨 준 말에 고마워하거나 기억해 준 것에 기뻐하기, 물어본 것에 자기 얘기로 제대로 답하기, 웃긴 말에 맞장구치며 그 얘기를 이어 가기처럼 그 말을 받아 대화가 이어진 경우다.
+  - ignored: 플러팅은 두고 다른 얘기로 넘어갔거나, ㅋㅋ 같은 짧은 웃음·응·그렇구나 같은 한두 마디·미지근한 답만 했을 때.
+  - rejected: 밀어내거나 싫다·부담스럽다·그만하라고 했을 때.
+  - none: [직전에 캐릭터가 쓴 플러팅]이 (없음)일 때만. 목록에 플러팅이 있으면 none을 쓰지 않는다. 둘 이상이면 가장 나중 것에 대한 반응을 적는다.
 
 JSON 한 줄로만 답한다. 열림 4항목은 두 모양 모두에 넣는다:
 {"changed":true,"state":"...","cause":"char|other","tone":"good|neutral|bad","since":"HH:MM","opened_self":true,"asked_about_char":false,"said_affection":false,"move_reaction":"none"}
@@ -89,20 +99,103 @@ JSON 한 줄로만 답한다. 열림 4항목은 두 모양 모두에 넣는다:
 const CAUSES: readonly UserStateCause[] = ["char", "other"];
 const TONES: readonly UserStateTone[] = ["good", "neutral", "bad"];
 
-/** 최근 대화를 판정 호출에 넣는 모양으로. 날짜가 바뀌는 줄에만 M/D를 앞에 붙인다. */
-export const userStateTranscript = (rows: MessageRow[]): string => {
+/** 판정 호출의 시각 표기. lastDate(논리일)와 다른 날이면 M/D를 앞에 붙인다. */
+const stampOf = (sentAt: string, lastDate: string): string => {
+  const date = logicalDateOf(sentAt);
+  const day =
+    date === lastDate
+      ? ""
+      : `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))} `;
+  return `[${day}${clockLabel(logicalClockOf(sentAt))}]`;
+};
+
+/**
+ * 최근 대화를 판정 호출에 넣는 모양으로. 날짜가 바뀌는 줄에만 M/D를 앞에 붙인다.
+ * flirts는 메시지 번호 → 그 말이 쓴 플러팅이고, 그 줄에만 플러팅 이름을 붙인다.
+ */
+export const userStateTranscript = (
+  rows: MessageRow[],
+  flirts: ReadonlyMap<number, Move> = new Map(),
+): string => {
   if (!rows.length) return "(없음)";
   const lastDate = logicalDateOf(rows[rows.length - 1]!.sent_at);
   return rows
     .map((r) => {
-      const date = logicalDateOf(r.sent_at);
-      const day =
-        date === lastDate
-          ? ""
-          : `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))} `;
-      const who = r.role === "user" ? "상대" : "캐릭터";
-      return `[${day}${clockLabel(logicalClockOf(r.sent_at))}] ${who}: ${r.text}`;
+      const move = flirts.get(r.id);
+      const who =
+        r.role === "user"
+          ? "상대"
+          : move
+            ? `캐릭터(플러팅: ${MOVE_NAME[move]})`
+            : "캐릭터";
+      return `${stampOf(r.sent_at, lastDate)} ${who}: ${r.text}`;
     })
+    .join("\n");
+};
+
+/** 상대 말 바로 앞 캐릭터 말이 쓴 플러팅 하나. */
+export interface PendingMove {
+  id: number;
+  sentAt: string;
+  move: Move;
+}
+
+/**
+ * 판정할 상대 말(끝에 이어진 상대 말들) 바로 앞, 그 앞 상대 말 뒤로 캐릭터가 이어서 보낸 말들.
+ * 끝줄이 캐릭터 말이면 판정할 상대 말이 없어 빈 목록이다. rows 안에서만 찾는다.
+ */
+export const pendingCharRun = (rows: MessageRow[]): MessageRow[] => {
+  let end = rows.length - 1;
+  while (end >= 0 && rows[end]!.role === "user") end--;
+  if (end === rows.length - 1) return [];
+  let start = end;
+  while (start >= 0 && rows[start]!.role !== "user") start--;
+  return rows.slice(start + 1, end + 1);
+};
+
+const moveOf = (metaJson: string | null): Move | null => {
+  if (!metaJson) return null;
+  try {
+    const meta = JSON.parse(metaJson) as { move?: unknown };
+    return typeof meta.move === "string" && meta.move in MOVE_NAME
+      ? (meta.move as Move)
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/** 판정할 상대 말 바로 앞 캐릭터 말들이 쓴 플러팅을 보낸 순서로. rows는 판정이 보는 최근 대화다. */
+export const pendingMoves = (
+  chatId: string,
+  characterId: number,
+  rows: MessageRow[],
+): PendingMove[] => {
+  const run = pendingCharRun(rows);
+  if (!run.length) return [];
+  const sentAt = new Map(run.map((r) => [r.id, r.sent_at]));
+  return getAssistantMetaByIdRange(
+    chatId,
+    characterId,
+    run[0]!.id,
+    run[run.length - 1]!.id,
+  ).flatMap((m) => {
+    const move = moveOf(m.meta_json);
+    const at = sentAt.get(m.id);
+    return move && at ? [{ id: m.id, sentAt: at, move }] : [];
+  });
+};
+
+/** [직전에 캐릭터가 쓴 플러팅] 블록. 한 줄에 시각과 플러팅 이름 하나. */
+export const pendingMovesBlock = (
+  moves: PendingMove[],
+  rows: MessageRow[],
+): string => {
+  const last = rows[rows.length - 1];
+  if (!moves.length || !last) return "(없음)";
+  const lastDate = logicalDateOf(last.sent_at);
+  return moves
+    .map((m) => `${stampOf(m.sentAt, lastDate)} ${MOVE_NAME[m.move]}`)
     .join("\n");
 };
 
@@ -194,7 +287,7 @@ const asFlag = (x: unknown): boolean | null =>
 
 /**
  * 같은 답에서 열림 4항목을 읽는다. 세 예/아니오 가운데 하나라도 없으면 null — 그 턴은 행을 안 적는다.
- * 직전에 쓴 플러팅이 없으면 반응은 늘 none이고, 플러팅이 있었는데 반응 칸이 목록 밖이면 null이다.
+ * 직전에 쓴 플러팅이 없으면 반응은 늘 none이고, 플러팅이 있었는데 반응 칸이 목록 밖이거나 none이면 null이다.
  */
 export const readOpenSignals = (
   raw: string,
@@ -210,28 +303,11 @@ export const readOpenSignals = (
   let moveReaction: MoveReaction = "none";
   if (prevMove) {
     const r = v.move_reaction;
-    if (typeof r !== "string" || !(r in MOVE_REACTION_NAME)) return null;
+    if (typeof r !== "string" || r === "none" || !(r in MOVE_REACTION_NAME))
+      return null;
     moveReaction = r as MoveReaction;
   }
   return { openedSelf, askedAboutChar, saidAffection, prevMove, moveReaction };
-};
-
-/** 캐릭터의 마지막 말이 판정이 보는 대화 안에 있고 플러팅을 썼으면 그 코드. */
-const lastMoveIn = (
-  chatId: string,
-  characterId: number,
-  windowStart: string,
-): Move | null => {
-  const last = lastAssistantMessage(chatId, characterId);
-  if (!last || last.sent_at < windowStart || !last.meta_json) return null;
-  try {
-    const meta = JSON.parse(last.meta_json) as { move?: unknown };
-    return typeof meta.move === "string" && meta.move in MOVE_NAME
-      ? (meta.move as Move)
-      : null;
-  } catch {
-    return null;
-  }
 };
 
 const noChange = (
@@ -258,11 +334,12 @@ export const judgeUserState = async (
   const rel = getRelationship(characterId);
   const last = rows[rows.length - 1]!;
   const prev = rel ? userStateLabel(rel, logicalDateOf(last.sent_at)) : null;
-  const prevMove = lastMoveIn(chatId, characterId, rows[0]!.sent_at);
+  const moves = pendingMoves(chatId, characterId, rows);
+  const prevMove = moves[moves.length - 1]?.move ?? null;
   const content = [
     `[지난 판정]\n${prev ?? "(없음)"}`,
-    `[직전에 캐릭터가 쓴 플러팅]\n${prevMove ? MOVE_NAME[prevMove] : "(없음)"}`,
-    `[최근 대화]\n${userStateTranscript(rows)}`,
+    `[직전에 캐릭터가 쓴 플러팅]\n${pendingMovesBlock(moves, rows)}`,
+    `[최근 대화]\n${userStateTranscript(rows, new Map(moves.map((m) => [m.id, m.move])))}`,
   ].join("\n\n");
   const meta: CallMeta = { purpose: "user_state", characterId, chatId };
   try {

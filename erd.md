@@ -210,7 +210,7 @@ genesis_json은 유저가 캐릭터를 만들 때 적어 낸 입력과 생성 �
 | opened_self | INTEGER | O | 유저가 자기 얘기를 열었는가 — 0 아님 · 1 그렇다 |
 | asked_about_char | INTEGER | O | 캐릭터 근황을 먼저 물었는가 — 0 아님 · 1 그렇다 |
 | said_affection | INTEGER | O | 호감을 말로 했는가 — 0 아님 · 1 그렇다 |
-| prev_move | TEXT | | 직전 캐릭터 답장이 쓴 플러팅 |
+| prev_move | TEXT | | 그 턴 바로 앞, 앞선 유저 메시지 뒤로 이어진 캐릭터 말들이 쓴 플러팅. 여럿이면 마지막 것 |
 | move_reaction | TEXT | | 그 플러팅을 어떻게 받았는가 |
 | call_id | INTEGER | | 판정 호출 |
 
