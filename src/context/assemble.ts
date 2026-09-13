@@ -62,7 +62,7 @@ import {
   RESPONSIVENESS_NOTE,
 } from "../prompts/reply.js";
 import { RELATIONSHIP_FRAME, STAGE_BLOCKS } from "../prompts/relationship.js";
-import { toMin, wokeNowLine } from "./day-progress.js";
+import { heldNowLine, toMin, wokeNowLine } from "./day-progress.js";
 import type { BuildOptions, ContextInput } from "./input.js";
 import { relationshipNowSection } from "./relationship.js";
 
@@ -208,20 +208,22 @@ const recentSection = (rows: MessageRow[]): string => {
 
 const nowSection = (input: ContextInput): string => {
   const { past, cur } = input.progress;
-  const { now, wokeAt } = input;
+  const { now, wokeAt, held } = input;
   // 시각은 숫자 표기와 말 표현을 함께 준다 — "12:30"만 주면 모델이 분을 흘리고 시 토큰만 읽어
   // "곧 12시" 같은 오인이 난다(12시 반인데). 반올림·상대 표현은 코드가 계산한 값을 그대로 쓰게 한다.
   const situation = cur
     ? wokeAt
       ? wokeNowLine(cur, wokeAt, now)
-      : `너는 지금 "${cur.activity}" 중이다(이 일 ${clockLabel(cur.start)}~${clockLabel(cur.end)}·시작 ${Math.max(0, toMin(now) - toMin(cur.start))}분째·끝나기까지 ${Math.max(0, toMin(cur.end) - toMin(now))}분, 답장 여건 ${RESPONSIVENESS_NAME[cur.responsiveness]}, 활동 성격 ${ACTIVITY_CATEGORY_NAME[blockCategory(cur)]}).`
+      : held
+        ? heldNowLine(cur, held.outcome, held.at)
+        : `너는 지금 "${cur.activity}" 중이다(이 일 ${clockLabel(cur.start)}~${clockLabel(cur.end)}·시작 ${Math.max(0, toMin(now) - toMin(cur.start))}분째·끝나기까지 ${Math.max(0, toMin(cur.end) - toMin(now))}분, 답장 여건 ${RESPONSIVENESS_NAME[cur.responsiveness]}, 활동 성격 ${ACTIVITY_CATEGORY_NAME[blockCategory(cur)]}).`
     : null;
   const nowLine = situation
     ? `- 지금: ${input.nowDescription}, 즉 ${input.nowVerbal} — 시각은 이 말 표현 그대로 인식한다(분 단위까지. 방금 12시가 지났는데 "곧 12시"라고 하지 않는다). ${situation} 유저 인사·질문이 다른 시간대를 암시해도(예: 오후 2시인데 "출근 잘했어?", 저녁인데 "점심 뭐 먹었어?") 실제 이 시각·이 상황 기준으로 답한다 — 유저 말투에 끌려 아침/저녁을 착각하지 않는다.`
     : `- 지금: ${input.nowDescription}, 즉 ${input.nowVerbal} — 시각은 이 말 표현 그대로 인식한다(분 단위까지). 유저 말이 다른 시간대를 암시해도 실제 이 시각 기준으로 답한다.`;
-  // 깨어 있는 잠 블록에는 여건 안내와 '분째'·끝 시각 규칙을 붙이지 않는다 — 잠의 남은 시간을
-  // 일의 남은 시간처럼 말하게 된다.
-  const onTask = !!cur && !wokeAt;
+  // 깨어 있는 잠 블록과 붙잡혀 취소하거나 미룬 블록에는 여건 안내와 '분째'·끝 시각 규칙을
+  // 붙이지 않는다 — 하지 않는 일의 남은 시간을 지금 하는 일의 남은 시간처럼 말하게 된다.
+  const onTask = !!cur && !wokeAt && !held;
   return [
     `[지금 — 답장 전에 이 사실들과 어긋나지 않는지 확인한다]`,
     // 끝 시각까지 함께 준다. 시작 시각만 있으면 "20:15 씻기"가 지금 하는 일인지 이미 마친

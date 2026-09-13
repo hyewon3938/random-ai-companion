@@ -15,7 +15,12 @@ import type { PlanBlock } from "./day-plan.js";
 import type { SystemBlock } from "./llm.js";
 import { kstLogicalClock } from "./kst.js";
 import { assembleSystemBlocks } from "./context/assemble.js";
-import { dayProgressOf, sleepGap, wokeNowLine } from "./context/day-progress.js";
+import {
+  dayProgressOf,
+  heldNowLine,
+  sleepGap,
+  wokeNowLine,
+} from "./context/day-progress.js";
 import {
   readContextInput,
   readTodayPlan,
@@ -23,7 +28,7 @@ import {
   type BuildTrace,
 } from "./context/input.js";
 
-export { sleepGap, wokeNowLine };
+export { heldNowLine, sleepGap, wokeNowLine };
 export type { BuildOptions, BuildTrace };
 
 /** 지금 이 순간의 각본 블록. 침묵 팔로업과 답장 텀 판정이 쓴다. */

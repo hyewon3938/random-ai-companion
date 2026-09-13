@@ -3,9 +3,10 @@
 // 즉답·틈틈이 답장(bot.ts의 respond), 불가 구간이 끝난 뒤의 몰아 답장(bot.ts의 깨우기
 // 핸들러), 약속 시각의 답장(bot.ts의 약속 핸들러)이 같은 순서로 답장을 만든다. 서로 다른
 // 것은 프롬프트 끝에 붙는 상황 문단, 대화 기록에서 시간 표시를 강제하는 기준 시각, 호출
-// 기록에 붙이는 근거 세 가지뿐이라 그 셋만 입력으로 받는다. 붙잡기 판정이 일정을 취소하거나
-// 미룬 뒤의 답장이면 그 결정을 상황 문단으로 함께 알려 준다 — 판정 결과를 모른 채 쓰면
-// 취소한 일에 가겠다고 하거나 끝나고 연락하겠다는 약속이 나온다(이슈 #308). 만든 답장을
+// 기록에 붙이는 근거 세 가지뿐이라 그 셋만 입력으로 받는다. 붙잡기 판정이 붙잡는 말로 읽어
+// 지금 답하는 자리면 호출부가 holdSituation을 상황 문단으로 넘기고, 일정을 취소하거나 미룰지는
+// 이 답장이 stay 신호로 정한다. 이미 취소하거나 미룬 사실은 프롬프트의 지금 절이 오늘 실제
+// 기록에서 읽어 넣으므로 여기서 따로 알리지 않는다(이슈 #430). 만든 답장을
 // 어떻게 보낼지(정한 시각에 보낼지, 바로 보낼지)는 호출부가 정한다 — 이 파일은 텔레그램을
 // 모른다.
 //
@@ -142,19 +143,12 @@ export const askReplyWith: ReplyAsker = (system, turns, meta) =>
     return { text, callId: callMeta.callId ?? null };
   });
 
-/** 붙잡기 판정이 이미 내린 결정을 답장에 알리는 상황 문단. 답장이 그 결정과 어긋나지 않게. */
-export const heldSituation = (held: {
-  activity: string;
-  outcome: string;
-}): string =>
+/** 붙잡기 판정이 붙잡는 말로 읽어 지금 답하는 자리의 상황 문단. 일정을 어떻게 할지는 답장이 정한다. */
+export const holdSituation = (activity: string): string =>
   [
-    `[붙잡기 판정 — 이미 정해진 것]`,
-    `상대가 붙잡아서 너는 "${held.activity}"을(를) ${
-      held.outcome === "취소"
-        ? "취소하고 남기로 했다"
-        : "미루고 지금은 상대 곁에 남기로 했다"
-    }. 이 답장은 그 결정 뒤의 말이다.`,
-    `- 취소했으면 그 일에 가겠다거나 끝나고 연락하겠다고 하지 않는다. 미뤘으면 나중에 한다는 결로만 말하고 지금 가겠다고 하지 않는다.`,
+    `[상대가 붙잡는 중]`,
+    `너는 지금 "${activity}" 중이라 원래 끝날 때 몰아 답하는 시간이지만, 상대가 붙잡는 말을 보내서 지금 답한다.`,
+    `- 이 일을 취소하거나 미루고 상대 곁에 남을지, 짧게 답하고 하던 일로 돌아갈지는 대화를 보고 정한다. 남기로 하면 stay 칸을 true로 준다.`,
     `- 남기로 한 것을 무겁게 생색내지 않는다. 한 마디면 된다.`,
   ].join("\n");
 
@@ -163,7 +157,7 @@ export interface ComposeInput {
   chatId: string;
   /** 지금 답장하는 유저 발화. */
   turn: UserTurn;
-  /** 프롬프트 맨 끝에 붙는 상황 문단 — 배웅 답과 몰아 답장이 준다. */
+  /** 프롬프트 맨 끝에 붙는 상황 문단 — 배웅 답, 몰아 답장, 붙잡는 말에 지금 하는 답장이 준다. */
   situation?: string;
   /** 대화 기록에서 이 시각 이후 첫 메시지에 시간 표시를 강제한다(몰아 답장, 이슈 #238). */
   markFrom?: string;
@@ -172,11 +166,6 @@ export interface ComposeInput {
    * 끝나 답하는지. 검색한 태그·기억, 대화 길이, 관계 갱신은 이 파일이 뒤에 붙인다.
    */
   context: Record<string, unknown>;
-  /**
-   * 붙잡기 판정이 이미 일정을 취소하거나 미뤘으면 그 기록. stay 신호로 남긴 기록보다 앞선다 —
-   * 판정이 접은 자리는 recordHold가 알아서 넘어가므로 둘이 같은 블록을 두 번 적지 않는다.
-   */
-  heldActual?: { blockStart: string | null; activity: string; outcome: string };
   /** 로그 머리말 — "[send]"·"[wake]"처럼 어느 길에서 만들었는지. */
   logTag: string;
   ask?: ReplyAsker;
@@ -233,19 +222,12 @@ export const composeReply = async (
     judge(characterId, chatId),
   ]);
   relUpdates.push(...applyUserState(characterId, verdict, kstStamp()));
-  // 상황 문단은 호출부가 준 것 뒤에 붙잡기 판정의 결정을 잇는다 — 둘 다 있을 수 있다.
-  const situation = [
-    input.situation ?? "",
-    input.heldActual ? heldSituation(input.heldActual) : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
   const system = buildSystemBlocks(characterId, chatId, {
     pick,
     trace: built,
     // 답장만 객체(JSON)로 받는다 — 본문과 신호가 한 덩이로 온다.
     signals: true,
-    ...(situation ? { situation } : {}),
+    ...(input.situation ? { situation: input.situation } : {}),
   });
   const turns = replyHistory(chatId, characterId, input.markFrom);
   const meta: CallMeta = { purpose: "reply", characterId, chatId };
@@ -300,10 +282,9 @@ export const composeReply = async (
     outputParse: parse,
     ...(missingSlots.length ? { missingSlots } : {}),
   });
-  // 조정 가능한(개인·사회) 자기 일정을 취소하거나 미루고 남기로 한 stay 신호.
+  // 조정 가능한(개인·사회) 자기 일정을 취소하거나 미루고 남기로 한 stay 신호 — 일정 기록은 이 자리 하나다.
   const staged = signals.stay ? recordHold(characterId) : null;
-  if (input.heldActual) attach({ dayActual: { ...input.heldActual, by: "judge" } });
-  else if (staged) attach({ dayActual: { ...staged, by: "stay" } });
+  if (staged) attach({ dayActual: staged });
 
   if (!bubbles.length) {
     attach({ dropped: "빈 답장" });

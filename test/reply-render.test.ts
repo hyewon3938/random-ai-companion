@@ -134,11 +134,10 @@ test("자다 깨서 이어 답하는 자리와 판정을 물은 자리가 구분
       block,
       asked: true,
       heldJudged: true,
-      held: { outcome: "붙잡음", activity: "팀 회의" },
     },
   });
-  assert.equal(held[0], "*텀* 바로 뒤 · 붙잡혀 접음");
-  assert.equal(held[2], "*붙잡기 판정* 물었다 · 붙잡음 → 일정 붙잡음");
+  assert.equal(held[0], "*텀* 바로 뒤 · 붙잡는 말이라 바로 답함");
+  assert.equal(held[2], "*붙잡기 판정* 물었다 · 붙잡음");
 
   const failed = timingLines({
     timing: { waitMs: 0, path: "until_end", block, asked: true, holdFailed: true },

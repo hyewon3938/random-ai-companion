@@ -71,7 +71,11 @@ import {
   type TimingDecision,
 } from "./reply-timing.js";
 import { awayNoticeSent, basisLineFromMeta } from "./proactive-policy.js";
-import { composeReply, pendingUserTurn } from "./reply-compose.js";
+import {
+  composeReply,
+  holdSituation,
+  pendingUserTurn,
+} from "./reply-compose.js";
 import { promiseSlotFor } from "./reply-promise.js";
 import {
   armReturnRow,
@@ -1014,24 +1018,19 @@ const respond = async (
       return;
     }
 
-    // 1. 텀부터 정한다. 붙잡기 판정도 여기서 끝나고, 접거나 미룬 일정은 오늘 실제 기록에 바로 적힌다.
+    // 1. 텀부터 정한다. 붙잡기 판정도 여기서 끝나지만 판정은 지금 답할지만 정한다 — 일정을 취소하거나
+    // 미룰지는 답장 모델이 stay 신호로 정하고, 그 기록은 답장을 만들 때 적힌다.
     // 복구 답장은 이미 늦은 것이라 텀을 다시 얹지 않는다.
     const timing: TimingDecision =
       kind === "recover"
         ? {
             waitMs: 0,
-            held: null,
             gather: null,
             trace: { path: "recover", block: null, asked: false },
           }
         : await decideReplyTiming(character.id, turn.text, {
             burst: { n: turn.n, firstAt: turn.firstAt },
           });
-    if (timing.held)
-      console.log(
-        `[hold] ${chatId} ${timing.held.activity} → ${timing.held.outcome}`,
-      );
-
     // 답장 불가 구간 — 지금 만들지 않는다. 구간 끝에 울릴 깨우기 표시만 걸어 두면
     // 그때 쌓인 메시지를 한 번에 읽고 답한다. 표시가 이미 걸려 있으면 메시지만 쌓는다.
     if (timing.gather) {
@@ -1089,7 +1088,7 @@ const respond = async (
       return;
     }
     // 불가 구간이 아닌 길로 답장이 나간다 — 걸려 있던 깨우기 표시가 있으면 거둔다.
-    // (붙잡혀 일정을 접었거나 구간이 끝난 경우. 지금 만드는 답장이 쌓인 메시지까지 함께 답한다.)
+    // (붙잡는 말이라 지금 답하거나 구간이 끝난 경우. 지금 만드는 답장이 쌓인 메시지까지 함께 답한다.)
     const droppedWake = dropWakeRows(chatId, "지금 답장이 대신한다");
     if (droppedWake)
       console.log(
@@ -1097,28 +1096,27 @@ const respond = async (
       );
 
     // 2. 지금 만든다 — 순서는 reply-compose.ts에 있다. 예고해 둔 자리 비움이 곧 시작되면
-    // 배웅 답 상황 문단을 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다). 호출 기록에는 텀 계산의
-    // 입력과 결과, 도착 대기, 붙잡기 판정이 접은 일정을 앞세워 붙인다.
+    // 배웅 답 상황 문단을 얹는다(곧 나간다는 걸 아는 채로 짧게 받는다). 붙잡는 말이라 지금 답하는
+    // 자리면 붙잡기 상황 문단을 잇는다 — 일정을 취소하거나 미룰지는 이 답장이 정한다. 호출 기록에는
+    // 텀 계산의 입력과 결과, 도착 대기를 앞세워 붙인다.
     const away =
       kind === "reply" ? upcomingAnnouncedAway(chatId, character.id) : null;
+    const holding =
+      timing.trace.path === "held" && timing.trace.block
+        ? holdSituation(timing.trace.block.activity)
+        : "";
+    const situation = [away ? farewellSituation(away) : "", holding]
+      .filter(Boolean)
+      .join("\n\n");
     const reply = await composeReply({
       characterId: character.id,
       chatId,
       turn,
-      ...(away ? { situation: farewellSituation(away) } : {}),
+      ...(situation ? { situation } : {}),
       context: {
-        timing: { waitMs: timing.waitMs, ...timing.trace, held: timing.held },
+        timing: { waitMs: timing.waitMs, ...timing.trace },
         ...(arrival ? { arrival } : {}),
       },
-      ...(timing.held
-        ? {
-            heldActual: {
-              blockStart: timing.trace.block?.start ?? null,
-              activity: timing.held.activity,
-              outcome: timing.held.outcome,
-            },
-          }
-        : {}),
       logTag: "[send]",
     });
     if (!reply) return;

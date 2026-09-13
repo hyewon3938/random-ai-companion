@@ -79,7 +79,6 @@ export interface CallContext {
     heldJudged?: boolean;
     /** 판정을 물었는데 답을 못 받았는가. */
     holdFailed?: boolean;
-    held?: { outcome: string; activity: string } | null;
     /** 붙잡기 판정을 물었으면 그 호출 번호. */
     holdCallId?: number | null;
   };
@@ -188,12 +187,11 @@ export interface CallContext {
   retryCallId?: number | null;
   /** 이 호출이 다른 호출에 딸린 것이면 그 부모 번호 — 재생성 호출이 여기 걸린다. */
   partOf?: number;
-  /** 이 답장이 접거나 미룬 일정. by는 판정으로 접었는지 답장 표시로 접었는지. */
+  /** 이 답장이 stay 신호로 취소하거나 미룬 일정. */
   dayActual?: {
     blockStart?: string | null;
     activity?: string;
     outcome?: string;
-    by?: string;
   };
   /** 이 답장을 만들며 바뀐 관계 항목. 한 답장에서 셋까지 바뀔 수 있어 목록으로 온다.
    *  이미 쌓인 기록은 항목 하나가 객체로 들어 있어 두 모양을 다 읽는다. */
@@ -220,10 +218,10 @@ export interface CallContext {
 const PATH_NAME: Record<string, string> = {
   no_plan: "각본 없음",
   sleeping: "자다 깸",
-  already_held: "이미 접어 둔 상태",
+  already_held: "이미 취소하거나 미룬 상태",
   table: "텀 표",
   until_end: "구간 끝",
-  held: "붙잡혀 접음",
+  held: "붙잡는 말이라 바로 답함",
   recover: "복구 발송",
 };
 
@@ -339,12 +337,12 @@ const holdSkipReason = (t: NonNullable<CallContext["timing"]>): string => {
   if (t.path === "sleeping")
     return "자는 중이라 표를 건너뛰고 깨는 대로 답한다";
   if (t.path === "already_held")
-    return "이미 접어 둔 일정이라 다시 묻지 않는다";
-  // 판정은 답장 불가 구간에서만, 그중에서도 접을 수 있는 일정에서만 돈다.
+    return "이미 취소하거나 미룬 일정이라 다시 묻지 않는다";
+  // 판정은 답장 불가 구간에서만, 그중에서도 취소하거나 미룰 수 있는 일정에서만 돈다.
   const r = t.block ? toResponsiveness(t.block.responsiveness) : null;
   if (r !== "unavailable") return "답장 불가 구간이 아니다";
   const c = t.block ? toActivityCategory(t.block.category) : null;
-  if (c === "official") return "공적 일정이라 접을 수 없다";
+  if (c === "official") return "공적 일정이라 취소하거나 미룰 수 없다";
   return "판정을 부르지 않았다";
 };
 
@@ -405,9 +403,8 @@ export const timingLines = (ctx: CallContext): string[] => {
       : t.heldJudged
         ? "붙잡음"
         : "아님";
-    const tail = t.held ? ` → 일정 ${t.held.outcome}` : "";
     out.push(
-      `*붙잡기 판정* 물었다 · ${verdict}${esc(tail)}${ref ? ` (호출 ${ref})` : ""}`,
+      `*붙잡기 판정* 물었다 · ${verdict}${ref ? ` (호출 ${ref})` : ""}`,
     );
   } else {
     out.push(`*붙잡기 판정* 묻지 않음 — ${holdSkipReason(t)}`);
@@ -551,9 +548,8 @@ const outcomeLines = (ctx: CallContext): string[] => {
     );
   if (ctx.dayActual) {
     const d = ctx.dayActual;
-    const by = d.by === "judge" ? "붙잡기 판정" : "답장의 남음 신호";
     out.push(
-      `*각본과 달라진 하루* ${esc(`${d.blockStart ?? ""} ${d.activity ?? ""}`.trim())} → ${esc(d.outcome ?? "")} (${by})`,
+      `*각본과 달라진 하루* ${esc(`${d.blockStart ?? ""} ${d.activity ?? ""}`.trim())} → ${esc(d.outcome ?? "")} (답장의 남음 신호)`,
     );
   }
   if (ctx.relUpdate) {
@@ -651,8 +647,8 @@ export const renderHold = (row: CallRow, ctx: CallContext | null): string => {
       ? ""
       : held
         ? cat === "personal"
-          ? " — 이 일정을 취소하고 바로 답한다"
-          : " — 만나기로 한 상대에게 양해를 구하고 미룬다"
+          ? " — 바로 답하고, 일정을 취소할지 하던 일로 돌아갈지는 답장 모델이 정한다"
+          : " — 바로 답하고, 양해를 구해 미룰지 하던 일로 돌아갈지는 답장 모델이 정한다"
         : " — 일정을 그대로 두고 구간이 끝날 때 몰아 답한다";
   lines.push(`*판정* ${out ? esc(out.trim()) : "(없음)"}${meant}`);
   if (row.error)

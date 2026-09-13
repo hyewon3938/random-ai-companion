@@ -25,7 +25,7 @@ const {
   recordLlmCall,
 } = await import("../src/db.js");
 const { createFixtureCharacter } = await import("../src/eval/fixture-character.js");
-const { composeReply, heldSituation, pendingUserTurn } = await import(
+const { composeReply, holdSituation, pendingUserTurn } = await import(
   "../src/reply-compose.js"
 );
 const { askReply } = await import("../src/reply-ask.js");
@@ -135,33 +135,14 @@ describe("composeReply", () => {
     assert.ok(lastTurn?.content.includes("오늘 뭐 했어"));
   });
 
-  it("붙잡기 판정이 있으면 그 결과를 상황 문단으로 프롬프트 끝에 넣는다", async () => {
-    clearMessages();
-    logMessage(CHAT, characterId, "user", "가지 마", "2026-09-06 13:05:00");
-    const turn = pendingUserTurn(CHAT, characterId);
-    assert.ok(turn);
-    const ask = canned([reply(["알았어 안 갈게"])]);
-    await composeReply({
-      judge: noJudge,
-      characterId,
-      chatId: CHAT,
-      turn,
-      situation: "[검사용 상황 문단] 자리를 비우려던 참이다.",
-      heldActual: { blockStart: "13:00", activity: "운동", outcome: "취소" },
-      context: {},
-      logTag: "[test]",
-      ask,
-    });
-    const last = ask.system[ask.system.length - 1]?.text ?? "";
-    assert.ok(last.includes("[검사용 상황 문단] 자리를 비우려던 참이다."));
-    assert.ok(last.includes("[붙잡기 판정 — 이미 정해진 것]"));
-    assert.ok(last.includes('"운동"을(를) 취소하고 남기로 했다'));
-    // 미룬 일정은 나중에 한다는 결로만 말하게 한다
-    assert.ok(
-      heldSituation({ activity: "팀 회식", outcome: "미룸" }).includes(
-        "미루고 지금은 상대 곁에 남기로 했다",
-      ),
-    );
+  it("붙잡기 상황 문단은 지금 답한다는 것만 알리고 일정을 어떻게 할지는 답장에 맡긴다", () => {
+    const text = holdSituation("헬스장 운동");
+    assert.ok(text.startsWith("[상대가 붙잡는 중]"));
+    assert.ok(text.includes('너는 지금 "헬스장 운동" 중이라'));
+    assert.ok(text.includes("짧게 답하고 하던 일로 돌아갈지는 대화를 보고 정한다"));
+    assert.ok(text.includes("남기로 하면 stay 칸을 true로 준다"));
+    // 판정이 정한 결정처럼 쓰지 않는다
+    assert.ok(!text.includes("취소하고 남기로 했다"));
   });
 
   it("markFrom을 주면 그 시각 이후 첫 메시지에 시간 표시가 붙는다", async () => {
@@ -233,7 +214,6 @@ describe("composeReply", () => {
       judge: noJudge,
       characterId, chatId: CHAT, turn,
       context: { timing: { waitMs: 3000, path: "table" } },
-      heldActual: { blockStart: "08:00", activity: "운동", outcome: "cancel" },
       logTag: "[test]", ask,
     });
     assert.ok(out);
@@ -248,9 +228,7 @@ describe("composeReply", () => {
     assert.equal(typeof ctx.turns, "number");
     assert.ok(ctx.search && typeof ctx.search === "object");
     assert.equal(ctx.outputParse, "json");
-    assert.deepEqual(ctx.dayActual, {
-      blockStart: "08:00", activity: "운동", outcome: "cancel", by: "judge",
-    });
+    assert.equal(ctx.dayActual, undefined);
     assert.equal(ctx.bubbles, 2);
     assert.deepEqual(ctx.bubbleLens, [6, 3]);
     assert.equal(ctx.sendAt, "2026-09-06 08:01:00");

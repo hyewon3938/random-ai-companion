@@ -80,7 +80,7 @@ const glanceTickBody = async (): Promise<void> => {
     const target = glanceBlock(blocks, toMin(kstLogicalClock()), last.role, ageMin(last.sent_at));
     if (!target) continue;
     if (judged.get(c.chat_id) === last.sent_at) continue;
-    // 붙잡기 판정이 요청으로 나온 블록은 이미 몰아 답장이 당겨져 있어 이 한 마디가 끼어들 자리가 아니다.
+    // 답장이 남기로 해 일정을 취소하거나 미룬 블록은 이미 상대와 이야기하는 중이라 이 한 마디가 끼어들 자리가 아니다.
     if (isHeldNow(c.id)) continue;
     const block = target.start;
     if (glanceSentForBlock(c.chat_id, c.id, logicalDayStartTs(), block)) continue;
