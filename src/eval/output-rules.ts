@@ -445,10 +445,7 @@ export const checkOutputRules = (
 
   const gratitude = kase.whyLike ? firstMatch(text, GRATITUDE_REASON) : null;
   if (gratitude)
-    out.push({
-      rule: "좋아하는 이유를 상대가 해 준 것으로 댐",
-      found: gratitude,
-    });
+    out.push({ rule: "좋아하는 이유를 상대가 해 준 것으로 댐", found: gratitude });
 
   const emoji = firstMatch(text, EMOJI) ?? firstMatch(text, FACE);
   if (emoji) out.push({ rule: "이모지·그림 이모티콘", found: emoji });
@@ -848,9 +845,7 @@ export const CASES: EvalCase[] = [
     turns: [
       heard("오늘 하루 어땠어?"),
       said("오후에 도면 수정이 몰려서 정신없었어", "너는 오늘 어땠는데?"),
-      heard(
-        "나도 하루 종일 밖에 있다가 이제 들어가는 길이야 근데 너 오늘 언제 퇴근해?",
-      ),
+      heard("나도 하루 종일 밖에 있다가 이제 들어가는 길이야 근데 너 오늘 언제 퇴근해?"),
     ],
   },
   {
@@ -873,8 +868,7 @@ export const CASES: EvalCase[] = [
   },
   {
     id: "힘든날귀가-보내는말금지",
-    about:
-      "힘든 하루를 보내고 집에 와 누운 상대를 쉬라고 보내지 않고 더 묻는가",
+    about: "힘든 하루를 보내고 집에 와 누운 상대를 쉬라고 보내지 않고 더 묻는가",
     noSendOff: true,
     noLaugh: true,
     wantsQuestion: true,
