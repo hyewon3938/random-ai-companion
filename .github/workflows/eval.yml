@@ -3,7 +3,7 @@
 # 도는 때는 둘이고, 무엇을 돌리는지가 다르다.
 #   PR에 eval 라벨을 붙일 때는 형식 레인만 돈다 — 케이스 5개 × 3회로 호출 15건이고, 답이
 #   객체로 오는지와 늘 넣는 칸이 오는지만 가른다(이슈 #391).
-#   Actions 탭에서 Run workflow로 직접 실행하면 케이스 26개 전체가 돈다. 표기·메모·플러팅
+#   Actions 탭에서 Run workflow로 직접 실행하면 케이스 29개 전체가 돈다. 표기·메모·플러팅
 #   통과율까지 보려면 이쪽이다. 케이스를 몇 번씩 돌릴지 고를 수 있다.
 #
 # 푸시마다 전체를 돌리지 않는 이유는 두 가지다. 호출이 케이스 수 × 반복 횟수만큼 나가서 비용이
@@ -61,7 +61,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # 평가는 텔레그램을 부르지 않지만 config가 값을 요구해서 자리만 채운다.
           TELEGRAM_BOT_TOKEN: unused-in-eval
-          # PR 라벨 경로는 형식 레인 3회, 손으로 돌리는 경로는 전체 26개를 고른 횟수만큼.
+          # PR 라벨 경로는 형식 레인 3회, 손으로 돌리는 경로는 전체 29개를 고른 횟수만큼.
           LANE: ${{ github.event_name == 'pull_request' && 'format' || 'full' }}
           RUNS: ${{ github.event_name == 'pull_request' && '3' || (inputs.runs || '5') }}
           PASS: ${{ inputs.pass_line }}
