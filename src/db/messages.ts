@@ -153,7 +153,8 @@ export const lastUserTs = (
       .get(chatId, characterId) as { sent_at: string } | undefined
   )?.sent_at;
 
-// 캐릭터가 마지막으로 말한 시각 — 자리 비움 복귀 인사가 침묵 길이를 재는 기준.
+// 캐릭터가 마지막으로 말한 시각 — 자리 비움 복귀 인사가 침묵 길이를 재는 기준이고,
+// 답장이 한 유저 턴의 열림 신호 행을 바꿔 적을 때 지울 행의 경계다.
 export const lastAssistantTs = (
   chatId: string,
   characterId: number,
@@ -298,21 +299,6 @@ export const countAssistantMeta = (
   ).c;
 };
 
-/** 캐릭터의 마지막 말. 판정 호출이 직전에 쓴 플러팅(meta_json.move)을 읽는 자리다. */
-export const lastAssistantMessage = (
-  chatId: string,
-  characterId: number,
-): { id: number; sent_at: string; meta_json: string | null } | undefined =>
-  db
-    .prepare(
-      `SELECT id, sent_at, meta_json FROM messages
-        WHERE chat_id = ? AND character_id = ? AND role = 'assistant'
-        ORDER BY id DESC LIMIT 1`,
-    )
-    .get(chatId, characterId) as
-    | { id: number; sent_at: string; meta_json: string | null }
-    | undefined;
-
 /** 캐릭터 말 가운데 조건에 맞는 행의 시각과 meta_json을 보낸 순서로 돌려준다.
  *  오늘 답장이 쓴 플러팅과 일정을 말한 시각을 「지금 관계」 절이 읽는 자리다. */
 export const getAssistantMetaSince = (
@@ -326,6 +312,22 @@ export const getAssistantMetaSince = (
     .prepare(`SELECT sent_at, meta_json FROM messages WHERE ${w.sql} ORDER BY id`)
     .all(...w.params) as { sent_at: string; meta_json: string | null }[];
 };
+
+/** 번호 fromId~toId 안 캐릭터 말의 번호와 meta_json을 보낸 순서로 돌려준다.
+ *  판정 호출이 상대 말 바로 앞 캐릭터 말들이 쓴 플러팅(meta_json.move)을 읽는 자리다. */
+export const getAssistantMetaByIdRange = (
+  chatId: string,
+  characterId: number,
+  fromId: number,
+  toId: number,
+): { id: number; meta_json: string | null }[] =>
+  db
+    .prepare(
+      `SELECT id, meta_json FROM messages
+        WHERE chat_id = ? AND character_id = ? AND role = 'assistant' AND id BETWEEN ? AND ?
+        ORDER BY id`,
+    )
+    .all(chatId, characterId, fromId, toId) as { id: number; meta_json: string | null }[];
 
 export const hasAssistantMeta = (
   chatId: string,

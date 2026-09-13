@@ -34,7 +34,7 @@ import {
   getStage,
   insertFirst,
   insertRelationshipSignal,
-  lastAssistantMessage,
+  lastAssistantTs,
   markScheduleKnown,
   setCallContext,
   type MessageRow,
@@ -332,7 +332,7 @@ export const composeReply = async (
       const replaced = deleteRelationshipSignalsAfter(
         characterId,
         chatId,
-        lastAssistantMessage(chatId, characterId)?.sent_at ?? null,
+        lastAssistantTs(chatId, characterId) ?? null,
       );
       if (replaced)
         console.log(`${logTag} 열림 신호 ${replaced}행을 이번 답장 것으로 바꾼다 (chat=${chatId})`);
