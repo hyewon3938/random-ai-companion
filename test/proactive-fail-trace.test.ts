@@ -1,10 +1,10 @@
-// 선톡이 못 나갔을 때 게시함에 행이 쌓이는지 검사한다.
+// 선톡이 못 나갔을 때 트레이스 표에 행이 쌓이는지 검사한다.
 //
 // 발송 실패가 send_failures에만 적히면 슬랙에는 문안만 남아, 채널을 보는 사람이 그 통을 나간
 // 것으로 읽는다. 문안 호출 번호를 받은 경우 그 문안 스레드에 달리는지(parent_key), 번호를
 // 모르는 경우에도 독립 행으로 쌓이는지 함께 본다.
 //
-// DB는 임시 파일로 새로 만들고 슬랙 토큰은 가짜다 — 게시함에 쌓기까지만 보므로 밖으로
+// DB는 임시 파일로 새로 만들고 슬랙 토큰은 가짜다 — 트레이스 표에 쌓기까지만 보므로 밖으로
 // 나가는 것은 없다.
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -25,7 +25,7 @@ process.env.SLACK_TRACE_CHANNEL = "C_TEST";
 const { traceProactiveFail } = await import("../src/reply-trace.js");
 const { db } = await import("../src/db.js");
 
-// 게시함 행이 캐릭터를 가리키므로 캐릭터 한 명을 먼저 넣는다.
+// 트레이스 표 행이 캐릭터를 가리키므로 캐릭터 한 명을 먼저 넣는다.
 const characterId = Number(
   db
     .prepare(

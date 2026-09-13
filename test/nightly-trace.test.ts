@@ -1,9 +1,9 @@
-// 새벽 정리 전후 값의 차이가 트레이스 게시함(trace_events)에 어떤 글로 쌓이는지 검사한다 — 모델은 부르지 않는다.
+// 새벽 정리 전후 값의 차이가 트레이스 표(trace_events)에 어떤 글로 쌓이는지 검사한다 — 모델은 부르지 않는다.
 //
 // beforeNightlyTrace로 스냅숏을 뜨고, 반영 트랜잭션이 할 일을 손으로 DB에 쓴 뒤 afterNightlyTrace를
 // 불러 본문 한 행과 스레드 자식(기억·진행 중인 일·일기·선톡 문안·호출 원문)의 문안을 본다.
 // 단계 전이와 처음 확정은 스레드 밖 게시로도 나가서 그 행들을 따로 센다.
-// 슬랙 토큰은 가짜 값이라 게시함에만 쌓이고 밖으로 나가지 않는다. 발송 틱은 돌리지 않는다.
+// 슬랙 토큰은 가짜 값이라 트레이스 표에만 쌓이고 밖으로 나가지 않는다. 발송 틱은 돌리지 않는다.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -158,7 +158,7 @@ const childrenOf = (diaryDate: string): EventRow[] =>
 const HEAD_LINE =
   /^:crescent_moon: \*(\d+\/\d+\([일월화수목금토]\)) 새벽 정리\* · \d{2}:\d{2}:\d{2}\n\n/;
 
-test("skip 결과면 게시함에 아무것도 쌓지 않는다", () => {
+test("skip 결과면 트레이스 표에 아무것도 쌓지 않는다", () => {
   const g = gathered({ diaryDate: "2026-08-31" });
   const out: NightlyOutput = { entry: entry("아무 일 없던 하루") };
   const snap = beforeNightlyTrace(g, out);

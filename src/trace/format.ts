@@ -1,7 +1,7 @@
 // 슬랙 게시 문안이 공통으로 쓰는 표기 도우미 — 이스케이프·날짜·자르기·인용·토큰 줄.
 //
-// 게시함(trace.ts)·아침 각본 게시·답장 게시·새벽 정리 게시가 같은 문안 규칙을 쓴다.
-// 여기는 문자열만 만드는 순수 함수와 이름표를 두고, DB나 게시함은 부르지 않는다 —
+// 트레이스 표(trace.ts)·아침 각본 게시·답장 게시·새벽 정리 게시가 같은 문안 규칙을 쓴다.
+// 여기는 문자열만 만드는 순수 함수와 이름표를 두고, DB나 트레이스 표는 부르지 않는다 —
 // trace.ts가 이 파일을 쓰므로 거꾸로 trace.ts를 들여오면 순환이 된다.
 
 import {
@@ -47,7 +47,7 @@ export const purposeName = (p: string): string =>
 /** 지금 KST 시각을 HH:MM:SS로. 발송·폐기처럼 게시 시점을 적는 자리가 쓴다. */
 export const clock = (): string => getKstNow().toISOString().slice(11, 19);
 
-/** llm_calls 행 하나를 가리키는 게시함 키. 답장 게시가 스레드 부모로 쓴다. */
+/** llm_calls 행 하나를 가리키는 트레이스 표 키. 답장 게시가 스레드 부모로 쓴다. */
 export const callKey = (id: number): string => `call:${id}`;
 
 /** 발송 종류의 이름. 먼저 거는 연락은 labels.ts의 목록을 그대로 쓰고, 답장·복구처럼

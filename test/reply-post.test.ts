@@ -1,4 +1,4 @@
-// 답장 게시 준비(trace/reply-post.ts)가 아직 안 올린 호출을 순서대로 게시함에 쌓는지 검사한다 — 모델도 슬랙도 부르지 않는다.
+// 답장 게시 준비(trace/reply-post.ts)가 아직 안 올린 호출을 순서대로 트레이스 표에 쌓는지 검사한다 — 모델도 슬랙도 부르지 않는다.
 //
 // 호출 행은 recordLlmCall로 만들고 판단 근거는 setCallContext로 붙인다. 그날 첫 호출에 고정
 // 두 덩이가 한 번만 오르는지, 층 하나가 바뀌면 그 층의 바뀐 줄만 오르는지, 근거가 아직 없는
@@ -6,7 +6,7 @@
 // 재생성 호출이 원래 답장 스레드에 달리는지 본다. 만든 시각을 과거로 돌릴 때는 created_at을
 // 직접 고친다.
 //
-// DB는 임시 파일로 새로 만들고 슬랙 토큰은 가짜다 — 게시함에 쌓기까지만 보므로 밖으로
+// DB는 임시 파일로 새로 만들고 슬랙 토큰은 가짜다 — 트레이스 표에 쌓기까지만 보므로 밖으로
 // 나가는 것은 없다.
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
@@ -254,7 +254,7 @@ test("근거 없이 유예가 지난 행은 근거가 없다는 표시로 올린
   assert.equal(traced(id), 1);
 });
 
-test("너무 오래된 행은 표시만 하고 게시함에 쌓지 않는다", () => {
+test("너무 오래된 행은 표시만 하고 트레이스 표에 쌓지 않는다", () => {
   const charC = newCharacter("chat-post-c");
   const id = call(charC);
   setCallContext(id, CTX);

@@ -1,4 +1,4 @@
-// 답장 게시 준비 — 아직 안 올린 모델 호출을 번호 순서대로 게시함(trace_events)에 쌓는다.
+// 답장 게시 준비 — 아직 안 올린 모델 호출을 번호 순서대로 트레이스 표(trace_events)에 쌓는다.
 //
 // 1분 틱이 부른다. 호출 한 건이 채널에 남기는 것:
 //   본문   — trace/reply-render.ts가 그린 한 장
@@ -36,7 +36,7 @@ import {
 } from "./reply-render.js";
 import { lineDiff } from "./diff.js";
 
-// 한 틱에 준비하는 호출 수. 슬랙 발송은 게시함이 따로 조절하므로 여기서는 읽기 상한만 둔다.
+// 한 틱에 준비하는 호출 수. 슬랙 발송은 trace.ts가 따로 조절하므로 여기서는 읽기 상한만 둔다.
 const BATCH = 20;
 // 판단 근거(context_json)가 붙기를 기다리는 시간. 답장은 행이 먼저 생기고 근거가 나중에 붙는다.
 export const CONTEXT_GRACE_MS = 5 * 60_000;
@@ -150,7 +150,7 @@ const postLayerChange = (
 };
 
 // 그날 첫 호출이면 두 덩이를 통째로, 그 뒤에 달라지면 바뀐 줄만 올린다.
-// 어디까지 올렸는지는 따로 표시하지 않고 앞 호출의 해시와 견준다 — 게시함의 dedupe_key가
+// 어디까지 올렸는지는 따로 표시하지 않고 앞 호출의 해시와 견준다 — 트레이스 표의 dedupe_key가
 // 두 번 올리는 것을 막아 준다.
 const ensureDayPrompt = (row: CallRow, hashes: BlockHash[]): void => {
   const date = logicalDateOf(row.created_at);
@@ -167,7 +167,7 @@ const ensureDayPrompt = (row: CallRow, hashes: BlockHash[]): void => {
       postLayerChange(row, layer, prevHashes[layer].h, hashes[layer].h);
 };
 
-// ── 게시함에 쌓기 ───────────────────────────────────────────────────────
+// ── 트레이스 표에 쌓기 ────────────────────────────────────────────────────
 
 const postCall = (row: CallRow): void => {
   const ctx = parseContext(row.context_json);
@@ -224,7 +224,7 @@ const postCall = (row: CallRow): void => {
 
 const markTraced = markLlmCallTraced;
 
-/** 1분 틱. 아직 안 올린 호출을 번호 순서대로 게시함에 쌓는다. */
+/** 1분 틱. 아직 안 올린 호출을 번호 순서대로 트레이스 표에 쌓는다. */
 export const enqueueReplyTraces = (): void => {
   if (!traceEnabled()) return;
   const rows = untracedLlmCalls(POST_PURPOSES, BATCH);

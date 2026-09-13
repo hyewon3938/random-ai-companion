@@ -105,8 +105,8 @@ cron.schedule(
   { timezone: "Asia/Seoul" },
 );
 
-// 슬랙 트레이스 게시: 1분 틱. 아직 안 올린 모델 호출과 오늘 각본을 게시함(trace_events)에 쌓고
-// (trace/reply-post·trace/morning-plan), 게시함에 있는 것을 슬랙 채널로 내보낸다(trace).
+// 슬랙 트레이스 게시: 1분 틱. 아직 안 올린 모델 호출과 오늘 각본을 트레이스 표(trace_events)에 쌓고
+// (trace/reply-post·trace/morning-plan), 트레이스 표에 있는 것을 트레이스 채널로 내보낸다(trace).
 // 토큰·채널 설정이 없으면 셋 다 아무것도 하지 않는다.
 cron.schedule(
   "* * * * *",
@@ -137,7 +137,7 @@ cron.schedule(
 );
 
 // 관측 기록 정리: 하루 한 번. 보관 기간이 지난 호출은 본문 해시와 판단 근거만 지우고
-// 메타는 남긴다. 어느 본문도 가리키지 않게 된 글자는 같이 지운다. 슬랙 게시함은 이미 올린
+// 메타는 남긴다. 어느 본문도 가리키지 않게 된 글자는 같이 지운다. 트레이스 표는 이미 올린
 // 글을 슬랙이 들고 있어 행을 통째로 지우고, 아직 못 올린 것만 남긴다.
 cron.schedule(
   "50 5 * * *",
@@ -158,7 +158,7 @@ cron.schedule(
           `[trace] ${TRACE_EVENT_RETENTION_DAYS}일 지난 게시 행 ${events}건을 지웠다`,
         );
     } catch (e) {
-      logErr("[trace] 게시함 정리 실패:", e);
+      logErr("[trace] 트레이스 표 정리 실패:", e);
     }
   },
   { timezone: "Asia/Seoul" },

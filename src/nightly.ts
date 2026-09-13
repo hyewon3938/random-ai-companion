@@ -1042,7 +1042,7 @@ const applyNightlyTxn = db.transaction(
 
 // 봇 밖 스케줄러(tools/nightly-write)와 봇 안 폴백 크론이 둘 다 이 함수를 지난다 —
 // 트레이스 게시를 여기 한 자리에 걸어 두 경로가 같은 기록을 남긴다.
-// 이전 값은 트랜잭션 전에 읽고, 게시함에 쌓는 것은 트랜잭션 바깥에서 한다:
+// 이전 값은 트랜잭션 전에 읽고, 트레이스 표에 쌓는 것은 트랜잭션 바깥에서 한다:
 // 게시가 실패해도 그날 새벽 정리는 이미 저장되어 있다.
 export const applyNightlyOutput = (
   g: NightlyGathered,

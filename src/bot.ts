@@ -14,13 +14,13 @@
 // 어떻게 됐는지는 단계마다 약속을 한 답장의 슬랙 스레드에 남긴다(tracePromise, 이슈 #312).
 //
 // 깨우기 표시를 걸고 올리고 거두는 자리, 그 표시가 울린 뒤 답장 없이 끝나는 갈래, 답장 경로가
-// 예외로 끝나는 자리는 전부 게시함에 쌓는다(traceWake·traceReplyFault, 이슈 #379). 표시가
+// 예외로 끝나는 자리는 전부 트레이스 표에 쌓는다(traceWake·traceReplyFault, 이슈 #379). 표시가
 // 울린 뒤 답장 없이 끝나면 pending.ts가 그 행을 보낸 것으로 확정해 재시도도 걸리지 않으므로,
 // 여기서 적지 않으면 답장이 사라진 사실 자체가 어디에도 남지 않는다.
 //
 // 말풍선을 실제로 내보내는 sendBubbleList 한 곳에서 깨진 글자(U+FFFD·짝 없는 서러게이트)를
 // 걸러낸다(stripGarbledChars, 이슈 #395). 답장·선톡이 전부 이 함수를 지나므로 여기 한 곳만
-// 고치면 되고, 걸러진 횟수는 traceGarbledFilter로 게시함에 쌓는다.
+// 고치면 되고, 걸러진 횟수는 traceGarbledFilter로 트레이스 표에 쌓는다.
 //
 // 부팅하면 recoverMissedReplies가 놓친 답장을 복구한다. 워터마크로 중복을 막고 최근
 // 3시간 것만 본다 — 더 멀리 보면 자정 경계에서 어제 것까지 딸려 온다.
@@ -291,7 +291,7 @@ const sleepWhileTyping = async (chatId: string, ms: number): Promise<void> => {
 //
 // 답장·선톡이 전부 이 함수를 지나므로 깨진 글자 필터(stripGarbledChars)도 여기 한 곳에 둔다
 // (이슈 #395). sent에는 거른 뒤 글자를 담아 logMessage로 넘긴다 — 원문 그대로 저장하면 다음
-// 답장이 읽는 대화 기록에 깨진 글자가 다시 들어간다. 얼마나 자주 걸러지는지는 게시함(trace)에
+// 답장이 읽는 대화 기록에 깨진 글자가 다시 들어간다. 얼마나 자주 걸러지는지는 트레이스 채널에
 // 남는 원문 조각으로 본다.
 const sendBubbleList = async (
   chatId: string,
