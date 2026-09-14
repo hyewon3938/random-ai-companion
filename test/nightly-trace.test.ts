@@ -1006,6 +1006,15 @@ test("침묵 단계와 선톡 문안과 새벽 정리가 부른 호출 원문이
       "nightly_call_output",
     ],
   );
+  // 호출 원문 글마다 호출 번호를 담은 키를 달아, 거기 남긴 피드백이 어느 호출이었는지 되짚는다.
+  assert.deepEqual(
+    children.slice(1).map((c) => c.dedupe_key),
+    [
+      `call:${diaryCallId}:nightly`,
+      `call:${diaryCallId}:prompt:1`,
+      `call:${diaryCallId}:output:1`,
+    ],
+  );
   assert.equal(
     children[0].text,
     [

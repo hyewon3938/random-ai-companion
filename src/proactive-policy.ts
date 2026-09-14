@@ -205,6 +205,8 @@ export interface HeldDraft {
   block?: string;
   /** 문안을 만든 시각(ms). 오래되면 버린다. */
   madeAt: number;
+  /** 문안을 만든 호출 번호. 다시 보낸 한 통의 발송 게시도 이 호출을 가리키게 들고 있는다. */
+  callId?: number;
 }
 
 // 들고 있는 시간의 상한. 팔로업 틱이 15분이라 한 번, 자리 비움 틱이 10분이라 두 번까지
@@ -400,7 +402,13 @@ export const PROACTIVE_BASIS: Record<ProactiveKind, ProactiveBasis> = {
 // 여기에 함께 들어간다. 자리 비움은 AWAY_DAILY_MAX가, 달래기와 살피기는 상태 한 발현에 한 통이,
 // 틈새 한 줄은 불가 블록마다 한 번이 따로 막는다. 약속은 답장에서 한 말을 지키는 연락이라
 // 상한에 걸리면 약속을 어기는 쪽이 된다(이슈 #308).
-const OFF_BUDGET: ProactiveKind[] = ["away", "promise", "mend", "care", "glance"];
+const OFF_BUDGET: ProactiveKind[] = [
+  "away",
+  "promise",
+  "mend",
+  "care",
+  "glance",
+];
 
 /** 이 종류가 하루 합계에 드는가. */
 export const onDailyBudget = (kind: ProactiveKind): boolean =>

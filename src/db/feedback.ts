@@ -3,6 +3,9 @@
 // 표시 하나가 행 하나다. 뗀 표시는 지우지 않고 removed_at을 적고, 다시 붙이면 그 값을 비운다.
 // 무엇을 표시로 볼지와 슬랙을 다시 읽는 일은 feedback.ts가 한다.
 //
+// 어느 게시에서 나온 표시인지는 게시 키(trace_key)와 스레드 부모 글의 ts(thread_ts)를 행에
+// 함께 적는다. 트레이스 표는 30일이 지나면 지워져서 slack_ts만으로는 나중에 되짚지 못한다.
+//
 // 그 지적을 사람이 다뤘는지는 resolved_at·issue_no·resolution 세 칸에 따로 적는다. 슬랙에서
 // 뗐다는 removed_at과 뜻이 다르다 — 뗀 것은 표시를 거둔 것이고, 처리한 것은 지적을 다룬 것이다.
 // 이 세 칸은 수집 틱이 채우지 않고 tools/feedback.ts로 사람이 찍는다.
@@ -32,14 +35,21 @@ export interface FeedbackInsert {
   replyTs: string | null;
   dedupeKey: string;
   createdAt: string;
+  /** 리액션의 이모지 이름. 답글이면 비운다. */
+  emoji?: string | null;
+  /** 표시가 달린 글의 게시 키. 제 키가 없는 스레드 자식이면 부모 키. */
+  traceKey?: string | null;
+  /** 스레드 안 글에 달린 표시면 부모 글의 ts. */
+  threadTs?: string | null;
 }
 
 export const insertFeedback = (f: FeedbackInsert): void => {
   db.prepare(
     `INSERT INTO call_feedback
        (character_id, call_id, slack_ts, trace_kind, source, kind,
-        slack_user, text, reply_ts, dedupe_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        slack_user, text, reply_ts, dedupe_key, created_at,
+        emoji, trace_key, thread_ts)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     f.characterId,
     f.callId,
@@ -52,6 +62,9 @@ export const insertFeedback = (f: FeedbackInsert): void => {
     f.replyTs,
     f.dedupeKey,
     f.createdAt,
+    f.emoji ?? null,
+    f.traceKey ?? null,
+    f.threadTs ?? null,
   );
 };
 
@@ -67,7 +80,10 @@ export const activeReactionFeedback = (
     .all(slackTs) as { id: number; dedupe_key: string }[];
 
 export const removeFeedback = (id: number, at: string): void => {
-  db.prepare(`UPDATE call_feedback SET removed_at = ? WHERE id = ?`).run(at, id);
+  db.prepare(`UPDATE call_feedback SET removed_at = ? WHERE id = ?`).run(
+    at,
+    id,
+  );
 };
 
 /** 그 글의 스레드에서 이미 모은 답글 수. */
@@ -97,10 +113,14 @@ export interface FeedbackRow {
   resolved_at: string | null;
   issue_no: number | null;
   resolution: string | null;
+  emoji: string | null;
+  trace_key: string | null;
+  thread_ts: string | null;
 }
 
 const FEEDBACK_COLUMNS = `id, call_id, slack_ts, trace_kind, source, kind, text,
-          created_at, resolved_at, issue_no, resolution`;
+          created_at, resolved_at, issue_no, resolution,
+          emoji, trace_key, thread_ts`;
 
 /** 아직 처리 표시를 찍지 않은 표시 — 슬랙에서 뗀 리액션은 뺀다. */
 export const openFeedback = (): FeedbackRow[] =>

@@ -491,8 +491,8 @@ erDiagram
     characters ||--o{ call_feedback : "사람이 남긴 표시"
     pending_replies }o..|| messages : "user_msg_at이 가리킴"
     llm_calls }o..o{ prompt_blobs : "내용 해시가 가리킴"
-    llm_calls ||--o{ call_feedback : "이 답장에 대한 표시"
-    trace_events }o..o{ call_feedback : "게시 시각으로 되짚음"
+    llm_calls ||--o{ call_feedback : "이 호출의 게시에 대한 표시"
+    trace_events }o..o{ call_feedback : "게시 시각과 게시 키로 되짚음"
 
     characters {
         INTEGER id PK
@@ -539,7 +539,8 @@ erDiagram
         INTEGER id PK
         INTEGER call_id FK
         TEXT slack_ts "표시가 달린 글"
-        TEXT kind "네 분류 중 하나"
+        TEXT trace_key "그 글의 게시 키"
+        TEXT emoji "리액션 이모지"
     }
 ```
 
@@ -702,19 +703,22 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 
 보낼 것을 행으로 남겨 두기 때문에 봇이 다시 뜨거나 슬랙이 응답하지 않아도 게시가 밀리기만 한다. 부모가 아직 게시되지 않은 자식은 다음 틱으로 미루고, 채널에 봇이 없는 경우처럼 다시 시도해도 결과가 같은 오류는 재시도하지 않고 실패로 적는다.
 
-**call_feedback** — 슬랙 채널에 올라간 답장을 읽고 사람이 남긴 표시. 리액션으로 고른 분류 하나가 행 하나이고, 그렇게 본 이유를 적은 스레드 답글도 같은 표에 들어간다
+**call_feedback** — 슬랙 채널에 올라간 게시글을 읽고 사람이 남긴 표시. 채널 본문 글이든 스레드 안 글이든 리액션 하나가 행 하나이고, 스레드에 적은 답글도 같은 표에 들어간다
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | id | INTEGER | O | PK |
 | character_id | INTEGER | | FK characters.id |
-| call_id | INTEGER | | FK llm_calls.id — 표시가 달린 글을 만든 모델 호출. 호출과 이어지지 않는 게시(아침 각본 알림 같은)에 달린 표시는 비어 있다 |
-| slack_ts | TEXT | O | 표시가 달린 글의 슬랙 시각. 이 값으로 게시 기록을 찾아 어느 호출인지 되짚는다 |
+| call_id | INTEGER | | FK llm_calls.id — 표시가 달린 글을 만든 모델 호출. 선톡 발송 게시는 그 문안을 만든 호출이다. 호출과 이어지지 않는 게시(아침 각본 알림, 예약해 둔 선톡의 발송 같은)에 달린 표시는 비어 있다 |
+| slack_ts | TEXT | O | 표시가 달린 글의 슬랙 시각. 이 값으로 게시 기록을 찾아 어느 게시와 호출인지 되짚는다 |
 | trace_kind | TEXT | | 표시가 달린 글의 게시 종류 |
-| source | TEXT | O | 표시를 남긴 방법 — `reaction` 리액션으로 고른 분류 · `reply` 스레드에 적은 이유 |
-| kind | TEXT | | 네 분류 중 하나 — `fact` 사실 오류 · `tone` 말투 · `timing` 타이밍 · `good` 좋음. 이유 쪽은 비어 있다 |
+| trace_key | TEXT | | 표시가 달린 글의 게시 키(trace_events.dedupe_key). 실시간 꼬리처럼 제 키가 없는 스레드 안 글은 부모 글의 키다. 게시 기록을 찾지 못한 표시는 비어 있다 |
+| thread_ts | TEXT | | 표시가 달린 글이 스레드 안 글이면 부모 글의 슬랙 시각. 채널 본문 글과 선톡 발송 게시는 비어 있다 |
+| source | TEXT | O | 표시를 남긴 방법 — `reaction` 리액션 · `reply` 스레드에 적은 답글 |
+| kind | TEXT | | 리액션이 범례의 네 분류 이모지일 때 그 분류 — `fact` 사실 오류 · `tone` 말투 · `timing` 타이밍 · `good` 좋음. 분류 밖 이모지와 답글은 비어 있다 |
+| emoji | TEXT | | 리액션 이모지 이름. 피부색 변형은 떼고 적는다. 답글은 비어 있다 |
 | slack_user | TEXT | | 표시를 남긴 슬랙 계정 |
-| text | TEXT | | 스레드에 적은 이유 |
+| text | TEXT | | 스레드에 적은 답글 |
 | reply_ts | TEXT | | 그 답글 자신의 슬랙 시각 |
 | dedupe_key | TEXT | O | 같은 표시를 두 번 쌓지 않게 하는 키, UNIQUE |
 | created_at | TEXT | O | 표시를 확인한 시각. 이유는 슬랙에 적힌 시각이고, 리액션은 누른 시각을 슬랙이 주지 않아 처음 읽은 시각이다 |
@@ -725,7 +729,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 
 키·인덱스: PK `id`, UNIQUE `dedupe_key`, 인덱스 `(call_id)`, 인덱스 `(slack_ts, source)`
 
-10분 간격으로 채널을 다시 읽어 지금 붙어 있는 리액션과 이 표를 맞춘다. 없어진 리액션은 행을 지우지 않고 removed_at에 시각을 적어서, 무엇이 있다가 없어졌는지가 남는다. 이유 쪽은 새로 적힌 것만 넣고 고치거나 지우지 않는다.
+10분 간격으로 사흘치 채널을 다시 읽어, 채널 본문 글과 스레드 안 글에 지금 붙어 있는 리액션을 이모지 종류와 상관없이 이 표와 맞춘다. 사람이 다 본 글에 `src/tools/feedback.ts`가 다는 체크 이모지만 뺀다. 스레드 안 글의 리액션은 스레드를 열어야 보여서, 사람이 새로 답글을 적은 스레드와 올린 지 6시간 안인 스레드는 회차마다 열고 그보다 오래된 스레드는 슬랙 호출 한도에 맞춰 한 시간에 한 번 연다. 없어진 리액션은 행을 지우지 않고 removed_at에 시각을 적어서, 무엇이 있다가 없어졌는지가 남는다. 답글은 새로 적힌 것만 부모 글에 붙여 넣고 고치거나 지우지 않는다.
 
 처리 여부 세 칸은 코드가 채우지 않고 `src/tools/feedback.ts`로 사람이 찍는다. 지적이 하루에 10건 가까이 쌓이는데 무엇을 고쳤는지는 닫힌 이슈에만 있어서, 채널을 처음부터 다시 읽지 않고 남은 것만 보려면 표 안에 표시가 있어야 한다. 이슈가 다시 열리거나 닫혀도 이 값은 따라 바뀌지 않는다 — 깃허브를 매번 물어보는 대신 찍은 시점의 판단을 그대로 남긴다.
 
@@ -764,7 +768,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | llm_usage | llm 래퍼 | 운영 점검 |
 | llm_calls | llm 래퍼(호출할 때), 답장 파이프라인(판단 근거) | 운영 점검 |
 | prompt_blobs | llm 래퍼 | 운영 점검(llm_calls의 해시로 찾아 읽음) |
-| trace_events | 각본 알림 틱, 파이프라인 | 슬랙 게시 틱, 표시 수집 틱(게시 시각으로 호출 되짚기) |
+| trace_events | 각본 알림 틱, 파이프라인 | 슬랙 게시 틱, 표시 수집 틱(게시 시각으로 게시 키와 호출 되짚기) |
 | call_feedback | 표시 수집 틱 | 운영 점검, 90일 정리(뺄 호출 고르기) |
 
 ## 값이 정해진 컬럼
@@ -803,8 +807,8 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | characters.status | `active` 대화 중 · `ended` 이별 |
 | messages.role | `user` 유저 · `assistant` 캐릭터 |
 | trace_events.status | `pending` 대기 · `sent` 게시 · `failed` 실패 · `skipped` 건너뜀 |
-| call_feedback.source 표시를 남긴 방법 | `reaction` 리액션으로 고른 분류 · `reply` 스레드에 적은 이유 |
-| call_feedback.kind 분류 | `fact` 사실 오류 · `tone` 말투 · `timing` 타이밍 · `good` 좋음 |
+| call_feedback.source 표시를 남긴 방법 | `reaction` 리액션 · `reply` 스레드에 적은 답글 |
+| call_feedback.kind 분류 | `fact` 사실 오류 · `tone` 말투 · `timing` 타이밍 · `good` 좋음, 분류 밖 이모지는 비워 둠 |
 | call_feedback.resolution 처리 결과 | `fixed` 고침 · `wontfix` 안 고침 · `dup` 겹침 |
 | messages 메타의 발송 종류, send_failures.kind | `reply` 답장 · `recover` 복구 · `morning` 아침 · `checkin` 안부 · `away` 자리비움 · `catchup` 근황 · `goodnight` 밤 인사 · `mend` 달래기 · `care` 살피기 · `promise` 약속 연락 · `intent` 의도 선톡 · `glance` 틈새 한 줄 (send_failures는 예약 발송 표를 거치지 않는 종류만) |
 
@@ -825,7 +829,7 @@ plan_json처럼 JSON 컬럼 안에 있는 키 이름은 구현하면서 정한�
 - **firsts · relationship_signals의 message_id와 call_id** — 처음이 일어난 메시지와 그렇게 표시한 호출을 번호로만 가리킨다. 호출 기록은 90일이 지나면 지우는 자리라, 참조를 걸면 그 정리가 관계 기록에 막힌다.
 - **llm_calls의 세 해시** — system_hashes · turns_hash · output_hash가 prompt_blobs.hash를 가리킨다. 본문을 90일 뒤에 지우면서 호출 메타와 사용량은 남기므로, 가리키는 본문이 없는 행이 정상으로 생긴다.
 - **today_notes.message_id** — 메모의 원문이 있는 messages 행을 가리킨다. 나중에 원문을 확인할 때만 쓰는 참조라 FK 없이 id만 적는다.
-- **call_feedback.slack_ts** — 표시가 달린 글의 게시 기록(trace_events)을 시각으로 찾는다. 트레이스 표는 30일이 지나면 행을 지우므로 가리키는 게시 기록이 없는 표시가 정상으로 남고, 어느 호출이었는지는 저장할 때 call_id에 옮겨 적어 둔다.
+- **call_feedback.slack_ts와 trace_key** — 표시가 달린 글의 게시 기록(trace_events)을 시각과 게시 키로 가리킨다. 트레이스 표는 30일이 지나면 행을 지우므로 가리키는 게시 기록이 없는 표시가 정상으로 남고, 어느 호출과 어느 스레드였는지는 저장할 때 call_id와 thread_ts에 옮겨 적어 둔다.
 
 messages와 send_failures의 character_id도 FK 없이 번호만 적는다. 두 컬럼 모두 비워둘 수 있는 자리라 FK를 걸지 않았고, 기록을 캐릭터별로 가려 볼 때만 쓴다.
 

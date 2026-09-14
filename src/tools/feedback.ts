@@ -8,8 +8,8 @@
 // 먼저 돌리면 채널을 처음부터 다시 읽지 않고 남은 것만 본다.
 //
 // --mark로 찍은 행이 가리키는 슬랙 글에는 흰 동그라미 체크를 단다. 채널을 눈으로 읽을 때
-// 어디까지 봤는지 보이고, 분류로 받는 이모지는 4개뿐이라(labels.ts) 이 표시가 새 피드백으로
-// 되돌아오지 않는다. 반대로 사람이 채널에 단 체크를 읽어 처리로 보지는 않는다 — 수집이 최근
+// 어디까지 봤는지 보이고, 수집이 이 이모지만 빼고 모아서(labels.ts의 FEEDBACK_DONE_EMOJI) 이
+// 표시가 새 피드백으로 되돌아오지 않는다. 반대로 사람이 채널에 단 체크를 읽어 처리로 보지는 않는다 — 수집이 최근
 // 3일치만 다시 읽어서(feedback.ts) 며칠 뒤에 다는 표시는 대부분 들어오지 않는다.
 //
 // 슬랙에 다는 일은 여기서 직접 부른다. src/feedback.ts는 채널을 읽기만 하고 src/trace.ts는
@@ -25,7 +25,11 @@ import {
   type FeedbackRow,
 } from "../db.js";
 import { kstStamp } from "../kst.js";
-import { FEEDBACK_KIND_NAME, type FeedbackKind } from "../labels.js";
+import {
+  FEEDBACK_DONE_EMOJI,
+  FEEDBACK_KIND_NAME,
+  type FeedbackKind,
+} from "../labels.js";
 
 const USAGE = `사용: npx tsx src/tools/feedback.ts
       npx tsx src/tools/feedback.ts --mark <번호,번호> [--issue <이슈번호>] [--resolution fixed|wontfix|dup] [--no-slack]
@@ -37,8 +41,6 @@ const RESOLUTION_NAME: Record<FeedbackResolution, string> = {
   wontfix: "안 고침",
   dup: "겹침",
 };
-// 슬랙이 이모지를 이름으로 받는다. 처리했다는 표시로 채널에서 눈에 띄는 것을 쓴다.
-const DONE_EMOJI = "white_check_mark";
 
 const argv = process.argv.slice(2);
 // 값을 안 준 플래그는 undefined가 아니라 빈 문자열로 돌려준다 — 오타를 기본값으로 삼키지 않게.
@@ -66,12 +68,15 @@ const idsAfter = (flag: string): number[] => {
 
 // ── 보여주기 ───────────────────────────────────────────────────────────
 
+// 분류 이모지 밖의 리액션은 슬랙에서 본 모양 그대로 이모지 이름으로 보여 준다.
 const kindLabel = (row: FeedbackRow): string =>
   row.kind
     ? FEEDBACK_KIND_NAME[row.kind as FeedbackKind]
-    : row.source === "reply"
-      ? "이유만"
-      : "분류 없음";
+    : row.emoji
+      ? `:${row.emoji}:`
+      : row.source === "reply"
+        ? "이유만"
+        : "분류 없음";
 
 const show = (rows: FeedbackRow[]): void => {
   if (!rows.length) {
@@ -94,9 +99,17 @@ const show = (rows: FeedbackRow[]): void => {
       console.log(`── ${day}`);
     }
     const at = row.created_at.slice(11, 16);
-    const call = row.call_id ? ` 호출 #${row.call_id}` : "";
+    // 호출과 이어지지 않는 게시(하루 프롬프트·새벽 정리 묶음 같은)는 게시 키로 어느 글인지 보인다.
+    const call = row.call_id
+      ? ` 호출 #${row.call_id}`
+      : row.trace_key
+        ? ` ${row.trace_key}`
+        : "";
     const where = row.trace_kind ? ` ${row.trace_kind}` : "";
-    console.log(`  #${row.id} ${at} ${kindLabel(row)}${where}${call}`);
+    const inThread = row.thread_ts ? " 스레드 안" : "";
+    console.log(
+      `  #${row.id} ${at} ${kindLabel(row)}${where}${inThread}${call}`,
+    );
     if (row.text)
       for (const line of row.text.split("\n")) console.log(`      ${line}`);
   }
@@ -127,7 +140,7 @@ const addCheck = async (slackTs: string): Promise<string | null> => {
       body: JSON.stringify({
         channel: config.slackTraceChannel,
         timestamp: slackTs,
-        name: DONE_EMOJI,
+        name: FEEDBACK_DONE_EMOJI,
       }),
     });
     json = (await res.json()) as SlackResult;

@@ -359,9 +359,17 @@ export const sendProactive = async (
     // 무슨 근거로 나갔는지는 기록에 적은 값에서 나온다 — 근거를 고른 자리와 게시가 떨어져
     // 있어서, 여기서 다시 판단하지 않고 meta_json에 적힌 것을 그대로 읽는다.
     basis: basisLineFromMeta(kind, extraMeta ?? {}),
+    // 문안 호출 번호와 예약 행 번호도 기록에 적은 값을 그대로 넘긴다. 발송 게시의 키가 되어,
+    // 발송 게시에 남긴 피드백이 어느 문안에서 나온 한 통인지 되짚는다(이슈 #451).
+    callId: rowIdOf(extraMeta?.call_id),
+    scheduledId: rowIdOf(extraMeta?.scheduled_id),
   });
   return { delivered: sent.length, total };
 };
+
+// meta_json에 적힌 행 번호를 숫자로 읽는다. 양의 정수가 아니면 없는 것으로 본다.
+const rowIdOf = (v: unknown): number | undefined =>
+  typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined;
 
 // ── /start 온보딩 — 유저 입력 여덟으로 캐릭터를 만든다 ──────────────────────
 // 선택지 다섯(성별·나이대·말투·원하는 방식·결점)은 인라인 버튼, 서술형 셋(성격·출발 설정에

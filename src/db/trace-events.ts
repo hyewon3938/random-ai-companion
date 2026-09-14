@@ -76,7 +76,9 @@ export const insertTraceEvent = (e: TraceEventInsert): void => {
 
 export const hasTraceEvent = (dedupeKey: string): boolean =>
   Boolean(
-    db.prepare(`SELECT 1 FROM trace_events WHERE dedupe_key = ?`).get(dedupeKey),
+    db
+      .prepare(`SELECT 1 FROM trace_events WHERE dedupe_key = ?`)
+      .get(dedupeKey),
   );
 
 export interface PendingTraceRow {
@@ -133,31 +135,26 @@ export const skipTraceEvent = (id: number, reason: string): void => {
 };
 
 // ── 슬랙 ts로 되짚기 ───────────────────────────────────────────────────
-// 사람이 채널에 남긴 표시를 어느 글에 붙일지 찾는 자리(feedback.ts)가 쓴다.
+// 사람이 채널에 남긴 표시를 어느 글에 붙일지 찾는 자리(feedback.ts)가 쓴다. 스레드 안 글은
+// 제 키가 없는 것이 많아서 parent_key로 부모 게시와 호출을 찾는다.
+
+export interface TraceEventByTs {
+  character_id: number | null;
+  kind: string;
+  dedupe_key: string | null;
+  thread_key: string | null;
+  parent_key: string | null;
+}
 
 export const traceEventBySlackTs = (
   slackTs: string,
-):
-  | {
-      character_id: number | null;
-      kind: string;
-      dedupe_key: string | null;
-      thread_key: string | null;
-    }
-  | undefined =>
+): TraceEventByTs | undefined =>
   db
     .prepare(
-      `SELECT character_id, kind, dedupe_key, thread_key FROM trace_events
+      `SELECT character_id, kind, dedupe_key, thread_key, parent_key FROM trace_events
         WHERE slack_ts = ? ORDER BY id DESC LIMIT 1`,
     )
-    .get(slackTs) as
-    | {
-        character_id: number | null;
-        kind: string;
-        dedupe_key: string | null;
-        thread_key: string | null;
-      }
-    | undefined;
+    .get(slackTs) as TraceEventByTs | undefined;
 
 /** 우리가 그 스레드에 올린 자식 수. */
 export const countSentChildren = (threadKey: string): number =>

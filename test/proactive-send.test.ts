@@ -2,6 +2,7 @@
 //
 // 모델과 텔레그램은 부르지 않는다 — 정해 둔 응답을 주는 ask와 보낸 글을 적기만 하는 send를
 // 끼운다. 잠금·보관 문안·발송 직전 재확인·실패 보관이 followup·presence에서 하던 대로 도는지 본다.
+// 문안을 만든 호출 번호가 발송 기록에 실리는지, 보관했다 다시 보낸 문안도 처음 번호를 싣는지도 본다.
 
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -9,18 +10,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
-process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), "proactive-send-")), "t.db");
+process.env.DB_PATH = join(
+  mkdtempSync(join(tmpdir(), "proactive-send-")),
+  "t.db",
+);
 process.env.TELEGRAM_BOT_TOKEN ??= "test-token";
 process.env.ANTHROPIC_API_KEY ??= "test-key";
 
 const { db, logMessage } = await import("../src/db.js");
-const { createFixtureCharacter } = await import("../src/eval/fixture-character.js");
+const { createFixtureCharacter } =
+  await import("../src/eval/fixture-character.js");
 const { acquireProactive, releaseProactive } = await import("../src/bot.js");
-const { sendProactiveDraft, readText, readSendText, noOverlap } = await import(
-  "../src/proactive-send.js"
-);
+const { sendProactiveDraft, readText, readSendText, noOverlap } =
+  await import("../src/proactive-send.js");
 type Deps = import("../src/proactive-send.js").ProactiveDraftDeps;
 type Spec<T> = import("../src/proactive-send.js").ProactiveDraftSpec<T>;
+type CallMeta = import("../src/llm.js").CallMeta;
 
 const CHAT = "chat-proactive";
 const LAST = "2026-09-06 21:00:00";
@@ -41,12 +46,23 @@ interface Sent {
 }
 
 /** 정해 둔 응답을 주는 모델과, 보낸 글을 적는(또는 실패하는) 발송. */
-const fake = (answer: unknown, opts: { fail?: boolean } = {}) => {
+const fake = (
+  answer: unknown,
+  opts: { fail?: boolean; callId?: number } = {},
+) => {
   const sent: Sent[] = [];
   let asks = 0;
   const deps: Deps = {
-    ask: (async () => {
+    ask: (async (
+      _system: unknown,
+      _user: unknown,
+      _maxTokens: unknown,
+      _model: unknown,
+      meta?: CallMeta,
+    ) => {
       asks += 1;
+      // 실제 모델 호출은 호출 행을 남기고 그 번호를 meta에 적는다.
+      if (meta && opts.callId) meta.callId = opts.callId;
       return answer;
     }) as Deps["ask"],
     send: (async (_chat, _cid, text, kind, extra) => {
@@ -145,6 +161,41 @@ test("자리 비움 예고는 같은 블록에서만 보관 문안을 다시 쓰
   assert.equal(up.asks(), 1);
   assert.deepEqual(up.sent, [
     { text: "운동 갔다 올게", kind: "away", extra: { block: "15:00" } },
+  ]);
+});
+
+test("문안을 만든 호출 번호를 발송 기록에 call_id로 싣는다", async () => {
+  const f = fake({ text: "밥은 챙겨 먹었어?" }, { callId: 41 });
+  const r = await sendProactiveDraft(
+    spec({ kind: "mend", read: readText }),
+    f.deps,
+  );
+  assert.equal(r, "sent");
+  assert.deepEqual(f.sent, [
+    { text: "밥은 챙겨 먹었어?", kind: "mend", extra: { call_id: 41 } },
+  ]);
+});
+
+test("보관했다 다시 보내는 문안은 처음 만든 호출 번호를 싣는다", async () => {
+  const down = fake(
+    { text: "오늘 좀 지쳐 보이더라" },
+    { fail: true, callId: 42 },
+  );
+  const r1 = await sendProactiveDraft(
+    spec({ kind: "care", read: readText }),
+    down.deps,
+  );
+  assert.equal(r1, "held");
+
+  const up = fake({ text: "이 글은 안 쓰여야 한다" }, { callId: 99 });
+  const r2 = await sendProactiveDraft(
+    spec({ kind: "care", read: readText }),
+    up.deps,
+  );
+  assert.equal(r2, "sent");
+  assert.equal(up.asks(), 0);
+  assert.deepEqual(up.sent, [
+    { text: "오늘 좀 지쳐 보이더라", kind: "care", extra: { call_id: 42 } },
   ]);
 });
 
