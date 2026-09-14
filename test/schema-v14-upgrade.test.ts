@@ -75,7 +75,7 @@ seed.close();
 const { db } = await import("../src/db.js");
 
 test("v13 DB가 지금 스키마 버전까지 올라간다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 14);
+  assert.equal(db.pragma("user_version", { simple: true }), 15);
 });
 
 test("memory_items에 있었던 날 칸이 붙는다", () => {

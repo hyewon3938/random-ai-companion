@@ -432,6 +432,11 @@ const TABLES: Record<string, string> = {
   // 표시가 달린 글의 slack_ts로 게시 기록을 되짚어 어느 모델 호출이었는지(call_id)까지 적는다 —
   // 호출과 이어지지 않는 글(하루 각본 알림 같은)에 달린 표시는 call_id 없이 그대로 둔다.
   //
+  // 게시글 본문뿐 아니라 스레드 안 글(프롬프트 덩이·발송 결과 같은)에 단 리액션도 모은다. 분류
+  // 이모지 넷 밖의 리액션은 kind를 비우고 이모지 이름만 emoji에 적는다. 어느 게시에서 나온
+  // 표시인지는 trace_key(그 글의 게시 키)와 thread_ts(스레드 안 글이면 부모 글의 ts)로 남긴다 —
+  // 트레이스 표는 30일이 지나면 지워져서 slack_ts만으로는 나중에 되짚을 수 없다.
+  //
   // 지우지 않고 removed_at으로 표시한다. 폴링이라 리액션을 뗀 것은 다음 회차에 없어진 것으로
   // 드러나는데, 행을 지워 버리면 무엇이 있다가 없어졌는지가 남지 않는다.
   //
@@ -454,7 +459,10 @@ const TABLES: Record<string, string> = {
   removed_at TEXT,
   resolved_at TEXT,
   issue_no INTEGER,
-  resolution TEXT CHECK (resolution IN ('fixed','wontfix','dup'))`,
+  resolution TEXT CHECK (resolution IN ('fixed','wontfix','dup')),
+  emoji TEXT,
+  trace_key TEXT,
+  thread_ts TEXT`,
 };
 
 const INDEXES = [
@@ -484,7 +492,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -1049,6 +1057,50 @@ const migrateToV14 = (): void => {
   console.log(`[db] 스키마를 v14로 옮겼다`);
 };
 
+// v15: call_feedback에 emoji·trace_key·thread_ts를 더한다(#451).
+//
+// 스레드 안 글에 단 리액션과 분류 밖 이모지까지 모으면서, 어느 게시에서 나온 표시인지를 행에
+// 옮겨 적는다. 이미 쌓인 행은 트레이스 표에 게시 기록이 아직 남은 것만 trace_key·thread_ts를
+// 채우고, 기록이 지워진 행은 비워 둔다. 리액션 행의 emoji는 분류에서 이모지 이름을 되살려
+// 채운다 — 좋음은 +1과 thumbsup 둘 다 받았지만 슬랙이 +1로 돌려주므로 +1로 적는다.
+// 붙이는 칸이 비어 있어도 되므로 ALTER로 붙인다(v14와 같은 꼴).
+const migrateToV15 = (): void => {
+  db.transaction(() => {
+    const cols = (
+      db.pragma(`table_info(call_feedback)`) as { name: string }[]
+    ).map((c) => c.name);
+    for (const col of ["emoji", "trace_key", "thread_ts"])
+      if (!cols.includes(col))
+        db.exec(`ALTER TABLE call_feedback ADD COLUMN ${col} TEXT`);
+    db.exec(
+      `UPDATE call_feedback
+          SET trace_key = (
+                SELECT COALESCE(t.dedupe_key, t.parent_key) FROM trace_events t
+                 WHERE t.slack_ts = call_feedback.slack_ts
+                 ORDER BY t.id DESC LIMIT 1),
+              thread_ts = (
+                SELECT p.slack_ts FROM trace_events t
+                  JOIN trace_events p ON p.thread_key = t.parent_key
+                 WHERE t.slack_ts = call_feedback.slack_ts
+                 ORDER BY t.id DESC, p.id DESC LIMIT 1)
+        WHERE trace_key IS NULL`,
+    );
+    db.exec(
+      `UPDATE call_feedback
+          SET emoji = CASE kind
+                WHEN 'fact' THEN 'x'
+                WHEN 'tone' THEN 'speech_balloon'
+                WHEN 'timing' THEN 'alarm_clock'
+                WHEN 'good' THEN '+1'
+              END
+        WHERE source = 'reaction' AND emoji IS NULL`,
+    );
+    db.pragma(`user_version = 15`);
+  })();
+
+  console.log(`[db] 스키마를 v15로 옮겼다`);
+};
+
 if (schemaVersion() < 4) migrateToV4();
 if (schemaVersion() < 5) migrateToV5();
 if (schemaVersion() < 6) migrateToV6();
@@ -1059,7 +1111,8 @@ if (schemaVersion() < 10) migrateToV10();
 if (schemaVersion() < 11) migrateToV11();
 if (schemaVersion() < 12) migrateToV12();
 if (schemaVersion() < 13) migrateToV13();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV14();
+if (schemaVersion() < 14) migrateToV14();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV15();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를

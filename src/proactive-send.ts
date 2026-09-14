@@ -13,6 +13,8 @@
 // 부른 쪽이 context를 주면 문안 호출 행에 판단 근거로 남겨 슬랙 문안 게시가 머리에 적는다
 // (달래기·살피기의 상대 상태, 이슈 #312·#361).
 //   5. 보낸다. 한 통도 못 나갔으면 문안을 보관함에 넣어 다음 틱이 다시 보내게 한다.
+//      문안을 만든 호출 번호는 발송 기록에 call_id로 함께 적는다. 보관했다 다시 보낸 문안도
+//      번호를 들고 있어서, 슬랙 발송 게시가 어느 호출의 문안이었는지 늘 가리킨다(이슈 #451).
 // 종류별로 다른 것(상황 문단·응답 모양·접을 때 남길 기록·로그 문구)만 spec으로 받는다.
 //
 // noOverlap은 틱 재진입 방지다 — 모델 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 같은
@@ -112,7 +114,8 @@ export const sendProactiveDraft = async <T>(
         config.model, // 실시간성이라 대화 모델(sonnet)
         meta,
       );
-      if (spec.context && meta.callId) setCallContext(meta.callId, spec.context);
+      if (spec.context && meta.callId)
+        setCallContext(meta.callId, spec.context);
       const text = spec.read(draft, meta);
       if (!text) return "skipped";
       outgoing = {
@@ -120,6 +123,7 @@ export const sendProactiveDraft = async <T>(
         text,
         ...(spec.block !== undefined ? { block: spec.block } : {}),
         madeAt: Date.now(),
+        ...(meta.callId ? { callId: meta.callId } : {}),
       };
     }
     // 발송 직전 재확인 — 모델을 기다리는 사이 유저가 답했거나 다른 경로가 뭔가 보냈으면
@@ -128,8 +132,11 @@ export const sendProactiveDraft = async <T>(
       spec.onMoved?.(meta);
       return "moved";
     }
+    // 문안 호출 번호를 발송 기록에 함께 적는다. 발송 게시가 이 번호를 키로 삼아, 발송 게시에
+    // 남긴 피드백도 어느 호출의 문안이었는지 되짚는다(이슈 #451).
     const sendMeta = {
       ...(spec.block !== undefined ? { block: spec.block } : {}),
+      ...(outgoing.callId ? { call_id: outgoing.callId } : {}),
       ...spec.extraMeta,
     };
     await deps.send(
@@ -146,7 +153,13 @@ export const sendProactiveDraft = async <T>(
     const msg = e instanceof Error ? e.message : String(e);
     logErr(`${spec.label} 전송 실패:`, e);
     recordSendFailure(chatId, characterId, kind, msg);
-    traceProactiveFail({ characterId, kind, error: msg, callId: meta.callId });
+    traceProactiveFail({
+      characterId,
+      kind,
+      error: msg,
+      // 보관함에서 꺼낸 문안이면 이번 틱은 모델을 부르지 않았다. 문안이 들고 온 번호를 쓴다.
+      callId: meta.callId ?? outgoing?.callId,
+    });
     // 한 통도 못 나갔으면 문안을 들고 있는다 — 다음 틱이 같은 자리면 그대로 다시 보낸다.
     // (일부라도 나가면 sendProactive가 던지지 않으므로 여기 오지 않는다.)
     if (outgoing) holdFailedDraft(chatId, outgoing);
@@ -160,8 +173,10 @@ export const sendProactiveDraft = async <T>(
 export const readText = (d: { text?: string }): string | null => d.text || null;
 
 /** 응답이 `{ send, text }` 모양인 문안(근황). send가 false면 보내지 않는다. */
-export const readSendText = (d: { send: boolean; text?: string }): string | null =>
-  d.send && d.text ? d.text : null;
+export const readSendText = (d: {
+  send: boolean;
+  text?: string;
+}): string | null => (d.send && d.text ? d.text : null);
 
 /**
  * 틱 재진입 방지 — 앞 틱이 아직 도는 중이면 이번 호출은 아무것도 하지 않고 돌아온다.

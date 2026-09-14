@@ -4,7 +4,7 @@
 // 먼저 연락했으면 보내지 않고, 관제탑이 그날 보낼 종류로 지목하지 않아도 보내지 않는다.
 //
 // 창을 놓치면 유예 안에서 보내고(창 종료 +90분, 시간대별 상한 11·14·22시), 넘기면 폐기
-// 사유와 시도 횟수를 적는다.
+// 사유와 시도 횟수를 적는다. 보낼 때는 예약 행 번호(scheduled_id)를 발송 기록에 함께 적는다.
 //
 // 이 한 통의 근거는 일정이고, 오늘의 관계 의도는 문안을 쓸 때 이미 들어갔다 — 새벽 정리가
 // 아침 문안의 상황 문단에 네 줄을 넣고 이어갈 자리나 파고들 것 하나만 엮게 한다
@@ -80,7 +80,12 @@ export const runDispatchTick = noOverlap(async () => {
     const allowed =
       r.kind === "checkin" ? plan.kind === "checkin" : plan.kind === "morning";
     if (!allowed) {
-      markScheduledSend(r.id, "skipped", `보내지 않는 날 (${plan.reason})`, null);
+      markScheduledSend(
+        r.id,
+        "skipped",
+        `보내지 않는 날 (${plan.reason})`,
+        null,
+      );
       continue;
     }
 
@@ -121,6 +126,9 @@ export const runDispatchTick = noOverlap(async () => {
         r.character_id,
         r.text,
         r.kind === "checkin" ? "checkin" : "morning",
+        // 예약 행 번호를 발송 기록에 남긴다. 슬랙 발송 게시가 이 번호를 키로 달아서, 그 게시에
+        // 남긴 피드백이 어느 예약 문안이었는지 되짚는다(이슈 #451).
+        { scheduled_id: r.id },
       );
       const notes = [
         late ? `유예 발송 (창 종료 ${r.window_end} 이후)` : null,

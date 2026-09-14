@@ -12,6 +12,7 @@
 //            관계 단계(문턱 조건별 값과 넘김 여부, 처음 확정과 취소, 오늘의 의도),
 //            상대 프로필 갱신, 새 일정, 일정 시각 고침
 //   스레드 — 기억 신규·덮어쓰기, 일기 전문, 오늘 선톡 문안과 발송 창, 새벽 정리가 부른 호출 원문
+//            (호출 원문 글에는 `call:12:nightly`처럼 호출 번호를 담은 키를 단다)
 //   따로   — 단계가 오르면 stage_change, 처음이 확정·취소되거나 상대가 먼저 한 처음이 더해지면
 //            first_event 게시가 스레드 밖에 한 건씩 나간다(relationship.md 「슬랙 게시」).
 //
@@ -728,10 +729,13 @@ const callChildren = (g: NightlyGathered, parentKey: string): void => {
     ]
       .filter(Boolean)
       .join("\n");
+    // 새벽 정리 스레드의 부모 키에는 호출 번호가 없다. 머리와 덩이마다 호출 번호를 담은 키를 달아
+    // 그 글에 남긴 피드백이 어느 호출이었는지 되짚게 한다(feedback.ts, 이슈 #451).
     recordTraceEvent({
       characterId: g.characterId,
       kind: `nightly_call_${row.purpose}`,
       parentKey,
+      dedupeKey: `call:${row.id}:nightly`,
       text: head,
     });
     const prompt = [
@@ -748,6 +752,7 @@ const callChildren = (g: NightlyGathered, parentKey: string): void => {
         `호출 #${row.id} 프롬프트`,
         esc(prompt),
         true,
+        `call:${row.id}:prompt`,
       );
     const output = row.output_hash ? getBlob(row.output_hash) : null;
     if (output)
@@ -758,6 +763,7 @@ const callChildren = (g: NightlyGathered, parentKey: string): void => {
         `호출 #${row.id} 출력`,
         esc(output),
         true,
+        `call:${row.id}:output`,
       );
     markLlmCallTraced(row.id);
   }

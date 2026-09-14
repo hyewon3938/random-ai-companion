@@ -44,18 +44,20 @@ export const CONTEXT_GRACE_MS = 5 * 60_000;
 // 지난 기록이 한꺼번에 채널로 쏟아지지 않게.
 export const MAX_AGE_MS = 3 * 3600_000;
 
-/** 올리는 호출. 답장·붙잡기 판정·선톡 문안. */
+/** 올리는 호출. 답장·붙잡기 판정·선톡 문안(의도 선톡과 틈새 한 줄 포함). */
 const POST_PURPOSES = [
   "reply",
   "hold",
   "morning",
   "lunch",
+  "intent",
   "reconnect",
   "catchup",
   "goodnight",
   "mend",
   "care",
   "away",
+  "glance",
   "comeback",
   "promise",
 ] as const;
@@ -111,7 +113,6 @@ const postFullLayers = (
     });
   })();
 };
-
 
 const postLayerChange = (
   row: CallRow,

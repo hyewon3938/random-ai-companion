@@ -2,7 +2,8 @@
 //
 // 답장 본문은 trace/reply-post.ts가 호출 행을 읽어 뒤늦게 올리지만, 여기 있는 것은 그 일이
 // 일어나는 자리(pending·bot·proactive-send·presence)가 그때 바로 쌓는다. 답장 결과는 그 답장을
-// 만든 호출 스레드에 달리고, 선톡은 나간 뒤 발송 행이 따로 붙는다. 재시도를 다 쓰고 끝내 못
+// 만든 호출 스레드에 달리고, 선톡은 나간 뒤 발송 행이 따로 붙는다. 발송 행은 문안 호출 번호나
+// 예약 행 번호를 게시 키로 달아 어느 문안에서 나온 한 통인지 남긴다. 재시도를 다 쓰고 끝내 못
 // 나가면 그 문안 스레드에 발송 포기가 달린다 — 문안만 보고 나간 것으로 읽지 않게.
 // 자리 비움 예고와 틈새 한 줄을 코드가 접은 자리도 사유와 함께 같은 트레이스 표에 쌓는다(traceAwaySkip·
 // traceGlanceSkip).
@@ -75,7 +76,9 @@ export const traceGarbledFilter = (p: {
 /**
  * 선톡이 실제로 나간 자리(bot.ts sendProactive).
  * 아침·안부는 전날 밤에 만든 문안이라 문안 호출과 발송이 몇 시간 떨어져 있다 —
- * 스레드로 잇지 않고 독립 행으로 둔다.
+ * 스레드로 잇지 않고 독립 행으로 둔다. 어느 문안에서 나온 한 통인지는 게시 키로 남긴다 —
+ * 문안 호출 번호를 알면 `call:12:send`, 예약 발송이면 `scheduled:34:send`다. 발송 게시에 남긴
+ * 피드백이 이 키로 호출이나 예약 행을 되짚는다(feedback.ts, 이슈 #451).
  * 근거 줄은 부르는 쪽이 발송 기록의 meta_json으로 만들어 넘긴다(proactive-policy의
  * basisLineFromMeta) — 선톡은 근거 종류 넷 가운데 하나를 반드시 갖는다(설계 원본 §9).
  */
@@ -87,6 +90,10 @@ export const traceProactiveSend = (p: {
   total: number;
   /** 무슨 근거로 나간 한 통인지 — 의도(이어갈 자리)·일정(12:00 블록)·달래기·약속(행 12). */
   basis?: string | null;
+  /** 문안을 만든 호출 번호. 봇 밖에서 만든 예약 문안은 없다. */
+  callId?: number;
+  /** 예약 발송(아침·안부)이면 scheduled_messages 행 번호. */
+  scheduledId?: number;
 }): void => {
   if (!traceEnabled()) return;
   const name = SEND_KIND_NAME[p.kind] ?? `${p.kind} 선톡`;
@@ -96,6 +103,11 @@ export const traceProactiveSend = (p: {
   recordTraceEvent({
     characterId: p.characterId,
     kind: "proactive_send",
+    dedupeKey: p.callId
+      ? `${callKey(p.callId)}:send`
+      : p.scheduledId
+        ? `scheduled:${p.scheduledId}:send`
+        : undefined,
     text: `:calling: *${name} 발송* · ${clock()}${partial}\n${basis}${quote(clip(p.text, 500))}`,
   });
 };

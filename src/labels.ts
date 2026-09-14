@@ -457,9 +457,16 @@ const FEEDBACK_BY_EMOJI: Record<string, FeedbackKind> = {
   thumbsup: "good",
 };
 
-/** 리액션 이름을 분류로. 목록에 없는 이모지는 표시가 아니라 잡담이므로 null. */
-export const toFeedbackKind = (name: string): FeedbackKind | null => {
-  // 살색 변형(:+1::skin-tone-3:)은 앞부분만 본다.
-  const base = name.split("::")[0].trim();
-  return FEEDBACK_BY_EMOJI[base] ?? null;
-};
+/** 살색 변형(:+1::skin-tone-3:)을 뗀 이모지 이름. */
+export const baseEmojiName = (name: string): string =>
+  name.split("::")[0].trim();
+
+/** 리액션 이름을 분류로. 목록에 없는 이모지는 분류가 없어 null이고, 수집은 이름만 적어 함께 모은다. */
+export const toFeedbackKind = (name: string): FeedbackKind | null =>
+  FEEDBACK_BY_EMOJI[baseEmojiName(name)] ?? null;
+
+/**
+ * 처리 표시를 찍은 글에 도구가 다는 이모지(tools/feedback.ts). 사람이 남긴 표시가 아니라
+ * 수집에서 뺀다 — 빼지 않으면 처리할 때마다 새 표시가 한 건씩 되돌아온다.
+ */
+export const FEEDBACK_DONE_EMOJI = "white_check_mark";

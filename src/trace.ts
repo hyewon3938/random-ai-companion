@@ -76,6 +76,8 @@ export const recordTraceEvent = (e: TraceEventInput): void => {
 
 // 긴 본문은 한 덩이 크기로 잘라 스레드 자식 여러 행으로 쌓는다. 이스케이프는 부르는 쪽이 끝내고
 // 넘긴다. code=true면 자른 뒤에 각 덩이를 코드 울타리로 감싼다 — 울타리째 자르면 표시가 깨진다.
+// dedupePrefix를 주면 덩이마다 `${dedupePrefix}:1`처럼 번호를 붙인 키를 단다. 부모 키만으로는
+// 어느 호출의 덩이인지 알 수 없는 스레드(새벽 정리 묶음)에서 덩이에 남긴 피드백이 호출을 되짚게 한다.
 export const recordTraceChunks = (
   characterId: number | undefined,
   parentKey: string,
@@ -83,14 +85,17 @@ export const recordTraceChunks = (
   label: string,
   body: string,
   code = false,
+  dedupePrefix?: string,
 ): void => {
   const parts = chunked(body);
   parts.forEach((p, i) => {
-    const head = parts.length > 1 ? `${label} (${i + 1}/${parts.length})` : label;
+    const head =
+      parts.length > 1 ? `${label} (${i + 1}/${parts.length})` : label;
     recordTraceEvent({
       characterId,
       kind,
       parentKey,
+      dedupeKey: dedupePrefix ? `${dedupePrefix}:${i + 1}` : undefined,
       text: code ? `${head}\n\`\`\`\n${p}\n\`\`\`` : `${head}\n${p}`,
     });
   });
