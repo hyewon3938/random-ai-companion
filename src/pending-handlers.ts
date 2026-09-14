@@ -9,6 +9,10 @@
 // 여기서 직접 가져오지 않는다 — bot.ts가 이 파일의 createWakeHandler·createPromiseHandler를
 // 부르는 것과 맞물려 순환 참조가 생기기 때문이다. 그 밖의 의존성(행을 읽고 쓰는 함수,
 // 상황 판정, 발송 기록)은 각자의 원본 모듈에서 직접 가져온다.
+//
+// 복귀 인사·사이 예고·약속 연락을 보낼 때는 문안을 만든 호출 번호를 발송 메타에 call_id로
+// 함께 넘긴다. 발송 게시의 키(call:N:send)가 되어, 슬랙에서 그 게시에 남긴 피드백이 어느
+// 문안 호출이었는지 되짚을 수 있다(이슈 #451).
 
 import { config } from "./config.js";
 import { isAwayUnavail, type PlanBlock } from "./day-plan.js";
@@ -261,6 +265,11 @@ export const createWakeHandler = (deps: WakeHandlerDeps): WakeHandler => {
       return;
     }
     try {
+      const draftMeta: CallMeta = {
+        purpose: between ? "away" : "comeback",
+        characterId: row.character_id,
+        chatId,
+      };
       const draft = await chatJson<{ send: boolean; text?: string }>(
         buildSystemBlocks(row.character_id, chatId, {
           recent: PROACTIVE_RECENT_LINES,
@@ -272,11 +281,7 @@ export const createWakeHandler = (deps: WakeHandlerDeps): WakeHandler => {
         "위 상황 문단대로 문안을 만들어.",
         400,
         config.model,
-        {
-          purpose: between ? "away" : "comeback",
-          characterId: row.character_id,
-          chatId,
-        },
+        draftMeta,
       );
       // 발송 직전 재확인 — LLM을 기다리는 사이 유저가 답했거나 다른 경로가 보냈으면 접는다.
       if (
@@ -285,16 +290,14 @@ export const createWakeHandler = (deps: WakeHandlerDeps): WakeHandler => {
         lastMessage(chatId, row.character_id)?.sent_at === last.sent_at
       ) {
         // 사이 예고의 block은 자리 비움 틱의 예고와 같은 칸이다 — 틱이 같은 블록에 예고를 또
-        // 보내지 않게(awayNoticeSent) 하고, between은 하루 상한에서 빼는 표시다.
-        await deps.sendProactive(
-          chatId,
-          row.character_id,
-          draft.text,
-          "away",
-          between
+        // 보내지 않게(awayNoticeSent) 하고, between은 하루 상한에서 빼는 표시다. 문안 호출 번호는
+        // 발송 게시의 키가 되어, 거기 남긴 피드백이 어느 호출이었는지 되짚게 한다.
+        await deps.sendProactive(chatId, row.character_id, draft.text, "away", {
+          ...(between
             ? { between: between.start, block: between.start }
-            : { return: meta.blockStart ?? true },
-        );
+            : { return: meta.blockStart ?? true }),
+          ...(draftMeta.callId ? { call_id: draftMeta.callId } : {}),
+        });
         console.log(
           `[wake] ${between ? "between" : "return"} @ ${activity} → ${chatId}`,
         );
@@ -500,6 +503,7 @@ export const createPromiseHandler = (
           {
             promise,
             promise_row: row.id,
+            ...(draftMeta.callId ? { call_id: draftMeta.callId } : {}),
           },
         );
         console.log(`[promise] 약속 연락 @ ${activity} → ${chatId}`);
