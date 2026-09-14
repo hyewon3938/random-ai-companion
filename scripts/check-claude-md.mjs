@@ -25,13 +25,13 @@ if (text !== null) {
       `[check-claude-md] ${FILE}가 ${chars.toLocaleString()}자로 상한 ${LIMIT.toLocaleString()}자를 넘었습니다.`,
     );
     console.error(
-      `[check-claude-md] 남은 항목을 억지로 줄이지 말고, 확인이 끝난 항목부터 지우세요(CLAUDE.md 규칙 절).`,
+      `[check-claude-md] 규칙을 억지로 줄이지 말고, 끝난 내용이나 스킬과 겹치는 절차부터 지우세요(CLAUDE.md 규칙 절).`,
     );
     process.exit(1);
   }
   if (chars > WARN) {
     console.warn(
-      `[check-claude-md] ${FILE}가 ${chars.toLocaleString()}자입니다. 상한 ${LIMIT.toLocaleString()}자가 가깝습니다 — 확인이 끝난 항목부터 지우세요.`,
+      `[check-claude-md] ${FILE}가 ${chars.toLocaleString()}자입니다. 상한 ${LIMIT.toLocaleString()}자가 가깝습니다 — 끝난 내용부터 지우세요.`,
     );
   }
 }
