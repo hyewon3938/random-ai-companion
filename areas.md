@@ -14,7 +14,7 @@
 | 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-canon, tag-pick, user-profile |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
 | 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, context/*, prompts/reply, prompts/relationship, turns, reply-signal, reply-ask, reply-compose, reply-promise, user-state, relationship-update, speech-level, reply-timing, proactive-policy |
-| 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 4개, 크론표 | index, bot, pending, presence, glance, followup, dispatch, proactive-send |
+| 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 4개, 크론표 | index, bot, pending, pending-handlers, presence, glance, followup, dispatch, proactive-send |
 | 6. 새벽 정리 | 하루를 닫는 배치 전부 | nightly, relationship-stage, prompts/nightly, nightly-trace, tools/nightly-read, tools/nightly-write, tools/run-nightly |
 | 7. 관측과 운영 | 슬랙 게시, 피드백 수집, 손으로 돌리는 도구, 평가, 테스트, CI | trace, trace/*, reply-trace, feedback, tools/*, eval/* |
 
@@ -82,11 +82,12 @@
 - `src/context/input.ts` — 프롬프트 재료 읽기 — 조립에 필요한 것을 DB와 시계에서 한 번에 읽어 값 묶음으로 만든다.
 - `src/context/relationship.ts` — 「지금 관계」 채우기 — 단계와 처음, 오늘 쓴 플러팅, 오늘 말한 일정, 오늘의 관계 의도를 읽어 답장 프롬프트의 관계 절을 만든다.
 
-### 5. 실행과 발송 · 3,866줄
+### 5. 실행과 발송 · 3,985줄
 
 - `src/index.ts` — 봇 프로세스의 시작점.
 - `src/bot.ts` — 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
 - `src/pending.ts` — 만들어 둔 답장을 정한 시각에 내보내는 자리.
+- `src/pending-handlers.ts` — 깨우기·약속 표시가 울릴 때 실제로 답장을 만들고 선톡을 거는 자리.
 - `src/presence.ts` — 자리 비움 예고 — 오래 답을 못 하게 되기 전에 미리 알린다(10분 틱).
 - `src/glance.ts` — 틈새 한 줄 — 불가 구간에 온 확인 말에 지금 하는 일과 끝나는 시각을 짧게 알린다(5분 틱).
 - `src/followup.ts` — 침묵 팔로업 — 답이 끊긴 자리에 한 통 보낸다(15분 틱).
