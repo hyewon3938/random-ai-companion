@@ -68,7 +68,7 @@ import {
 } from "./labels.js";
 import { intentSummary } from "./prompts/nightly.js";
 import { wordDiff } from "./trace/diff.js";
-import { keyProblem } from "./memory.js";
+import { currentRowOf, currentRows, keyProblem } from "./memory.js";
 import { getKstNow } from "./kst.js";
 import type {
   DiaryOutput,
@@ -161,16 +161,10 @@ export const beforeNightlyTrace = (
       if (m.value?.trim() && m.area && m.subject) wanted.add(extractKey(m));
     const memories = new Map<string, MemorySnap>();
     if (wanted.size)
-      for (const r of listMemoryItems(g.characterId)) {
+      // 트랜잭션과 같은 규칙 — 같은 키에 두 행이 있으면 합친 값이 지금 값이다(memory.ts currentRows).
+      for (const r of currentRows(listMemoryItems(g.characterId))) {
         const k = rowKey(r);
         if (!wanted.has(k)) continue;
-        // 트랜잭션과 같은 규칙 — 같은 키에 두 행이 있으면 대화로 쌓인 쪽이 지금 값이다.
-        const cur = memories.get(k);
-        if (
-          cur &&
-          !(cur.origin !== "conversation" && r.origin === "conversation")
-        )
-          continue;
         memories.set(k, {
           value: r.value,
           origin: r.origin,
@@ -180,7 +174,9 @@ export const beforeNightlyTrace = (
     const progress = new Map<number, { label: string; value: string }>();
     for (const p of out.progress ?? []) {
       if (typeof p.id !== "number") continue;
-      const r = getMemoryItemById(p.id);
+      // 반영과 같은 규칙 — 생성 행 번호가 와도 같은 키의 합친 값이 앞 값이다.
+      const found = getMemoryItemById(p.id);
+      const r = found ? currentRowOf(found) : null;
       if (r)
         progress.set(p.id, {
           label: `${r.area}/${r.subject}`,

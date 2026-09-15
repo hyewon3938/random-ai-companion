@@ -15,7 +15,8 @@
 // 며칠에 걸쳐 하는 일(진행 중인 일)은 캐릭터 쪽이면서 유저가 이미 아는 것만 각본에 넣는다.
 // 프롬프트 줄 앞에 기억 행 번호를 붙이고, 그 줄에서 펼친 블록은 source "ongoing"과 그 번호를
 // 갖는다 — 새벽 정리가 어제 각본에서 이 블록을 찾아 그 일의 값을 한 걸음 옮긴다(이슈 #276).
-// 유저에게 한 번도 말하지 않은 일은 기억으로만 두고 각본으로 굴리지 않는다.
+// 유저에게 한 번도 말하지 않은 일은 기억으로만 두고 각본으로 굴리지 않는다. 같은 키에 생성 행과
+// 대화 행이 있으면 합친 값으로 거른다(이슈 #456).
 //
 // 유저와는 메시지로만 이어진 사이라 유저와 만나는 블록은 만들지 않는다. 유저가 하루에 들어오는
 // 자리는 메시지를 보내거나 답하는 시간뿐이다(이슈 #322).
@@ -53,6 +54,7 @@ import {
 } from "./db.js";
 import {
   alwaysIncluded,
+  currentRows,
   orderedIdentity,
   identityValue,
   memoryLine,
@@ -365,21 +367,15 @@ const ongoingLine = (r: MemoryRow): string =>
 
 /**
  * 각본에 넣을 진행 중인 일. 캐릭터 쪽이면서 유저가 이미 아는 것만, 최근에 손댄 것부터
- * PLAN_ONGOING_MAX까지. 같은 키에 생성 행과 대화 행이 나란히 있으면 대화 행이 지금 값이다.
+ * PLAN_ONGOING_MAX까지. 같은 키에 생성 행과 대화 행이 나란히 있으면 합친 뒤에 거른다 — 값은
+ * 대화 행 것이고, 한쪽이라도 유저가 알면 아는 일이다(memory.ts currentRows). 먼저 거르면
+ * 생성 행만 아는 일일 때 생성 때 값이 들어간다.
  * 새벽 정리가 봇 밖 경로에 같은 목록을 넘길 때도 이 함수를 쓴다.
  */
-export const planOngoingRows = (characterId: number): MemoryRow[] => {
-  const byKey = new Map<string, MemoryRow>();
-  for (const r of listMemoryItems(characterId, "ongoing")) {
-    if (r.owner !== "char" || r.user_knows !== "known") continue;
-    const k = `${r.area}/${r.subject}`;
-    const cur = byKey.get(k);
-    if (cur && !(cur.origin !== "conversation" && r.origin === "conversation"))
-      continue;
-    byKey.set(k, r);
-  }
-  return [...byKey.values()].slice(0, PLAN_ONGOING_MAX);
-};
+export const planOngoingRows = (characterId: number): MemoryRow[] =>
+  currentRows(listMemoryItems(characterId, "ongoing"))
+    .filter((r) => r.owner === "char" && r.user_knows === "known")
+    .slice(0, PLAN_ONGOING_MAX);
 
 export const planOngoingLines = (characterId: number): string =>
   planOngoingRows(characterId).map(ongoingLine).join("\n");

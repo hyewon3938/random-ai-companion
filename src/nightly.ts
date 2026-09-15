@@ -32,6 +32,11 @@
 // 유저가 오래 조용하면 gather가 침묵 단계를 노출하고 apply가 게이트를 강제한다 — quiet·
 // dormant면 일기와 시드와 리듬만 만들고 각본과 선톡은 건너뛰고, reconnect면 저녁 재연결
 // 문안만 만든다. 밖에서 부르는 경로가 백오프를 몰라도 안전하게 두려는 것이다.
+//
+// 재료의 정체성·주변 인물·진행 중인 일은 키마다 한 줄이다. 같은 키에 생성 행과 대화 행이
+// 있으면 memory.ts currentRows가 합친 값을 싣고, 상대가 아는지 표시도 그 값으로 붙인다.
+// 정체성은 사실을 적는 줄에만 표시를 붙이고, 표시가 없는 줄은 흘릴 사실 후보로 두지 않는다
+// (이슈 #456).
 
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
@@ -103,7 +108,11 @@ import {
   keyProblem,
   existingKeys,
   existingAreas,
-  identityLines,
+  alwaysIncluded,
+  currentRowOf,
+  currentRows,
+  memoryLine,
+  orderedIdentity,
   searchMemories,
   tagSearch,
 } from "./memory.js";
@@ -138,7 +147,9 @@ import {
   careSituation,
   diaryPrompt,
   extractPrompt,
+  knowsMarkOf,
   morningSituation,
+  withoutKnowsMark,
   progressPrompt,
   quietDayPrompt,
   type MorningIntent,
@@ -311,9 +322,11 @@ export interface NightlyGathered {
   msgsCount: number;
   planBriefYesterday: string;
   planExistsToday: boolean;
-  identity: string; // 정체성 사실 줄들 (creation + conversation, 같은 키는 최신이 이김)
-  people: string; // 주변 인물 줄들 (캐릭터 쪽·유저 쪽 모두)
-  ongoing: string; // 진행 중인 일 줄들
+  // 정체성 줄들 — 키마다 한 줄(생성 행과 대화 행을 합친 값). 사실을 적는 줄 끝에만 상대가
+  // 아는지 표시가 붙고, 태도·말투·대화 성격·그늘·성별 줄에는 없다.
+  identity: string;
+  people: string; // 주변 인물 줄들 (캐릭터 쪽·유저 쪽 모두, 키마다 한 줄)
+  ongoing: string; // 진행 중인 일 줄들 (키마다 한 줄)
   // 오늘 각본에 넣을 진행 중인 일 — 유저가 아는 캐릭터 쪽 것만, 줄 앞에 행 번호. 외부 생성
   // 경로가 각본 블록의 source_id에 이 번호를 적는다(day-plan.ts planOngoingLines와 같은 목록).
   ongoingForPlan: string;
@@ -411,21 +424,29 @@ export const planBrief = (raw: string | undefined): string => {
   }
 };
 
-// 줄 끝에 붙이는 '상대가 아는가'의 지금 값. waiting은 아직 말하지 않고 꺼낼 자리를 기다리는
-// 것이라 모름 쪽으로 적는다(reply-timing.ts와 같은 기준). 추출이 이 값을 못 보던 동안 모델은
-// 매번 처음부터 다시 판단했고, 다시 안 적어 낸 행은 앞 값을 그대로 이어받아 캐릭터를 만들 때
-// 정해진 unknown에서 한 번도 움직이지 않았다(이슈 #345).
-const knowsMarkOf = (v: UserKnows): string =>
-  v === "known" ? " [상대가 앎]" : " [상대는 모름]";
-
 // 표시는 '나'(char) 쪽 줄에만 붙는다 — 상대가 제 일을 아는지는 물을 것이 없다.
+// 표시 문자열과 떼는 함수는 prompts/nightly.ts에 있다(일기 프롬프트도 뗀다).
 const knowsMark = (r: MemoryRow): string =>
   r.owner === "char" ? knowsMarkOf(r.user_knows) : "";
 
-// 아크 재료에서는 이 표시를 뗀다. 아크 프롬프트에는 표시를 설명하는 자리가 없고, 캐릭터를
-// 만들 때 character.ts가 만드는 같은 모양에도 없어서, 두면 아크 문장에 그대로 섞인다.
-const withoutKnowsMark = (s: string): string =>
-  s.replaceAll(" [상대가 앎]", "").replaceAll(" [상대는 모름]", "");
+// 정체성에서 표시를 붙이지 않는 줄. 태도·말투는 상대를 대하는 방식이고, 대화 성격·그늘·성별은
+// 대화에서 알려 줄 사실로 다루지 않는다. 그늘은 캐릭터를 만들 때 언제나 모름으로 정해져서,
+// 표시를 붙이면 흘릴 사실 후보에 늘 남는다. 나머지(고향·가족·직업·주거·생활·연애·취미와
+// 대화로 새로 생긴 영역)는 사실이라 표시를 붙인다.
+const UNMARKED_IDENTITY_AREAS = new Set(["태도", "말투"]);
+const UNMARKED_IDENTITY_KEYS = new Set([
+  "기본/대화 성격",
+  "기본/그늘",
+  "기본/성별",
+]);
+
+const identityLine = (r: MemoryRow): string =>
+  `${memoryLine(r)}${
+    UNMARKED_IDENTITY_AREAS.has(r.area) ||
+    UNMARKED_IDENTITY_KEYS.has(`${r.area}/${r.subject}`)
+      ? ""
+      : knowsMarkOf(r.user_knows)
+  }`;
 
 const personLine = (r: MemoryRow): string => {
   const meta = [r.area, r.relation, r.owner === "user" ? "상대 쪽 사람" : null]
@@ -442,8 +463,9 @@ const userFactLine = (r: MemoryRow): string =>
   `- ${r.area}/${r.subject}: ${r.value} (${r.updated_at.slice(0, 10)} 갱신)`;
 
 // 어제 각본에서 진행 중인 일로 펼친 블록을 그 일의 기억 행에 맞춰 한 줄씩. 같은 일이 블록
-// 두 개로 들어갔으면 한 줄에 이어 적는다. 실제 기록(day_actuals)은 블록 시작 시각으로 맞춘다 —
-// 취소·미룸이면 그날 몫은 없던 것이라 생성이 값을 옮기지 않는다.
+// 두 개로 들어갔으면 한 줄에 이어 적는다. 블록이 생성 행 번호를 갖고 있어도 같은 키의 합친
+// 지금 값으로 적고, 같은 일이 번호 둘로 들어갔어도 한 줄에 모은다. 실제 기록(day_actuals)은
+// 블록 시작 시각으로 맞춘다 — 취소·미룸이면 그날 몫은 없던 것이라 생성이 값을 옮기지 않는다.
 const touchedOngoingLines = (
   characterId: number,
   diaryDate: string,
@@ -460,18 +482,19 @@ const touchedOngoingLines = (
   const byId = new Map<number, { row: MemoryRow; how: string[] }>();
   for (const b of blocks) {
     if (b.source !== "ongoing" || typeof b.source_id !== "number") continue;
-    let cur = byId.get(b.source_id);
+    const found = getMemoryItemById(b.source_id);
+    if (
+      !found ||
+      found.character_id !== characterId ||
+      found.item_type !== "ongoing" ||
+      found.owner !== "char"
+    )
+      continue;
+    const row = currentRowOf(found);
+    let cur = byId.get(row.id);
     if (!cur) {
-      const row = getMemoryItemById(b.source_id);
-      if (
-        !row ||
-        row.character_id !== characterId ||
-        row.item_type !== "ongoing" ||
-        row.owner !== "char"
-      )
-        continue;
       cur = { row, how: [] };
-      byId.set(b.source_id, cur);
+      byId.set(row.id, cur);
     }
     const hit = actuals.filter((a) => a.block_start === b.start);
     const outcome = hit.length
@@ -545,7 +568,7 @@ const userStateLine = (
 const arcMaterialOf = (g: NightlyGathered): string =>
   [
     "[정체성]",
-    g.identity || "(없음)",
+    withoutKnowsMark(g.identity) || "(없음)",
     "",
     "[주변 인물]",
     withoutKnowsMark(g.people) || "(없음)",
@@ -637,9 +660,13 @@ export const gatherNightlyInput = (
     msgsCount: msgs.length,
     planBriefYesterday: planBrief(getDayPlan(character.id, diaryDate)),
     planExistsToday: !!getDayPlan(character.id, today),
-    identity: identityLines(character.id),
-    people: listMemoryItems(character.id, "person").map(personLine).join("\n"),
-    ongoing: listMemoryItems(character.id, "ongoing")
+    identity: orderedIdentity(currentRows(alwaysIncluded(character.id)))
+      .map(identityLine)
+      .join("\n"),
+    people: currentRows(listMemoryItems(character.id, "person"))
+      .map(personLine)
+      .join("\n"),
+    ongoing: currentRows(listMemoryItems(character.id, "ongoing"))
       .map(ongoingLine)
       .join("\n"),
     ongoingForPlan: planOngoingLines(character.id),
@@ -741,17 +768,11 @@ const applyNightlyTxn = db.transaction(
     const skippedKeys: string[] = [];
     if (ex) {
       // 같은 키를 다시 쓸 때 모델이 생략한 추가 정보(어떤 사이·만나는 결 등)가
-      // null로 덮이지 않게, 기존 행의 값을 받침으로 깐다. conversation 행 우선.
+      // null로 덮이지 않게, 기존 행의 값을 받침으로 둔다. 같은 키가 두 행이면 합친 지금 값이다 —
+      // 추가 정보는 대화 행 것, 상대가 아는지는 한쪽이라도 앎이면 앎(memory.ts currentRows).
       const prevRows = new Map<string, MemoryRow>();
-      for (const r of listMemoryItems(g.characterId)) {
-        const k = `${r.item_type}|${r.owner}|${r.area}/${r.subject}`;
-        const cur = prevRows.get(k);
-        if (
-          !cur ||
-          (cur.origin !== "conversation" && r.origin === "conversation")
-        )
-          prevRows.set(k, r);
-      }
+      for (const r of currentRows(listMemoryItems(g.characterId)))
+        prevRows.set(`${r.item_type}|${r.owner}|${r.area}/${r.subject}`, r);
       for (const m of ex.memories ?? []) {
         if (!m.value?.trim() || !m.area || !m.subject) continue;
         // 키가 규칙에 안 맞는 한 건이 트랜잭션 전체를 되돌리지 않게(saveMemory는 throw) 미리 걸러 건너뛴다
@@ -948,20 +969,23 @@ const applyNightlyTxn = db.transaction(
 
     // 진행 중인 일의 어제 몫. 행이 이 캐릭터의 캐릭터 쪽 진행 중인 일일 때만 받는다 —
     // 생성이 번호를 잘못 적어도 남의 행이나 사실 행을 덮지 않게. 태그는 그대로 잇는다:
-    // saveMemory가 태그를 통째로 갈아 끼우므로 안 넘기면 검색에서 빠진다.
+    // saveMemory가 태그를 통째로 갈아 끼우므로 안 넘기면 검색에서 빠진다. 받침은 같은 키의 합친
+    // 지금 값이다 — 생성 행 번호가 와도 대화로 앎이 된 일이 모름으로 돌아가지 않고 대화 행의
+    // 태그·끝나는 조건을 잇는다.
     let progressCount = 0;
     let progressDone = 0;
     let progressYielded = 0;
     for (const p of out.progress ?? []) {
       if (typeof p.id !== "number" || !p.value?.trim()) continue;
-      const row = getMemoryItemById(p.id);
+      const found = getMemoryItemById(p.id);
       if (
-        !row ||
-        row.character_id !== g.characterId ||
-        row.item_type !== "ongoing" ||
-        row.owner !== "char"
+        !found ||
+        found.character_id !== g.characterId ||
+        found.item_type !== "ongoing" ||
+        found.owner !== "char"
       )
         continue;
+      const row = currentRowOf(found);
       if (extractTouched.has(`${row.area}/${row.subject}`)) {
         progressYielded += 1;
         continue;

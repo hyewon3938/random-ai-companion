@@ -12,6 +12,12 @@
 //
 // tagSearch는 유저 발화에서 검색어를 뽑는다. 한 글자 태그("일"·"돈"·"집")는 어절 단위로만
 // 맞춘다 — 문자열 포함으로 두면 "일요일"·"생일"·"수집" 속 글자에 걸린다(이슈 #54).
+//
+// 같은 키에 creation 행과 conversation 행이 함께 있으면 currentRows가 한 행으로 합친다. 값과
+// 추가 정보는 conversation 행 것이고, 상대가 아는지는 한쪽이라도 앎이면 앎이다 — 한 번 앎이 된
+// 것을 모름으로 되돌리지 않는 새벽 정리 규칙과 같은 기준이다. 새벽 정리 재료와 각본에 넣을
+// 진행 중인 일이 이 값을 읽는다(이슈 #456). 답장 프롬프트와 각본·월 리듬의 [인물] 줄은 두 행을
+// 순서대로 싣고 아래쪽이 최신이라고 안내한다.
 
 import {
   upsertMemoryItem,
@@ -297,14 +303,53 @@ export const identityValue = (
 };
 
 /**
+ * 같은 키(항목·주인·영역·무엇)의 행을 한 행으로 합친다. 값과 추가 정보·번호는 conversation
+ * 행 것을 쓰고, 상대가 아는지는 두 행 가운데 하나라도 known이면 known이다. 들어온 순서에서
+ * 키가 처음 나온 자리를 지킨다 — listMemoryItems 순서면 최근에 손댄 키부터다.
+ */
+export const currentRows = (rows: MemoryRow[]): MemoryRow[] => {
+  const byKey = new Map<string, MemoryRow>();
+  for (const r of rows) {
+    const k = `${r.item_type}|${r.owner}|${r.area}/${r.subject}`;
+    const cur = byKey.get(k);
+    if (!cur) {
+      byKey.set(k, r);
+      continue;
+    }
+    const base =
+      cur.origin !== "conversation" && r.origin === "conversation" ? r : cur;
+    const knows =
+      cur.user_knows === "known" || r.user_knows === "known"
+        ? "known"
+        : base.user_knows;
+    byKey.set(
+      k,
+      base.user_knows === knows ? base : { ...base, user_knows: knows },
+    );
+  }
+  return [...byKey.values()];
+};
+
+/** 번호로 받은 행 하나를 같은 키의 합친 값으로 — 생성 행 번호가 와도 대화 행의 값을 쓴다. */
+export const currentRowOf = (row: MemoryRow): MemoryRow =>
+  currentRows(
+    listMemoryItems(row.character_id, row.item_type).filter(
+      (r) =>
+        r.owner === row.owner &&
+        r.area === row.area &&
+        r.subject === row.subject,
+    ),
+  )[0] ?? row;
+
+/**
  * 이미 있는 키와 태그 목록.
  * 새벽 정리가 기억을 정리할 때 같이 준다 — 같은 주제에 매번 다른 이름을 붙이면
- * 한 주제가 여러 자리로 갈라져 어느 쪽도 이어지지 않는다.
+ * 한 주제가 여러 자리로 갈라져 어느 쪽도 이어지지 않는다. 같은 키가 두 행이어도 한 번만 적는다.
  */
 export const existingKeys = (
   characterId: number,
 ): { itemType: MemoryItemType; owner: MemoryOwner; key: string }[] =>
-  listMemoryItems(characterId).map((r) => ({
+  currentRows(listMemoryItems(characterId)).map((r) => ({
     itemType: r.item_type,
     owner: r.owner,
     key: `${r.area}/${r.subject}`,

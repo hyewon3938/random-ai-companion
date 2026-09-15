@@ -32,7 +32,7 @@ import {
   monthHasSeeds,
   saveDaySeed,
 } from "./db.js";
-import { identityLines } from "./memory.js";
+import { currentRows, identityLines } from "./memory.js";
 import { RHYTHM_RUNWAY_DAYS } from "./thresholds.js";
 import { dayLabel, holidayGapYear, holidaysInMonth, kstStamp } from "./kst.js";
 
@@ -112,9 +112,10 @@ export const culturePrompt = (material: string): string =>
     .join("\n\n");
 
 // 진행 중인 일 — 문화 스크립트가 펼쳐 나온 일정이 어느 줄에서 나왔는지 되짚을 수 있게 번호를
-// 같이 적는다. 상대 쪽 진행 중인 일은 상대의 일이라 캐릭터의 이벤트로 펼치지 않는다.
+// 같이 적는다. 상대 쪽 진행 중인 일은 상대의 일이라 캐릭터의 이벤트로 펼치지 않는다. 같은 키에
+// 생성 행과 대화 행이 있으면 합친 한 줄만 적는다 — 같은 일이 두 줄이면 두 번 펼쳐진다.
 const ongoingLines = (characterId: number): string =>
-  listMemoryItems(characterId, "ongoing")
+  currentRows(listMemoryItems(characterId, "ongoing"))
     .filter((r) => r.owner === "char")
     .map((r) => `- [${r.id}] ${r.area} · ${r.subject}: ${r.value}`)
     .join("\n");
