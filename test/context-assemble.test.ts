@@ -189,9 +189,9 @@ test("정체성 절에도 날짜 읽는 규칙이 붙는다", () => {
   assert.ok(stable.text.includes("'갱신'은 그 줄을 마지막으로 고친 날이다"));
 });
 
-const WORK_HEAD = "[작품 — 네가 보거나 읽는 것에서 확인된 사실]";
+const WORK_HEAD = "[작품 — 네가 봤거나 보고 있는 것에서 확인된 사실]";
 
-test("작품 사실 카드는 카드가 있을 때만 일간층에 붙는다", () => {
+test("작품 사실 카드는 카드가 있을 때만 실시간 꼬리에 붙는다", () => {
   const facts = [
     {
       title: "여름 언덕",
@@ -201,29 +201,30 @@ test("작품 사실 카드는 카드가 있을 때만 일간층에 붙는다", (
     },
   ];
   const [stable, daily, live] = assembleSystemBlocks(input({ workFacts: facts }));
-  assert.ok(daily.text.includes(WORK_HEAD));
-  assert.ok(daily.text.includes("· 여름 언덕: 이사 온 소년이 한 계절을 보내는 이야기."));
-  assert.ok(daily.text.includes("  기억에 남는 장면: 둑길에서 자전거가 멈추는 장면"));
-  assert.ok(daily.text.includes("  원작과 다른 점: 원작 소설과 결말이 다르다"));
-  // 규칙층의 "[작품] 절에 적힌 것만" 문안은 불변층에 있다 — 절 머리로 자리를 가른다.
+  assert.ok(live.text.includes(WORK_HEAD));
+  assert.ok(live.text.includes("· 여름 언덕: 이사 온 소년이 한 계절을 보내는 이야기."));
+  assert.ok(live.text.includes("  기억에 남는 장면: 둑길에서 자전거가 멈추는 장면"));
+  assert.ok(live.text.includes("  원작과 다른 점: 원작 소설과 결말이 다르다"));
+  // 카드는 대화에 제목이 나오면 붙어서 호출마다 바뀐다 — 캐시하는 두 층에 있으면 캐시가 깨진다.
+  // 규칙층의 "[작품] 절에 적힌 것만" 문안은 불변층에 있어서 절 머리로 자리를 가른다.
   assert.ok(!stable.text.includes(WORK_HEAD));
-  assert.ok(!live.text.includes(WORK_HEAD));
+  assert.ok(!daily.text.includes(WORK_HEAD));
 
-  const [, empty] = assembleSystemBlocks(input());
+  const [, , empty] = assembleSystemBlocks(input());
   assert.ok(!empty.text.includes(WORK_HEAD), "카드가 없으면 절 자체가 안 나온다");
 });
 
 test("장면과 다른 점이 비면 그 줄은 안 적는다", () => {
-  const [, daily] = assembleSystemBlocks(
+  const [, , live] = assembleSystemBlocks(
     input({
       workFacts: [
         { title: "빈 카드", summary: "줄거리만 있다.", scenes: [], differences: null },
       ],
     }),
   );
-  assert.ok(daily.text.includes("· 빈 카드: 줄거리만 있다."));
-  assert.ok(!daily.text.includes("기억에 남는 장면:"));
-  assert.ok(!daily.text.includes("원작과 다른 점:"));
+  assert.ok(live.text.includes("· 빈 카드: 줄거리만 있다."));
+  assert.ok(!live.text.includes("기억에 남는 장면:"));
+  assert.ok(!live.text.includes("원작과 다른 점:"));
 });
 
 test("공통 규칙 덩이는 불변층에 한 번만 들어간다", () => {
