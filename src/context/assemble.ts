@@ -5,10 +5,10 @@
 // 캐시에 태운다.
 //   불변층   — 정체성 기억(creation), 유저 프로필, 공통 규칙(태도·대화·표기·말의 결·note 신호),
 //              관계 단계 공통 틀과 지금 단계 블록(단계가 오를 때만 바뀐다)
-//   일간층   — 관계 8컬럼 서술, 주변 인물, 진행 중인 일, 아크, 일정, 최근 일기,
-//              오늘 각본과 그 각본이 다루는 작품의 사실 카드
+//   일간층   — 관계 8컬럼 서술, 주변 인물, 진행 중인 일, 아크, 일정, 최근 일기, 오늘 각본
 //   실시간   — 검색해 꺼낸 기억, 선톡이 태그 없이 고른 상대 쪽 기억, 주제로 찾은 지난 일기와
-//              일정, 오늘 각본, 오늘 메모, 지금 관계(며칠째·처음·오늘 쓴 플러팅·오늘의 의도),
+//              일정, 제목이 나온 작품의 사실 카드, 오늘 메모, 지금 관계(며칠째·처음·오늘 쓴
+//              플러팅·오늘의 의도),
 //              직전 대화 시점, 오늘 안의 연락 텀, 지금 시각, 말투, 상황 문단, 답장 객체 설명
 //
 // 말투는 저장값(relationships.speech_level)을 먼저 보고, 없을 때만 최근 발화 판정값을 쓴다.
@@ -77,8 +77,7 @@ const daySection = (plan: DayPlan | null): string => {
     known.length
       ? known
           .map(
-            (b) =>
-              `${clockLabel(b.start)}~${clockLabel(b.end)} ${b.activity}`,
+            (b) => `${clockLabel(b.start)}~${clockLabel(b.end)} ${b.activity}`,
           )
           .join(" → ")
       : "",
@@ -92,16 +91,19 @@ const daySection = (plan: DayPlan | null): string => {
     .join("\n");
 };
 
-// 오늘 다루는 작품의 사실 카드 주입(일간층, #287) — 오늘 각본이나 진행 중인 일에 그 작품이
-// 있는 날만 실린다. 여기는 확인된 사실만 나열하고, 카드에 없는 것을 말하지 말라는 규칙은
-// 규칙층(FACT_CARE)이 갖는다 — 카드가 없는 날에도 그 규칙은 살아 있어야 한다.
+// 작품 사실 카드 주입(실시간 꼬리, #287·#458) — 대화·꺼낸 기억·각본 같은 곳에 제목이 나온
+// 작품만 실린다. 무엇을 싣는지는 context/input.ts의 readWorkFacts가 고른다. 카드는 캐릭터의
+// 각본에 있던 작품으로만 만들어져서, 지난 작품이 붙어도 머리말의 봤거나 보고 있다는 말이 맞다.
+// 여기는 확인된 사실만 나열하고, 카드에 없는 것을 말하지 말라는 규칙은 규칙층(FACT_CARE)이
+// 갖는다 — 카드가 없는 답장에도 그 규칙은 살아 있어야 한다.
 const workSection = (facts: WorkFact[]): string => {
   if (!facts.length) return "";
   return [
-    `[작품 — 네가 보거나 읽는 것에서 확인된 사실]`,
+    `[작품 — 네가 봤거나 보고 있는 것에서 확인된 사실]`,
     ...facts.map((f) => {
       const lines = [`· ${f.title}: ${f.summary}`];
-      if (f.scenes.length) lines.push(`  기억에 남는 장면: ${f.scenes.join(" / ")}`);
+      if (f.scenes.length)
+        lines.push(`  기억에 남는 장면: ${f.scenes.join(" / ")}`);
       if (f.differences) lines.push(`  원작과 다른 점: ${f.differences}`);
       return lines.join("\n");
     }),
@@ -326,7 +328,6 @@ export const assembleSystemBlocks = (
     `[오늘/내일] ${input.workday}.`,
     firstMeeting,
     daySection(input.plan),
-    workSection(input.workFacts),
     scheduleSection(input.upcoming),
     diarySection,
     input.coldStart ? COLD_START_SEED : "",
@@ -360,6 +361,8 @@ export const assembleSystemBlocks = (
     userMemorySection(input.userMemories),
     oldDiarySection(input.search.oldDiaries),
     scheduleSearchSection(input.search.schedules, input.today),
+    // 대화에 제목이 나오면 붙는 카드라 호출마다 바뀐다 — 일간층에 두면 캐시를 깬다.
+    workSection(input.workFacts),
     todaySection,
     relationshipNowSection(input.relationship),
     userStateSection,

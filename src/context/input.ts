@@ -3,7 +3,8 @@
 // 조립(context/assemble.ts)은 여기서 만든 ContextInput만 보고 문자열을 만들며 DB를 부르지
 // 않는다. 그래서 조립 쪽은 값을 지어 넣어 검사할 수 있고, 무엇을 읽는지는 이 파일 하나로 보인다.
 // 이번 발화의 태그로 기억·옛 일기·지난 일정을 검색하는 것도 읽기라 여기서 하고, 무엇을 찾아
-// 넣었는지(BuildTrace)도 여기서 적는다.
+// 넣었는지(BuildTrace)도 여기서 적는다. 작품 사실 카드를 붙일지 정하려고 대화·검색 결과·각본에서
+// 제목을 찾는 것도 같은 까닭으로 여기서 한다.
 
 import type { DayPlan } from "../day-plan.js";
 import { isSleeping } from "../day-plan.js";
@@ -27,6 +28,7 @@ import {
   listMemoryItems,
   listWorkFactTitles,
   getWorkFactsByTitles,
+  getTags,
   type WorkFact,
   type MemoryRow,
   type RelationshipRow,
@@ -43,7 +45,10 @@ import type { TagPick, TagPicker } from "../tag-pick.js";
 import {
   CONTACT_GAP_HOLD_MS,
   RECENT_DIARY_DAYS,
+  RECENT_TURN_COUNT,
   SEARCH_LIMIT,
+  WORK_FACT_MAX_PER_REPLY,
+  WORK_TITLE_SHORT_MAX,
 } from "../thresholds.js";
 import {
   kstDescription,
@@ -56,11 +61,16 @@ import {
   lastTalkedLabel,
   contactGapOf,
   kstStampBefore,
+  shiftDate,
   type ContactGap,
 } from "../kst.js";
 import { isHoldOutcome, WOKE_OUTCOME } from "../labels.js";
 import { dayProgressOf, type DayProgress } from "./day-progress.js";
-import { readRelationshipInput, type RelationshipInput } from "./relationship.js";
+import {
+  intentLineText,
+  readRelationshipInput,
+  type RelationshipInput,
+} from "./relationship.js";
 
 /** 이번 조립이 무엇을 찾아 넣었는지 — 답장 호출 기록에 붙여 "왜 저 기억을 꺼냈나"를 되짚는다. */
 export interface BuildTrace {
@@ -87,6 +97,8 @@ export interface BuildTrace {
   upcoming: string[];
   /** 태그는 맞았지만 개수 상한에 걸려 빠진 후보 — 기억 키와 옛 일기 날짜. */
   dropped: string[];
+  /** 실은 작품 사실 카드 — 제목(찾은 곳) 꼴(#458). */
+  works?: string[];
 }
 
 export interface BuildOptions {
@@ -170,33 +182,191 @@ export interface ContextInput {
   userMemories: MemoryRow[];
   /** 지금 관계 — 단계·며칠째·처음·오늘 쓴 플러팅·오늘의 의도(#353). */
   relationship: RelationshipInput;
-  /** 오늘 다루는 작품의 사실 카드(#287). 오늘 각본·진행 중인 일에 없는 작품은 안 싣는다. */
+  /** 이번 프롬프트에 싣는 작품 사실 카드(#287·#458). 찾는 곳에 제목이 나온 작품만 상한까지 싣는다. */
   workFacts: WorkFact[];
 }
 
+/** 작품 카드를 붙인 제목을 어디서 찾았는지 — 트레이스에 제목과 함께 적는다. */
+export type WorkSource =
+  | "대화"
+  | "기억"
+  | "지난 일기"
+  | "어제 일기"
+  | "대화 계획"
+  | "상황 문단"
+  | "각본"
+  | "진행 중인 일";
+
 /**
- * 오늘 프롬프트에 실을 작품 카드 고르기(#287). 두 자리에서 제목을 모은다 — 오늘 각본 블록의
- * work 값과, 진행 중인 일 줄에 제목이 그대로 들어 있는 작품. 뒤쪽은 카드가 있는 제목 목록을
- * 먼저 읽고 그 제목이 줄에 있는지 보는 식이라, 없는 작품을 텍스트에서 뽑아내려 하지 않는다.
- * 카드가 아직 없는 제목은 조회에서 저절로 빠진다.
+ * 제목을 찾는 곳 하나. texts는 제목이 들어 있는지 보는 글이고, exact는 제목과 똑같은지만 보는
+ * 값이다 — 각본의 작품 칸과 태그는 제목 하나가 통째로 들어가는 자리라 부분 일치를 보지 않는다.
+ */
+export interface WorkLookup {
+  source: WorkSource;
+  texts: string[];
+  exact: string[];
+}
+
+// 제목은 띄어쓰기와 대소문자를 빼고 비교한다 — 대화에서는 제목을 붙여 쓰거나 띄어 쓰는 일이 흔하다.
+const normTitle = (s: string): string => s.replace(/\s+/g, "").toLowerCase();
+
+/**
+ * 카드가 있는 제목 가운데 찾는 곳에 나온 것을, 앞에 둔 곳부터 상한까지 고른다(#458).
+ *
+ * 짧은 제목(WORK_TITLE_SHORT_MAX 글자 이하)은 글에서 찾지 않고 exact 값과 똑같을 때만 고른다.
+ * 두 글자 제목은 평범한 낱말과 겹쳐서, 글에서 찾으면 그 작품 얘기가 아닌 말에도 카드가 붙는다.
+ * 같은 제목이 여러 곳에 나오면 앞에 둔 곳 하나로 적는다.
+ */
+export const pickWorkTitles = (
+  titles: string[],
+  lookups: WorkLookup[],
+  max: number,
+): { title: string; source: WorkSource }[] => {
+  const picked: { title: string; source: WorkSource }[] = [];
+  for (const { source, texts, exact } of lookups) {
+    const bodies = texts.map(normTitle);
+    const values = exact.map(normTitle).filter(Boolean);
+    // 같은 곳 안에서는 앞에 둔 글에 나온 제목부터 — 대화는 최신 말을 앞에 넘긴다.
+    const hits = titles
+      .filter((title) => !picked.some((p) => p.title === title))
+      .map((title) => {
+        const n = normTitle(title);
+        const inText =
+          n.length > WORK_TITLE_SHORT_MAX
+            ? bodies.findIndex((b) => b.includes(n))
+            : -1;
+        const inExact = n ? values.indexOf(n) : -1;
+        const rank =
+          inText >= 0 ? inText : inExact >= 0 ? bodies.length + inExact : -1;
+        return { title, rank };
+      })
+      .filter((h) => h.rank >= 0)
+      .sort((a, b) => a.rank - b.rank);
+    for (const { title } of hits) {
+      if (picked.length >= max) return picked;
+      picked.push({ title, source });
+    }
+  }
+  return picked;
+};
+
+// 어제 일기의 내일 챙길 것 — 선톡이 어제에서 이어갈 거리로 쓰는 줄이다. 어제 일기가 없거나
+// 깨졌으면 빈 목록이다. 더 앞 일기의 줄은 이미 지난 얘기라 보지 않는다.
+const tomorrowOf = (diaries: DiaryLine[], date: string): string[] => {
+  const d = diaries.find((x) => x.date === date);
+  if (!d) return [];
+  try {
+    const t = (JSON.parse(d.entry_json) as { tomorrow?: unknown }).tomorrow;
+    return Array.isArray(t)
+      ? t.filter((s): s is string => typeof s === "string")
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * 이번 프롬프트에 실을 작품 카드 고르기(#287·#458).
+ *
+ * 카드가 있는 제목 목록을 먼저 읽고 그 제목이 찾는 곳에 나오는지 보는 식이라, 없는 작품을 글에서
+ * 뽑아내려 하지 않는다. 찾는 곳은 이번 프롬프트에 실제로 들어가는 글이고 경로마다 다르다.
+ *   답장   — 최근 대화 → 태그로 꺼낸 기억 → 태그로 꺼낸 지난 일기
+ *   선톡   — 방금까지 오간 말 → 어제 일기의 내일 챙길 것 → 대화 계획의 내 얘기 줄 → 상황 문단
+ * 두 경로 모두 그 뒤에 오늘 각본의 작품 칸과 캐릭터 쪽 진행 중인 일을 본다. 앞에 둔 곳이 지금
+ * 오가는 얘기에 가까워서, 상한에 걸리면 뒤쪽 곳에서만 나온 작품이 빠진다. 정체성 절과 최근 일기
+ * 본문은 늘 실리는 글이라 거기서 찾으면 본 작품 카드가 매번 붙어서 보지 않는다.
  */
 const readWorkFacts = (
   characterId: number,
-  plan: DayPlan | null,
-  items: MemoryRow[],
-): WorkFact[] => {
-  const fromPlan = (plan?.blocks ?? [])
-    .map((b) => b.work)
-    .filter((t): t is string => !!t);
-  const ongoing = items
-    .filter((m) => m.item_type === "ongoing" && m.owner === "char")
-    .map((m) => `${m.subject} ${m.value}`)
-    .join("\n");
-  const fromOngoing = ongoing
-    ? listWorkFactTitles(characterId).filter((t) => ongoing.includes(t))
-    : [];
-  const titles = [...new Set([...fromPlan, ...fromOngoing])];
-  return getWorkFactsByTitles(characterId, titles);
+  chatId: string,
+  opts: BuildOptions,
+  ctx: {
+    plan: DayPlan | null;
+    items: MemoryRow[];
+    memories: MemoryRow[];
+    oldDiaries: DiaryHit[];
+    diaries: DiaryLine[];
+    recent: MessageRow[];
+    relationship: RelationshipInput;
+    logicalToday: string;
+  },
+): { facts: WorkFact[]; trace: string[] } => {
+  const titles = listWorkFactTitles(characterId);
+  if (!titles.length) return { facts: [], trace: [] };
+
+  const memoryLookup = (source: WorkSource, rows: MemoryRow[]): WorkLookup => ({
+    source,
+    texts: rows.map((m) => `${m.subject} ${m.value}`),
+    exact: rows.flatMap((m) => getTags("memory", m.id)),
+  });
+  // 답장 경로는 대화 기록을 turns로 따로 넘겨서 ctx.recent가 비어 있다 — 최근 행을 따로 읽는다.
+  // 대화 기록은 턴으로 세서 이보다 길 수 있지만, 작품 얘기를 알아보는 데는 최근 행이면 충분하다.
+  // 방금 온 유저 말은 답장을 만들기 전에 저장되므로 여기에 들어 있다.
+  const talk: WorkLookup[] = opts.signals
+    ? [
+        {
+          source: "대화",
+          texts: getRecentMessages(chatId, characterId, RECENT_TURN_COUNT)
+            .map((m) => m.text)
+            .reverse(),
+          exact: [],
+        },
+        memoryLookup("기억", ctx.memories),
+        {
+          source: "지난 일기",
+          texts: ctx.oldDiaries.map((d) => d.entry_json),
+          exact: ctx.oldDiaries.flatMap((d) => getTags("diary", d.id)),
+        },
+      ]
+    : [
+        {
+          source: "대화",
+          texts: ctx.recent.map((m) => m.text).reverse(),
+          exact: [],
+        },
+        {
+          source: "어제 일기",
+          texts: tomorrowOf(ctx.diaries, shiftDate(ctx.logicalToday, -1)),
+          exact: [],
+        },
+        {
+          source: "대화 계획",
+          texts: [intentLineText(ctx.relationship.intent, "share") ?? ""],
+          exact: [],
+        },
+        // 새벽 정리의 아침 한 통은 방금 쓴 일기와 오늘 대화 계획이 아직 DB에 없어서 상황 문단으로
+        // 넘긴다 — 위 두 곳이 비는 자리라 상황 문단도 함께 본다.
+        { source: "상황 문단", texts: [opts.situation ?? ""], exact: [] },
+      ];
+  const lookups: WorkLookup[] = [
+    ...talk,
+    {
+      source: "각본",
+      texts: [],
+      exact: (ctx.plan?.blocks ?? [])
+        .map((b) => b.work)
+        .filter((t): t is string => !!t),
+    },
+    memoryLookup(
+      "진행 중인 일",
+      ctx.items.filter((m) => m.item_type === "ongoing" && m.owner === "char"),
+    ),
+  ];
+
+  const picked = pickWorkTitles(titles, lookups, WORK_FACT_MAX_PER_REPLY);
+  // 조회는 제목순으로 돌아와서, 고른 순서(가까운 곳 먼저)로 다시 맞춘다.
+  const byTitle = new Map(
+    getWorkFactsByTitles(
+      characterId,
+      picked.map((p) => p.title),
+    ).map((f) => [f.title, f]),
+  );
+  return {
+    facts: picked
+      .map((p) => byTitle.get(p.title))
+      .filter((f): f is WorkFact => !!f),
+    trace: picked.map((p) => `${p.title}(${p.source})`),
+  };
 };
 
 /**
@@ -240,7 +410,9 @@ export const readContextInput = (
 
   const plan = readTodayPlan(characterId, logicalToday);
   const now = kstLogicalClock();
-  const progress = plan ? dayProgressOf(plan.blocks, now) : { past: [], cur: null };
+  const progress = plan
+    ? dayProgressOf(plan.blocks, now)
+    : { past: [], cur: null };
   // 지금 블록의 오늘 실제 기록 — 답장 텀 판정(reply-timing)과 답장의 stay 신호가 남긴 표시를
   // 같은 키(블록 시작·결과)로 읽는다. 잠 블록에 깸 행이 있으면 깨어 있는 것이고, 취소·미룸 행이
   // 있으면 상대가 붙잡아 그 일을 하지 않고 있는 것이다.
@@ -299,6 +471,21 @@ export const readContextInput = (
     dropped,
   );
 
+  const recent = opts.recent
+    ? getRecentMessages(chatId, characterId, opts.recent)
+    : [];
+  const relationship = readRelationshipInput(characterId, chatId, logicalToday);
+  const works = readWorkFacts(characterId, chatId, opts, {
+    plan,
+    items: memoryItems,
+    memories: found,
+    oldDiaries,
+    diaries,
+    recent,
+    relationship,
+    logicalToday,
+  });
+
   if (opts.trace) {
     opts.trace.tags = tags;
     opts.trace.tagPool = tagPool;
@@ -316,6 +503,7 @@ export const readContextInput = (
         } ${r.content}`,
     );
     opts.trace.dropped = dropped;
+    opts.trace.works = works.trace;
   }
 
   // 직전에 대화한 날 — 오늘 기록만 보면 모델이 공백 자체를 인지하지 못한다.
@@ -353,14 +541,14 @@ export const readContextInput = (
     diaries,
     coldStart,
     search: { memories: found, oldDiaries, schedules: foundSchedules },
-    workFacts: readWorkFacts(characterId, plan, memoryItems),
+    workFacts: works.facts,
     notes: todayNotes(characterId),
     lastTalk: prev ? lastTalkedLabel(prev.sent_at) : null,
     contactGap: gap ? contactGapOf(gap.lastChar, gap.firstUser) : null,
-    recent: opts.recent ? getRecentMessages(chatId, characterId, opts.recent) : [],
+    recent,
     userMemories: opts.userMemories
       ? pickUserMemories(memoryItems, opts.userMemories)
       : [],
-    relationship: readRelationshipInput(characterId, chatId, logicalToday),
+    relationship,
   };
 };

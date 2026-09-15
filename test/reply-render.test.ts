@@ -79,7 +79,11 @@ test("해시 목록과 판단 근거는 깨진 JSON이면 빈 값으로 읽는�
 
 test("몰아 답장은 구간이 끝나 바로 보냈다는 줄과 쌓인 메시지 수를 적는다", () => {
   const ctx: CallContext = {
-    gathered: { activity: "팀 회의", blockStart: "13:00", waitedMs: 66 * 60_000 },
+    gathered: {
+      activity: "팀 회의",
+      blockStart: "13:00",
+      waitedMs: 66 * 60_000,
+    },
     userMsgs: 3,
   };
   assert.deepEqual(timingLines(ctx), [
@@ -107,7 +111,10 @@ test("텀 표로 정한 답장은 도착 대기·발송 예정·블록 두 태�
     sendAt: "2026-09-06 15:33:00",
   };
   const lines = timingLines(ctx);
-  assert.equal(lines[0], "*도착 대기* 20초 기다림 · 메시지 2통 · 첫 메시지로부터 25초");
+  assert.equal(
+    lines[0],
+    "*도착 대기* 20초 기다림 · 메시지 2통 · 첫 메시지로부터 25초",
+  );
   assert.equal(lines[1], "*텀* 1분 35초 뒤 · 15:33:00 발송 예정 · 텀 표");
   assert.equal(lines[2], "*지금 하는 일* 14:30~18:00 오후 업무 [틈틈이/공적]");
   assert.match(lines[3], /^\*붙잡기 판정\* 묻지 않음 — /);
@@ -140,7 +147,13 @@ test("자다 깨서 이어 답하는 자리와 판정을 물은 자리가 구분
   assert.equal(held[2], "*붙잡기 판정* 물었다 · 붙잡음");
 
   const failed = timingLines({
-    timing: { waitMs: 0, path: "until_end", block, asked: true, holdFailed: true },
+    timing: {
+      waitMs: 0,
+      path: "until_end",
+      block,
+      asked: true,
+      holdFailed: true,
+    },
   });
   assert.match(failed[2], /^\*붙잡기 판정\* 물었다 · :warning: 판정 실패/);
 });
@@ -148,7 +161,11 @@ test("자다 깨서 이어 답하는 자리와 판정을 물은 자리가 구분
 test("약속 연락으로 만든 답장은 텀 자리에 지킨 약속을 적는다", () => {
   assert.deepEqual(
     timingLines({
-      promised: { promise: "통화 끝나고 다시 연락", activity: "통화", blockStart: "13:00" },
+      promised: {
+        promise: "통화 끝나고 다시 연락",
+        activity: "통화",
+        blockStart: "13:00",
+      },
     }),
     [
       "*텀* 약속 연락 — 13:00 통화 구간이 끝나 약속대로 답했다",
@@ -167,24 +184,36 @@ test("답장이 한 약속은 건 시각이나 못 건 사유와 함께 적는�
     },
   });
   assert.ok(
-    kept.includes("*약속* 통화 끝나고 다시 연락 → 2026-09-07 14:00:30 (통화 끝)"),
+    kept.includes(
+      "*약속* 통화 끝나고 다시 연락 → 2026-09-07 14:00:30 (통화 끝)",
+    ),
   );
   const dropped = renderReply(row(), {
-    promise: { text: "통화 끝나고 다시 연락", dropped: "각본에 남은 블록이 없음" },
+    promise: {
+      text: "통화 끝나고 다시 연락",
+      dropped: "각본에 남은 블록이 없음",
+    },
   });
   assert.ok(
-    dropped.includes("*약속* 통화 끝나고 다시 연락 — 못 걸었다: 각본에 남은 블록이 없음"),
+    dropped.includes(
+      "*약속* 통화 끝나고 다시 연락 — 못 걸었다: 각본에 남은 블록이 없음",
+    ),
   );
 });
 
 test("답장 한 장은 유저 말과 호출 실패를 제자리에 붙인다", () => {
-  const turns = putBlob("[assistant] 응\n[user] 이제 봤어 미안\n[user] 뭐 하고 있었어?");
+  const turns = putBlob(
+    "[assistant] 응\n[user] 이제 봤어 미안\n[user] 뭐 하고 있었어?",
+  );
   const text = renderReply(
     row({ turns_hash: turns, error: "overloaded_error", latency_ms: 2300 }),
     { timing: { waitMs: 5_000, path: "table", block: null }, userMsgs: 2 },
   );
   const lines = text.split("\n");
-  assert.equal(lines[0], ":speech_balloon: *답장* · 호출 #6 · 15:48:09 · sonnet-5 · 2.3초");
+  assert.equal(
+    lines[0],
+    ":speech_balloon: *답장* · 호출 #6 · 15:48:09 · sonnet-5 · 2.3초",
+  );
   assert.equal(lines[1], "_유저 메시지 2통을 묶어 한 번에 답한다_");
   assert.equal(lines[2], "> 이제 봤어 미안");
   assert.equal(lines[4], "> 뭐 하고 있었어?");
@@ -195,22 +224,41 @@ test("답장 한 장은 유저 말과 호출 실패를 제자리에 붙인다", 
 });
 
 test("상대 상태는 바뀐 턴에 이전 → 지금으로, 그대로면 지금 값만 적는다", () => {
-  const label = "연락한다던 말을 안 지켜 서운함 (13:50부터 · 나 때문 · 안 좋음)";
+  const label =
+    "연락한다던 말을 안 지켜 서운함 (13:50부터 · 나 때문 · 안 좋음)";
   const first = renderReply(row(), {
     userState: { changed: true, failed: false, callId: 9, label, prev: null },
   });
   assert.ok(first.includes(`*상대 상태* 바뀜 · 없음 → ${label}`));
   const eased = "풀려서 평소대로 (14:10부터 · 나 때문 · 보통)";
   const second = renderReply(row(), {
-    userState: { changed: true, failed: false, callId: 10, label: eased, prev: label },
+    userState: {
+      changed: true,
+      failed: false,
+      callId: 10,
+      label: eased,
+      prev: label,
+    },
   });
   assert.ok(second.includes(`*상대 상태* 바뀜 · ${label} → ${eased}`));
   const same = renderReply(row(), {
-    userState: { changed: false, failed: false, callId: 11, label: eased, prev: null },
+    userState: {
+      changed: false,
+      failed: false,
+      callId: 11,
+      label: eased,
+      prev: null,
+    },
   });
   assert.ok(same.includes(`*상대 상태* 그대로 · ${eased}`));
   const failed = renderReply(row(), {
-    userState: { changed: false, failed: true, callId: 12, label: null, prev: null },
+    userState: {
+      changed: false,
+      failed: true,
+      callId: 12,
+      label: null,
+      prev: null,
+    },
   });
   assert.ok(failed.includes("*상대 상태* 판정 실패 · 없음"));
 });
@@ -225,7 +273,11 @@ test("관계·열림 줄은 이 답장이 쓴 플러팅과 그 반응을 적는�
       moveReaction: "accepted",
     },
   });
-  assert.ok(text.includes("*관계* 2단계 6일째 · 오늘 둔 플러팅 없음 · 쓴 플러팅 별명 부르기"));
+  assert.ok(
+    text.includes(
+      "*관계* 2단계 6일째 · 오늘 둔 플러팅 없음 · 쓴 플러팅 별명 부르기",
+    ),
+  );
   assert.ok(
     text.includes(
       "*열림* 자기 얘기 O · 근황 물음 X · 호감 X · 플러팅 반응 받음",
@@ -234,7 +286,9 @@ test("관계·열림 줄은 이 답장이 쓴 플러팅과 그 반응을 적는�
   const none = renderReply(row(), {
     relationship: { stage: 1, days: 2, move: null },
   });
-  assert.ok(none.includes("*관계* 1단계 2일째 · 오늘 둔 플러팅 없음 · 쓴 플러팅 없음"));
+  assert.ok(
+    none.includes("*관계* 1단계 2일째 · 오늘 둔 플러팅 없음 · 쓴 플러팅 없음"),
+  );
 });
 
 test("관계 줄은 오늘 둔 플러팅과 답장이 쓴 의도 줄을 함께 적는다", () => {
@@ -288,7 +342,9 @@ test("새 약속이 앞 약속을 거두면 그 건수를 약속 줄 끝에 적�
     },
   });
   assert.ok(
-    text.includes("*약속* 저녁 먹고 연락 → 2026-09-07 20:00:10 (저녁 끝) · 앞 약속 1건 거둠"),
+    text.includes(
+      "*약속* 저녁 먹고 연락 → 2026-09-07 20:00:10 (저녁 끝) · 앞 약속 1건 거둠",
+    ),
   );
 });
 
@@ -297,7 +353,11 @@ test("선톡 문안은 지킨 약속과 상대 상태를 머리에 둔다", () =
   const promiseDraft = renderDraft(
     row({ purpose: "promise", output_hash: out }),
     {
-      promised: { promise: "통화 끝나고 다시 연락", activity: "통화", blockStart: "13:00" },
+      promised: {
+        promise: "통화 끝나고 다시 연락",
+        activity: "통화",
+        blockStart: "13:00",
+      },
     },
   );
   const lines = promiseDraft.split("\n");
@@ -306,23 +366,23 @@ test("선톡 문안은 지킨 약속과 상대 상태를 머리에 둔다", () =
     "*지킨 약속* 통화 끝나고 다시 연락 — 13:00 통화 구간이 끝나 약속대로 연락하는 자리",
   );
   assert.equal(lines[2], "*보낼까* 보낸다");
-  const mendDraft = renderDraft(
-    row({ purpose: "mend", output_hash: out }),
-    {
-      userState: {
-        changed: false,
-        failed: false,
-        callId: null,
-        label: "연락한다던 말을 안 지켜 서운함 (13:50부터 · 나 때문 · 안 좋음)",
-      },
+  const mendDraft = renderDraft(row({ purpose: "mend", output_hash: out }), {
+    userState: {
+      changed: false,
+      failed: false,
+      callId: null,
+      label: "연락한다던 말을 안 지켜 서운함 (13:50부터 · 나 때문 · 안 좋음)",
     },
-  );
+  });
   assert.equal(
     mendDraft.split("\n")[1],
     "*상대 상태* 연락한다던 말을 안 지켜 서운함 (13:50부터 · 나 때문 · 안 좋음)",
   );
   // 판단 근거가 없는 문안은 머리 다음 줄이 바로 본문이다
-  assert.equal(renderDraft(row({ purpose: "morning", output_hash: out })).split("\n")[1], "*보낼까* 보낸다");
+  assert.equal(
+    renderDraft(row({ purpose: "morning", output_hash: out })).split("\n")[1],
+    "*보낼까* 보낸다",
+  );
 });
 
 test("바뀐 절은 대괄호 제목으로 세고 넷부터는 줄여 적는다", () => {
@@ -337,7 +397,10 @@ test("바뀐 절은 대괄호 제목으로 세고 넷부터는 줄여 적는다"
   assert.equal(changeLabel([], 0), LAYER_NAME[0]);
   assert.equal(changeLabel([], 1), LAYER_NAME[1]);
   assert.equal(changeLabel(["가", "나"], 0), "가 · 나");
-  assert.equal(changeLabel(["가", "나", "다", "라", "마"], 1), "가 · 나 · 다 외 2곳");
+  assert.equal(
+    changeLabel(["가", "나", "다", "라", "마"], 1),
+    "가 · 나 · 다 외 2곳",
+  );
 });
 
 test("참고한 일정 줄은 검색으로 걸린 일정과 갈라 적고 앞일이 없으면 0건이다", () => {
@@ -381,5 +444,20 @@ test("검색 줄의 토막은 기억 이름 안의 구분자와 다른 글자로
     `토막 경계가 안 보인다: ${line}`,
   );
   // 이름 자체는 프롬프트 줄과 같은 글자로 남는다.
-  assert.ok(line?.includes("기억 2건 — 상대 · 가족 · 어머니 / 너 · 건강 · 운동"));
+  assert.ok(
+    line?.includes("기억 2건 — 상대 · 가족 · 어머니 / 너 · 건강 · 운동"),
+  );
+});
+
+test("작품 카드를 실은 호출은 검색 줄에 제목과 찾은 곳을 적는다", () => {
+  const line = (works?: string[]) =>
+    renderReply(row(), { search: { tags: [], tagPool: 0, works } })
+      .split("\n")
+      .find((l) => l.startsWith("*검색*"));
+  assert.ok(
+    line(["여름 언덕(대화)", "긴 밤(각본)"])?.includes(
+      "작품 카드 여름 언덕(대화) / 긴 밤(각본)",
+    ),
+  );
+  assert.ok(!line()?.includes("작품 카드"), "카드가 없으면 토막을 안 적는다");
 });

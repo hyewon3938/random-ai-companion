@@ -114,6 +114,8 @@ export interface CallContext {
     /** 이번 호출이 읽은 [다가오는 일정] — 주인과 날짜, 내용. */
     upcoming?: string[];
     dropped?: string[];
+    /** 실은 작품 사실 카드 — 제목(찾은 곳). */
+    works?: string[];
   };
   turns?: number;
   /** 한 번에 답한 유저 메시지 수(나눠 보낸 것을 묶은 결과). */
@@ -403,9 +405,7 @@ export const timingLines = (ctx: CallContext): string[] => {
       : t.heldJudged
         ? "붙잡음"
         : "아님";
-    out.push(
-      `*붙잡기 판정* 물었다 · ${verdict}${ref ? ` (호출 ${ref})` : ""}`,
-    );
+    out.push(`*붙잡기 판정* 물었다 · ${verdict}${ref ? ` (호출 ${ref})` : ""}`);
   } else {
     out.push(`*붙잡기 판정* 묻지 않음 — ${holdSkipReason(t)}`);
   }
@@ -435,6 +435,9 @@ const searchLines = (ctx: CallContext): string[] => {
   // 검색으로 걸려 들어온 지난 일정과 하루 고정 덩이의 앞일이 한 줄로 읽힌다.
   if (s.schedules?.length)
     bits.push(`주제로 걸린 일정 ${s.schedules.join(" / ")}`);
+  // 카드는 태그 검색과 따로 제목으로 붙는다 — 어디서 제목을 찾았는지 함께 적어, 엉뚱한 카드가
+  // 붙었을 때 어느 글이 걸었는지 바로 보이게 한다.
+  if (s.works?.length) bits.push(`작품 카드 ${s.works.join(" / ")}`);
   if (s.dropped?.length)
     bits.push(
       `개수 상한에 걸려 빠짐 ${s.dropped.length}건 — ${s.dropped.join(" / ")}`,
@@ -496,7 +499,9 @@ const outcomeLines = (ctx: CallContext): string[] => {
     // 날과 애초에 안 둔 날이 같은 줄로 읽힌다(이슈 #390).
     const parts = [
       `${r.stage ?? 1}단계${r.days ? ` ${r.days}일째` : ""}`,
-      r.todayMove ? `오늘 둔 플러팅 ${esc(r.todayMove)}` : "오늘 둔 플러팅 없음",
+      r.todayMove
+        ? `오늘 둔 플러팅 ${esc(r.todayMove)}`
+        : "오늘 둔 플러팅 없음",
       r.move ? `쓴 플러팅 ${MOVE_NAME[r.move] ?? r.move}` : "쓴 플러팅 없음",
     ];
     if (r.intentLines?.length)
