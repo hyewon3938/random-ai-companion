@@ -309,8 +309,7 @@ test("첫 만남·첫 대화·연락 텀·상황 문단·답장 형식은 켤 �
       metAt: "2026-09-06 01:00:00",
       coldStart: true,
       contactGap: {
-        label:
-          "캐릭터가 12:00에 마지막으로 말했고 유저가 15:30에 다시 말을 걸었다. 3시간 30분 만이다.",
+        label: "네가 12:00에 마지막으로 말한 뒤 상대 연락은 15:30에 왔다.",
         longing: false,
       },
       lastTalk: "어제",
@@ -324,7 +323,7 @@ test("첫 만남·첫 대화·연락 텀·상황 문단·답장 형식은 켤 �
   assert.ok(daily.text.endsWith(COLD_START_SEED));
   assert.ok(live.text.includes("[오늘 메모 — 대화하며 적어 둔 것]\n- 두 시 반에 병원"));
   assert.ok(live.text.includes("[직전 대화]\n마지막으로 대화한 날은 어제다."));
-  assert.ok(live.text.includes("[연락 텀]\n캐릭터가 12:00에 마지막으로 말했고"));
+  assert.ok(live.text.includes("[연락 텀]\n네가 12:00에 마지막으로 말한 뒤"));
   assert.ok(live.text.includes("- 그 사이 네가 각본대로 바빴으면"));
   assert.ok(!live.text.includes("- 오래 기다린 자리다."));
   assert.ok(live.text.includes("- 말투: 서로 반말"));
@@ -366,8 +365,7 @@ test("긴 텀에는 기다렸다는 말 규칙이 붙고 바빴으면 접으라�
   const [, , live] = assembleSystemBlocks(
     input({
       contactGap: {
-        label:
-          "네가 09:10에 마지막으로 말한 뒤 상대 연락은 19:10에 왔다. 10시간 만이다.",
+        label: "네가 09:10에 마지막으로 말한 뒤 상대 연락은 19:10에 왔다.",
         longing: true,
       },
     }),
@@ -377,4 +375,24 @@ test("긴 텀에는 기다렸다는 말 규칙이 붙고 바빴으면 접으라�
   assert.ok(live.text.includes("일하는 틈틈이 확인했다는 결로 말한다."));
   assert.ok(live.text.includes("몇 마디 주고받다가 꺼내도 된다."));
   assert.ok(!live.text.includes("- 그 사이 네가 각본대로 바빴으면"));
+});
+
+// 이슈 #460 — 되풀이를 막는 줄이 긴 텀 갈래에만 있어서 3~6시간 텀에서는 답장마다 다시 나왔다.
+test("은근한 말투와 시간 세지 않기, 되풀이 금지 줄은 두 갈래에 모두 붙는다", () => {
+  const both = [false, true].map(
+    (longing) =>
+      assembleSystemBlocks(
+        input({
+          contactGap: {
+            label: "네가 09:10에 마지막으로 말한 뒤 상대 연락은 19:10에 왔다.",
+            longing,
+          },
+        }),
+      )[2].text,
+  );
+  for (const text of both) {
+    assert.ok(text.includes("몇 시간 만인지 세어 말하지 않는다."));
+    assert.ok(text.includes("기다렸다는 말은 이번 대화에서 한 번이면 된다."));
+    assert.ok(text.includes("앞으로는 기다리지 않겠다고 말하지 않는다."));
+  }
 });

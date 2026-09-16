@@ -283,8 +283,13 @@ export interface ContactGap {
 }
 
 // 유저 연락이 캐릭터의 마지막 말에서 얼마 만에 온 건지 사람 말로. 짧은 틈은 화제가 아니라서
-// 기준(CONTACT_GAP_NOTICE_MS) 이상일 때만 문구를 만든다(이슈 #284). 분 단위는 반 시간으로
-// 뭉갠다 — 모델이 그 값을 그대로 말에 옮기는데, 4시간 27분 만이라고 하면 사람 말이 아니다.
+// 기준(CONTACT_GAP_NOTICE_MS) 이상일 때만 문구를 만든다(이슈 #284).
+//
+// 같은 논리일 안에서는 두 시각만 적고 몇 시간 만인지는 세지 않는다(이슈 #460). 반 시간 단위로
+// 뭉갠 텀을 적어 줬더니 모델이 그 숫자를 4시간 만이라는 말로 답장에 그대로 옮겼는데, 시간을
+// 세어 말하는 것 자체가 기다린 시간을 계산해 보여 주는 결이라 은근한 말투와 맞지 않는다.
+// 얼마나 지났는지는 두 시각으로 알 수 있고, 그 숫자를 말로 옮기지 않는 것은 assemble.ts의
+// 연락 텀 절이 시킨다. 날짜가 바뀐 자리의 하루·이틀은 세는 말이 아니라서 그대로 둔다.
 //
 // 날짜가 바뀐 자리는 잣대가 다르다(이슈 #316). 밤에 끝난 대화에 다음 날 아침 답이 오는 텀까지
 // 화제로 삼으면 자고 일어날 때마다 기다렸다는 말이 나오므로, 하루가 통째로 지난 만큼
@@ -295,8 +300,6 @@ export const contactGapOf = (
   minGapMs: number = CONTACT_GAP_NOTICE_MS,
 ): ContactGap | null => {
   const gap = kstDateOf(firstUserTs).getTime() - kstDateOf(lastCharTs).getTime();
-  const halves = Math.round(gap / 1_800_000);
-  const hours = Math.floor(halves / 2);
   const clock = firstUserTs.slice(11, 16);
 
   if (logicalDateOf(lastCharTs) !== logicalDateOf(firstUserTs)) {
@@ -310,12 +313,11 @@ export const contactGapOf = (
   }
 
   if (gap < minGapMs) return null;
-  const span = halves % 2 ? `${hours}시간 반` : `${hours}시간`;
   // 새벽에 온 연락은 캐릭터가 자던 시간이라 긴 텀으로 치지 않는다 — 논리일은 새벽 5시에 갈려서
   // 자정을 넘긴 연락도 같은 날로 들어온다.
   const daytime = firstUserTs.slice(11, 13) >= "05";
   return {
-    label: `네가 ${lastCharTs.slice(11, 16)}에 마지막으로 말한 뒤 상대 연락은 ${clock}에 왔다. ${span} 만이다.`,
+    label: `네가 ${lastCharTs.slice(11, 16)}에 마지막으로 말한 뒤 상대 연락은 ${clock}에 왔다.`,
     longing: daytime && gap >= CONTACT_GAP_LONGING_MS,
   };
 };
