@@ -69,6 +69,11 @@ export const toMin = (hhmm: string): number => {
 // 자는 시간에 상대 연락으로 깬 뒤의 '지금' 문장. 각본은 아직 잠으로 되어 있지만 오늘 실제
 // 기록에 깸 행이 있으면 그 행의 시각이 깬 시각이다 — 모델이 몇 시에 깼는지 어림해 지어내지 않게
 // 코드가 세어 준다(이슈 #288). wokeAt은 기록의 recorded_at("YYYY-MM-DD HH:MM:SS"), now는 각본 표기.
+//
+// 기다렸다는 말을 막는 줄은 이슈 #460이 더했다. 같은 꼬리에 연락 텀 절이 함께 들어가면 방금
+// 톡 소리에 깼다는 말과 아직 안 잤다는 말, 은근히 기다렸다는 말이 한 답장에 같이 나왔다.
+// 연락 텀 절은 유저 연락 시각만 보고 캐릭터가 그 사이 자고 있었는지는 모르므로, 자다 깬
+// 자리라는 사실을 아는 이 줄이 막는다.
 export const wokeNowLine = (
   cur: PlanBlock,
   wokeAt: string,
@@ -76,7 +81,7 @@ export const wokeNowLine = (
 ): string => {
   const clock = wokeAt.slice(11, 16);
   const awake = Math.max(0, toMin(now) - toMin(logicalClockOf(wokeAt)));
-  return `너는 각본상 ${clockLabel(cur.start)}~${clockLabel(cur.end)} 자는 시간이지만 ${clock}에 상대 연락에 깼고, 지금 ${awake}분째 깨어 있다. 깬 시각은 이 값 그대로다 — 몇 시에 깼는지 다른 시각을 어림해 말하지 않는다. 자다 깬 채로 답하는 자리라 답장 여건은 ${RESPONSIVENESS_NAME.instant}이고, 도로 잘지는 대화가 정한다.`;
+  return `너는 각본상 ${clockLabel(cur.start)}~${clockLabel(cur.end)} 자는 시간이지만 ${clock}에 상대 연락에 깼고, 지금 ${awake}분째 깨어 있다. 깬 시각은 이 값 그대로다 — 몇 시에 깼는지 다른 시각을 어림해 말하지 않는다. 자다 깬 채로 답하는 자리라 답장 여건은 ${RESPONSIVENESS_NAME.instant}이고, 도로 잘지는 대화가 정한다. 그 사이 자고 있었으니 기다렸다는 말과 아직 안 잤다는 말은 맞지 않는다 — 연락에 깬 그대로 말하고, 연락이 반가운 마음은 이제 깨어 있다는 자리에서 낸다.`;
 };
 
 // 상대가 붙잡아 지금 블록의 일을 취소하거나 미룬 뒤의 '지금' 문장. 각본은 아직 그 일로 되어
