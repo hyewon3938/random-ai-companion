@@ -18,8 +18,9 @@
 //            한 건씩 나간다(relationship.md 「슬랙 게시」).
 //
 // 대화 계획 게시는 모델 출력이 아니라 저장된 relationship_intents 행을 읽는다 — 후보 밖 플러팅처럼
-// 반영 자리가 버린 값은 오늘 대화에 쓰이지 않으므로 게시에도 싣지 않는다. 줄 이름은 슬랙에서 읽는
-// 이름(PLAN_LINE_NAME)을 쓰고, 모델 프롬프트가 쓰는 이름표(labels.ts INTENT_LINE_NAME)는 따로 둔다.
+// 반영 자리가 버린 값은 오늘 대화에 쓰이지 않으므로 게시에도 싣지 않는다. 줄마다 저장된 근거
+// (basis_json)가 있으면 그 줄 아래에 들여 적고, 게시에 없는 줄의 근거는 싣지 않는다. 줄 이름은
+// 슬랙 게시가 함께 쓰는 labels.ts PLAN_LINE_NAME이고, 모델 프롬프트의 이름표(INTENT_LINE_NAME)와 다르다.
 //
 // 처음의 확정·취소는 트랜잭션이 돌려주지 않는다 — 수집이 넣어 둔 어제 후보(g.relation.firstsPending)와
 // 반영 뒤 확정·미확정 행을 견줘 다시 센다. 단계도 반영 전 값을 스냅샷에 두고 뒤 값과 견준다.
@@ -70,6 +71,7 @@ import {
   MEMORY_ITEM_TYPE_NAME,
   MEMORY_OWNER_NAME,
   MOVE_NAME,
+  PLAN_LINE_NAME,
   SPEECH_LEVEL_NAME,
   type FirstKind,
   type IntentLine,
@@ -481,28 +483,47 @@ const firstEvents = (g: NightlyGathered, firsts: FirstChanges): void => {
     });
 };
 
-// 슬랙에서 읽는 대화 계획 줄 이름. 모델 프롬프트의 이름표와 다르다(맨 위 주석).
-const PLAN_LINE_NAME: Record<IntentLine, string> = {
-  dig: "더 물어볼 것",
-  share: "먼저 꺼낼 내 이야기",
-  move: "시도할 플러팅",
-  thread: "이어서 할 이야기",
+// 저장된 근거를 줄 코드마다 한 문장으로 읽는다. 모델이 정한 모양({"dig":"21:10 러닝 얘기"})과
+// 다르거나 깨진 값이면 근거 없이 게시한다 — 근거 한 줄 때문에 계획 게시가 빠지면 안 된다.
+const planBasis = (
+  json: string | null | undefined,
+): Partial<Record<IntentLine, string>> => {
+  const out: Partial<Record<IntentLine, string>> = {};
+  if (!json) return out;
+  let v: unknown;
+  try {
+    v = JSON.parse(json);
+  } catch {
+    return out;
+  }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  const rec = v as Record<string, unknown>;
+  for (const k of Object.keys(PLAN_LINE_NAME) as IntentLine[]) {
+    const s = rec[k];
+    if (typeof s === "string" && s.trim()) out[k] = s.trim();
+  }
+  return out;
 };
 
 /** 오늘의 대화 계획이 저장됐으면 스레드 밖에 게시 한 건. 반영 자리와 같은 조건으로 오늘 몫만
  * 보고(며칠 지난 새벽 정리를 다시 돌린 회차는 계획을 적지 않는다), 같은 일기 날짜로 두 번 나가지
- * 않는다. */
+ * 않는다. 근거가 있는 줄은 바로 아래에 들여 쓴 근거 줄을 붙인다. */
 const conversationPlanEvent = (g: NightlyGathered): void => {
   if (shiftDate(g.diaryDate, 1) !== g.today) return;
-  const lines = intentLines(getRelationshipIntent(g.characterId, g.today));
+  const row = getRelationshipIntent(g.characterId, g.today);
+  const lines = intentLines(row);
   if (!lines.length) return;
+  const basis = planBasis(row?.basis_json);
   recordTraceEvent({
     characterId: g.characterId,
     kind: "conversation_plan",
     dedupeKey: `plan:${g.characterId}:${g.diaryDate}`,
     text: [
       `:dart: *${dateLabel(g.today)} 오늘의 대화 계획* · ${clock()}`,
-      ...lines.map(([k, v]) => `> ${PLAN_LINE_NAME[k]}: ${esc(v)}`),
+      ...lines.flatMap(([k, v]) => [
+        `> ${PLAN_LINE_NAME[k]}: ${esc(v)}`,
+        ...(basis[k] ? [`>     근거: ${esc(basis[k])}`] : []),
+      ]),
     ].join("\n"),
   });
 };

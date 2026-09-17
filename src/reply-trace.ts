@@ -88,7 +88,7 @@ export const traceProactiveSend = (p: {
   text: string;
   delivered: number;
   total: number;
-  /** 무슨 근거로 나간 한 통인지 — 의도(이어갈 자리)·일정(12:00 블록)·달래기·약속(행 12). */
+  /** 무슨 근거로 나간 한 통인지 — 의도(이어서 할 이야기)·일정(12:00 블록)·달래기·약속(행 12). */
   basis?: string | null;
   /** 문안을 만든 호출 번호. 봇 밖에서 만든 예약 문안은 없다. */
   callId?: number;

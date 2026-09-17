@@ -31,6 +31,7 @@ import {
 import { kstLogicalDate, logicalDateOf, shiftDate } from "./kst.js";
 import {
   INTENT_LINE_NAME,
+  PLAN_LINE_NAME,
   PROACTIVE_KIND_NAME,
   type IntentLine,
   type ProactiveKind,
@@ -468,13 +469,13 @@ export interface BasisDetail {
   promiseId?: number | null;
 }
 
-/** 슬랙 선톡 게시에 붙는 근거 줄 — 의도(이어갈 자리) · 일정(12:00 블록) · 달래기 · 살피기 ·
- * 약속(행 12). 상대 상태 근거는 종류 이름으로 갈라 적는다 — 어느 원인을 보고 나간 통인지가
- * 게시에서 바로 읽히게. */
+/** 슬랙 선톡 게시에 붙는 근거 줄 — 의도(이어서 할 이야기) · 일정(12:00 블록) · 달래기 · 살피기 ·
+ * 약속(행 12). 의도 줄 이름은 대화 계획 게시와 같은 PLAN_LINE_NAME을 쓴다. 상대 상태 근거는
+ * 종류 이름으로 갈라 적는다 — 어느 원인을 보고 나간 통인지가 게시에서 바로 읽히게. */
 export const basisLine = (d: BasisDetail): string => {
   const basis = PROACTIVE_BASIS[d.kind];
   if (basis === "intent")
-    return d.intentLine ? `의도(${INTENT_LINE_NAME[d.intentLine]})` : "의도";
+    return d.intentLine ? `의도(${PLAN_LINE_NAME[d.intentLine]})` : "의도";
   if (basis === "schedule")
     return `일정(${d.block ? `${d.block} 블록` : PROACTIVE_KIND_NAME[d.kind]})`;
   if (basis === "promise")

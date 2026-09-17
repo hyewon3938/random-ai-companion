@@ -3,7 +3,7 @@
 // beforeNightlyTrace로 스냅숏을 뜨고, 반영 트랜잭션이 할 일을 손으로 DB에 쓴 뒤 afterNightlyTrace를
 // 불러 본문 한 행과 스레드 자식(기억·진행 중인 일·일기·선톡 문안·호출 원문)의 문안을 본다.
 // 단계 전이와 처음 확정은 스레드 밖 게시로도 나가서 그 행들을 따로 센다. 오늘의 대화 계획은 본문에
-// 적지 않고 저장된 행을 읽어 스레드 밖에만 게시한다.
+// 적지 않고 저장된 행을 읽어 스레드 밖에만 게시하고, 줄마다 저장된 근거를 그 줄 아래에 붙인다.
 // 슬랙 토큰은 가짜 값이라 트레이스 표에만 쌓이고 밖으로 나가지 않는다. 발송 틱은 돌리지 않는다.
 
 import { test } from "node:test";
@@ -328,7 +328,7 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
       moveNote: "저녁에 지나가듯",
       leadTone: "silent_care",
       thread: "퇴근길",
-      basisJson: JSON.stringify({ dig: "21:10 러닝 얘기" }),
+      basisJson: JSON.stringify({ dig: "21:10 러닝 얘기", move: "추천 맨 앞" }),
     },
     NOW,
   );
@@ -391,7 +391,7 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
     /처음 확정\* 자기 얘기 · 유저 · 09-08 22:10 · 상대가 먼저 한 것/,
   );
 
-  // 대화 계획은 새벽 정리 스레드에 달지 않고 한 건으로 따로 나간다. 근거는 싣지 않는다.
+  // 대화 계획은 새벽 정리 스레드에 달지 않고 한 건으로 따로 나간다. 근거가 있는 줄만 아래에 근거 줄이 붙는다.
   const plans = standaloneOf(["conversation_plan"]);
   assert.equal(plans.length, 1);
   assert.equal(plans[0].dedupe_key, `plan:${characterId}:2026-09-08`);
@@ -402,8 +402,10 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
   );
   assert.deepEqual(plans[0].text.split("\n").slice(1), [
     "> 더 물어볼 것: 어제 말한 러닝",
+    ">     근거: 21:10 러닝 얘기",
     "> 먼저 꺼낼 내 이야기: 요즘 잠이 얕다",
     "> 시도할 플러팅: 기억해서 챙기기 저녁에 지나가듯, 앞세울 결은 말없이 챙김",
+    ">     근거: 추천 맨 앞",
     "> 이어서 할 이야기: 퇴근길",
   ]);
   assert.ok(!childrenOf("2026-09-08").some((c) => c.text.includes("대화 계획")));
@@ -437,6 +439,53 @@ test("며칠 지난 새벽 정리를 다시 돌린 회차는 그날 저장된 �
     ).length,
     0,
   );
+});
+
+test("대화 계획 게시는 게시에 없는 줄의 근거와 문자열이 아닌 근거를 싣지 않고, 깨진 근거면 줄만 올린다", () => {
+  // 후보 밖 플러팅은 반영 자리가 버리지만 근거는 통째로 저장된다 — 그 근거가 게시에 따로 남으면 안 된다.
+  saveRelationshipIntent(
+    characterId,
+    "2026-09-21",
+    {
+      dig: "주말에 간 전시",
+      thread: "점심 메뉴 고르다 끊김",
+      basisJson: JSON.stringify({
+        dig: 3,
+        move: "추천 맨 앞",
+        thread: " 12:40 마지막 메시지 ",
+      }),
+    },
+    NOW,
+  );
+  saveRelationshipIntent(
+    characterId,
+    "2026-09-23",
+    { share: "새로 산 화분", basisJson: "{dig:" },
+    NOW,
+  );
+
+  for (const [diaryDate, today] of [
+    ["2026-09-20", "2026-09-21"],
+    ["2026-09-22", "2026-09-23"],
+  ]) {
+    const g = gathered({ diaryDate, today });
+    const out: NightlyOutput = { entry: entry("근거 모양을 보는 하루") };
+    const snap = beforeNightlyTrace(g, out);
+    assert.ok(snap);
+    afterNightlyTrace(g, out, snap, "ok: 일기 저장");
+  }
+
+  const planOf = (diaryDate: string): string[] | undefined =>
+    standaloneOf(["conversation_plan"])
+      .find((e) => e.dedupe_key === `plan:${characterId}:${diaryDate}`)
+      ?.text.split("\n")
+      .slice(1);
+  assert.deepEqual(planOf("2026-09-20"), [
+    "> 더 물어볼 것: 주말에 간 전시",
+    "> 이어서 할 이야기: 점심 메뉴 고르다 끊김",
+    ">     근거: 12:40 마지막 메시지",
+  ]);
+  assert.deepEqual(planOf("2026-09-22"), ["> 먼저 꺼낼 내 이야기: 새로 산 화분"]);
 });
 
 test("관계 절이 없는 회차의 후보 확정과, 후보를 지우고 같은 종류를 유저 쪽으로 새로 적은 밤이 게시된다", () => {

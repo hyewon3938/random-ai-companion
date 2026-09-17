@@ -130,7 +130,7 @@ test("어제 쓴 의도 줄은 어제 논리일에 나간 의도 선톡의 줄 �
 test("근거 줄은 근거 종류마다 다른 칸을 읽는다", () => {
   assert.equal(
     basisLine({ kind: "intent", intentLine: "thread" }),
-    "의도(이어갈 자리)",
+    "의도(이어서 할 이야기)",
   );
   assert.equal(basisLine({ kind: "intent" }), "의도");
   assert.equal(basisLine({ kind: "lunch", block: "12:00" }), "일정(12:00 블록)");
@@ -143,7 +143,7 @@ test("근거 줄은 근거 종류마다 다른 칸을 읽는다", () => {
 test("발송 기록으로 만드는 근거 줄은 선톡이 아닌 종류에 null을 준다", () => {
   assert.equal(
     basisLineFromMeta("intent", { intent_line: "dig" }),
-    "의도(파고들 것)",
+    "의도(더 물어볼 것)",
   );
   assert.equal(basisLineFromMeta("away", { block: "09:30" }), "일정(09:30 블록)");
   assert.equal(
