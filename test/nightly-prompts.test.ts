@@ -8,6 +8,7 @@ import {
   careSituation,
   diaryPrompt,
   extractPrompt,
+  intentLines,
   intentSummary,
   morningSituation,
   quietDayPrompt,
@@ -179,6 +180,28 @@ test("intentSummary는 있는 줄만 잇고 플러팅 코드와 결 코드는 �
   );
   // 모르는 코드는 이름으로 못 바꾸니 뺀다.
   assert.equal(intentSummary({ move: "unknown_move", lead_tone: "nope" }), "");
+});
+
+test("intentLines는 줄 이름 없이 줄 코드와 내용을 순서대로 돌려준다", () => {
+  assert.deepEqual(intentLines(undefined), []);
+  assert.deepEqual(
+    intentLines({
+      dig: "러닝 얘기",
+      share: "잠이 얕다",
+      move: "remember",
+      move_note: null,
+      lead_tone: "silent_care",
+      thread: "책 이야기",
+    }),
+    [
+      ["dig", "러닝 얘기"],
+      ["share", "잠이 얕다"],
+      ["move", "기억해서 챙기기, 앞세울 결은 말없이 챙김"],
+      ["thread", "책 이야기"],
+    ],
+  );
+  // 앞세울 결은 시도할 플러팅 줄에 붙는 말이라 결만 있는 날은 줄이 없다.
+  assert.deepEqual(intentLines({ lead_tone: "silent_care" }), []);
 });
 
 test("morningSituation은 오늘의 관계 의도 한 줄을 받고 없으면 (없음)으로 적는다", () => {

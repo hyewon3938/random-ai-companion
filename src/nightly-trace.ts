@@ -10,12 +10,16 @@
 //
 //   본문   — 반영 요약, 그날 오늘 메모, 각본과 달라진 하루, 관계 갱신(바뀐 자리 표시),
 //            관계 단계(문턱 조건별 값과 넘김 여부, 처음 확정과 취소, 반응 점수가 오르고 내린
-//            플러팅 3개씩, 오늘의 의도),
-//            상대 프로필 갱신, 새 일정, 일정 시각 고침
+//            플러팅 3개씩), 상대 프로필 갱신, 새 일정, 일정 시각 고침
 //   스레드 — 기억 신규·덮어쓰기, 일기 전문, 오늘 선톡 문안과 발송 창, 새벽 정리가 부른 호출 원문
 //            (호출 원문 글에는 `call:12:nightly`처럼 호출 번호를 담은 키를 단다)
 //   따로   — 단계가 오르면 stage_change, 처음이 확정·취소되거나 상대가 먼저 한 처음이 더해지면
-//            first_event 게시가 스레드 밖에 한 건씩 나간다(relationship.md 「슬랙 게시」).
+//            first_event, 오늘의 대화 계획을 저장했으면 conversation_plan 게시가 스레드 밖에
+//            한 건씩 나간다(relationship.md 「슬랙 게시」).
+//
+// 대화 계획 게시는 모델 출력이 아니라 저장된 relationship_intents 행을 읽는다 — 후보 밖 플러팅처럼
+// 반영 자리가 버린 값은 오늘 대화에 쓰이지 않으므로 게시에도 싣지 않는다. 줄 이름은 슬랙에서 읽는
+// 이름(PLAN_LINE_NAME)을 쓰고, 모델 프롬프트가 쓰는 이름표(labels.ts INTENT_LINE_NAME)는 따로 둔다.
 //
 // 처음의 확정·취소는 트랜잭션이 돌려주지 않는다 — 수집이 넣어 둔 어제 후보(g.relation.firstsPending)와
 // 반영 뒤 확정·미확정 행을 견줘 다시 센다. 단계도 반영 전 값을 스냅샷에 두고 뒤 값과 견준다.
@@ -30,6 +34,7 @@ import {
   getMemoryItemById,
   getReactionScores,
   getRelationship,
+  getRelationshipIntent,
   getScheduleById,
   getScheduledSendsOn,
   getStage,
@@ -67,13 +72,14 @@ import {
   MOVE_NAME,
   SPEECH_LEVEL_NAME,
   type FirstKind,
+  type IntentLine,
   type MemoryOrigin,
   type UserKnows,
 } from "./labels.js";
-import { intentSummary } from "./prompts/nightly.js";
+import { intentLines } from "./prompts/nightly.js";
 import { wordDiff } from "./trace/diff.js";
 import { currentRowOf, currentRows, keyProblem } from "./memory.js";
-import { getKstNow } from "./kst.js";
+import { getKstNow, shiftDate } from "./kst.js";
 import type {
   DiaryOutput,
   MemoryExtract,
@@ -372,8 +378,8 @@ export const scoreChangeLine = (
     .join(" / ");
 };
 
-/** 본문의 관계 단계 절. 단계와 문턱은 늘 적고, 넘김·처음·점수 변화·의도는 그 회차에 있을 때만
- * 적는다. */
+/** 본문의 관계 단계 절. 단계와 문턱은 늘 적고, 넘김·처음·점수 변화·고백 차례는 그 회차에 있을
+ * 때만 적는다. 오늘의 대화 계획은 본문에 두지 않고 따로 게시한다(conversationPlanEvent). */
 const relationStageBlock = (
   g: NightlyGathered,
   out: NightlyOutput,
@@ -419,19 +425,7 @@ const relationStageBlock = (
   const scoreChange = scoreChangeLine(snap.scores, afterScores);
   if (scoreChange) lines.push(`> 점수 변화: ${esc(scoreChange)}`);
   if (r.confessionDue)
-    lines.push(`> 고백 차례 — 오늘 의도에 마음 확인을 넣는 날`);
-  const intent = out.extract?.relation?.intent;
-  const summary = intentSummary(intent);
-  if (summary) {
-    lines.push(`> 오늘 의도: ${esc(summary)}`);
-    if (intent?.basis && typeof intent.basis === "object") {
-      const basis = Object.entries(intent.basis)
-        .filter(([, v]) => typeof v === "string" && v)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(" · ");
-      if (basis) lines.push(`> 의도 근거: ${esc(basis)}`);
-    }
-  }
+    lines.push(`> 고백 차례 — 오늘의 대화 계획에 마음 확인을 넣는 날`);
   return [`*관계 단계*`, ...lines].join("\n");
 };
 
@@ -485,6 +479,32 @@ const firstEvents = (g: NightlyGathered, firsts: FirstChanges): void => {
       dedupeKey: key(r.kind, "user"),
       text: `:sparkles: *처음 확정* ${esc(firstLabel(r))} · 상대가 먼저 한 것을 새벽 정리가 더함`,
     });
+};
+
+// 슬랙에서 읽는 대화 계획 줄 이름. 모델 프롬프트의 이름표와 다르다(맨 위 주석).
+const PLAN_LINE_NAME: Record<IntentLine, string> = {
+  dig: "더 물어볼 것",
+  share: "먼저 꺼낼 내 이야기",
+  move: "시도할 플러팅",
+  thread: "이어서 할 이야기",
+};
+
+/** 오늘의 대화 계획이 저장됐으면 스레드 밖에 게시 한 건. 반영 자리와 같은 조건으로 오늘 몫만
+ * 보고(며칠 지난 새벽 정리를 다시 돌린 회차는 계획을 적지 않는다), 같은 일기 날짜로 두 번 나가지
+ * 않는다. */
+const conversationPlanEvent = (g: NightlyGathered): void => {
+  if (shiftDate(g.diaryDate, 1) !== g.today) return;
+  const lines = intentLines(getRelationshipIntent(g.characterId, g.today));
+  if (!lines.length) return;
+  recordTraceEvent({
+    characterId: g.characterId,
+    kind: "conversation_plan",
+    dedupeKey: `plan:${g.characterId}:${g.diaryDate}`,
+    text: [
+      `:dart: *${dateLabel(g.today)} 오늘의 대화 계획* · ${clock()}`,
+      ...lines.map(([k, v]) => `> ${PLAN_LINE_NAME[k]}: ${esc(v)}`),
+    ].join("\n"),
+  });
 };
 
 const SILENCE_NOTE: Record<NightlyGathered["silenceTier"], string | null> = {
@@ -865,6 +885,7 @@ export const afterNightlyTrace = (
       callChildren(g, parentKey);
       stageChangeEvent(g, out, snap, afterStage);
       firstEvents(g, firsts);
+      conversationPlanEvent(g);
     })();
   } catch (err) {
     console.error("[trace] 새벽 정리 게시 준비 실패:", err);

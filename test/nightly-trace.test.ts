@@ -2,7 +2,8 @@
 //
 // beforeNightlyTrace로 스냅숏을 뜨고, 반영 트랜잭션이 할 일을 손으로 DB에 쓴 뒤 afterNightlyTrace를
 // 불러 본문 한 행과 스레드 자식(기억·진행 중인 일·일기·선톡 문안·호출 원문)의 문안을 본다.
-// 단계 전이와 처음 확정은 스레드 밖 게시로도 나가서 그 행들을 따로 센다.
+// 단계 전이와 처음 확정은 스레드 밖 게시로도 나가서 그 행들을 따로 센다. 오늘의 대화 계획은 본문에
+// 적지 않고 저장된 행을 읽어 스레드 밖에만 게시한다.
 // 슬랙 토큰은 가짜 값이라 트레이스 표에만 쌓이고 밖으로 나가지 않는다. 발송 틱은 돌리지 않는다.
 
 import { test } from "node:test";
@@ -39,6 +40,7 @@ const {
   markScheduleKnown,
   raiseStage,
   recordLlmCall,
+  saveRelationshipIntent,
   saveUserProfile,
   setScheduleTimeHint,
   setTags,
@@ -198,7 +200,11 @@ test("바뀐 것이 없으면 본문 한 행만 쌓고 스레드는 붙이지 �
     ].join("\n\n"),
   );
   assert.equal(childrenOf("2026-09-01").length, 0);
-  assert.equal(standaloneOf(["stage_change", "first_event"]).length, 0);
+  // 저장된 대화 계획이 없는 밤이라 계획 게시도 없다.
+  assert.equal(
+    standaloneOf(["stage_change", "first_event", "conversation_plan"]).length,
+    0,
+  );
 });
 
 test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계 절과 스레드 밖 게시가 함께 나온다", () => {
@@ -299,7 +305,7 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
   const snap = beforeNightlyTrace(g, out);
   assert.ok(snap);
 
-  // 반영 트랜잭션이 할 일을 손으로 한다 — 확정·취소·상대가 먼저 한 처음·단계 올림.
+  // 반영 트랜잭션이 할 일을 손으로 한다 — 확정·취소·상대가 먼저 한 처음·단계 올림·대화 계획 저장.
   confirmFirst(laugh);
   deleteUnconfirmedFirst(remember);
   const selfStory = insertFirst({
@@ -312,6 +318,20 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
   assert.ok(selfStory !== undefined);
   confirmFirst(selfStory);
   assert.equal(raiseStage(characterId, 2, "2026-09-09"), true);
+  saveRelationshipIntent(
+    characterId,
+    "2026-09-09",
+    {
+      dig: "어제 말한 러닝",
+      share: "요즘 잠이 얕다",
+      move: "remember",
+      moveNote: "저녁에 지나가듯",
+      leadTone: "silent_care",
+      thread: "퇴근길",
+      basisJson: JSON.stringify({ dig: "21:10 러닝 얘기" }),
+    },
+    NOW,
+  );
 
   afterNightlyTrace(
     g,
@@ -337,8 +357,6 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
       "> 처음 확정: 웃기기 · 캐릭터 · 09-08 21:00 · 메시지 #41",
       "> 처음 취소: 기억해서 챙기기",
       "> 상대가 먼저 한 처음: 자기 얘기 · 유저 · 09-08 22:10",
-      "> 오늘 의도: 파고들 것: 어제 말한 러닝 / 흘릴 내 얘기: 요즘 잠이 얕다 / 시도할 플러팅: 기억해서 챙기기 저녁에 지나가듯, 앞세울 결은 말없이 챙김 / 이어갈 자리: 퇴근길",
-      "> 의도 근거: dig=21:10 러닝 얘기",
     ].join("\n"),
   );
 
@@ -373,9 +391,52 @@ test("단계가 오르고 처음이 확정·취소되면 본문의 관계 단계
     /처음 확정\* 자기 얘기 · 유저 · 09-08 22:10 · 상대가 먼저 한 것/,
   );
 
+  // 대화 계획은 새벽 정리 스레드에 달지 않고 한 건으로 따로 나간다. 근거는 싣지 않는다.
+  const plans = standaloneOf(["conversation_plan"]);
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0].dedupe_key, `plan:${characterId}:2026-09-08`);
+  assert.equal(plans[0].thread_key, null);
+  assert.match(
+    plans[0].text,
+    /^:dart: \*9\/9\(수\) 오늘의 대화 계획\* · \d{2}:\d{2}:\d{2}\n/,
+  );
+  assert.deepEqual(plans[0].text.split("\n").slice(1), [
+    "> 더 물어볼 것: 어제 말한 러닝",
+    "> 먼저 꺼낼 내 이야기: 요즘 잠이 얕다",
+    "> 시도할 플러팅: 기억해서 챙기기 저녁에 지나가듯, 앞세울 결은 말없이 챙김",
+    "> 이어서 할 이야기: 퇴근길",
+  ]);
+  assert.ok(!childrenOf("2026-09-08").some((c) => c.text.includes("대화 계획")));
+
   // 같은 밤을 다시 돌려도 같은 게시가 두 번 나가지 않는다.
   afterNightlyTrace(g, out, snap, "ok: 일기 저장");
   assert.equal(standaloneOf(["stage_change", "first_event"]).length, 4);
+  assert.equal(standaloneOf(["conversation_plan"]).length, 1);
+});
+
+test("며칠 지난 새벽 정리를 다시 돌린 회차는 그날 저장된 계획이 있어도 대화 계획을 게시하지 않는다", () => {
+  // 9/12 일기를 9/14에 돌렸다 — 반영 자리도 의도를 적지 않는 회차다. 9/14 몫 계획은 그날 새벽
+  // 정리가 따로 게시하므로 여기서 다른 일기 날짜 키로 한 번 더 나가면 안 된다.
+  saveRelationshipIntent(
+    characterId,
+    "2026-09-14",
+    { dig: "주말 등산", thread: "책 이야기" },
+    NOW,
+  );
+  const g = gathered({ diaryDate: "2026-09-12", today: "2026-09-14" });
+  const out: NightlyOutput = { entry: entry("늦게 정리한 하루") };
+  const snap = beforeNightlyTrace(g, out);
+  assert.ok(snap);
+
+  afterNightlyTrace(g, out, snap, "ok: 일기 저장");
+
+  assert.ok(parentOf("2026-09-12"));
+  assert.equal(
+    standaloneOf(["conversation_plan"]).filter(
+      (e) => e.dedupe_key === `plan:${characterId}:2026-09-12`,
+    ).length,
+    0,
+  );
 });
 
 test("관계 절이 없는 회차의 후보 확정과, 후보를 지우고 같은 종류를 유저 쪽으로 새로 적은 밤이 게시된다", () => {
