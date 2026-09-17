@@ -18,8 +18,9 @@
 // 추천 목록, 잘 통하는 플러팅을 만들어서, 어제 반응이 오늘 목록에 바로 반영된다. 일기가 이미 있는
 // 날은 저장이 끝났으니 얹지 않는다. 저장은 의도 뒤에 같은 표본을 다시 세어 적는다. 모델이 읽는
 // 입력에는 점수 숫자를 넣지 않는다. 플러팅은 이름 목록으로만 들어가고, 2→3 문턱의 점수 평균은
-// 수집 결과에 숫자로 남아 슬랙 트레이스가 쓰지만 기억 정리 프롬프트(relationSection)와 외부
-// 스케줄러가 읽는 출력(nightly-read)은 thresholdForModel을 거쳐 표본이 있는지와 찼는지만 받는다.
+// 수집 결과에 숫자로 남아 슬랙 트레이스가 쓰지만, 조건에 score 표시가 있어 기억 정리 프롬프트
+// (relationSection)는 찼는지만 적고 외부 스케줄러가 읽는 출력(nightly-read)은 thresholdForModel을
+// 거쳐 표본이 있는지와 찼는지만 받는다.
 
 import type {
   FirstBy,
@@ -335,8 +336,9 @@ export const evaluateThreshold = (
   };
 };
 
-/** 모델이 읽는 문턱. 반응 점수 조건의 값과 기준을 뺀다 — 숫자를 보면 모델이 점수를 말하거나 올리려는
- * 티를 내고 표본이 적을 때 값을 과신해서다(relationship.md §6). 슬랙 트레이스는 원래 문턱을 쓴다. */
+/** 외부 스케줄러가 읽는 문턱. 반응 점수 조건의 값과 기준을 뺀다 — 숫자를 보면 모델이 점수를 말하거나
+ * 올리려는 티를 내고 표본이 적을 때 값을 과신해서다(relationship.md §6). 봇 안 프롬프트는
+ * relationSection이 같은 score 표시를 읽어 숫자를 빼고, 슬랙 트레이스는 원래 문턱을 쓴다. */
 export const thresholdForModel = (t: StageThreshold): ModelStageThreshold => ({
   from: t.from,
   to: t.to,
