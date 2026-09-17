@@ -485,6 +485,7 @@ const firstEvents = (g: NightlyGathered, firsts: FirstChanges): void => {
 
 // 저장된 근거를 줄 코드마다 한 문장으로 읽는다. 모델이 정한 모양({"dig":"21:10 러닝 얘기"})과
 // 다르거나 깨진 값이면 근거 없이 게시한다 — 근거 한 줄 때문에 계획 게시가 빠지면 안 된다.
+// 계획 줄과 달리 근거는 저장할 때 다듬지 않아서, 줄바꿈이 인용 표시를 끊지 않게 공백을 합친다.
 const planBasis = (
   json: string | null | undefined,
 ): Partial<Record<IntentLine, string>> => {
@@ -500,7 +501,8 @@ const planBasis = (
   const rec = v as Record<string, unknown>;
   for (const k of Object.keys(PLAN_LINE_NAME) as IntentLine[]) {
     const s = rec[k];
-    if (typeof s === "string" && s.trim()) out[k] = s.trim();
+    const line = typeof s === "string" ? s.replace(/\s+/g, " ").trim() : "";
+    if (line) out[k] = line;
   }
   return out;
 };
