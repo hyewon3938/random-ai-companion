@@ -6,7 +6,7 @@
 
 ## 상태
 
-남은 작업과 세션 대기열은 커밋하지 않는 `LOCAL-SESSIONS.md`에 있고, 세션은 `/next`나 `/build <세션 이름>`으로 연다. 설계 원본은 repo 루트에 커밋한 문서 3개로, 기억 구조와 V2는 `time-and-memory.md`, V3 관계는 `relationship.md`, 연락 경로는 `outgoing.md`에 있다.
+남은 작업과 세션 대기열은 커밋하지 않는 `LOCAL-SESSIONS.md`에 있고, 세션은 `/next`나 `/build <세션 이름>`으로 연다. 설계 원본은 repo 루트에 커밋한 문서 4개로, 기억 구조와 V2는 `time-and-memory.md`, V3 관계는 `relationship.md`, 연락 경로는 `outgoing.md`, 작품 카드와 시청은 `works.md`에 있다.
 
 ## 실행
 
