@@ -10,6 +10,9 @@
 // (proactiveBudget·budgetAllows). 합계에 안 들어가는 종류는 상대가 이미 말을 걸었거나
 // 캐릭터가 자리를 비우는 상황에 붙는 한 마디라 새로 거는 연락과 성격이 다르다.
 //
+// 의도 선톡이 오늘의 의도 가운데 어느 줄을 쓸지도 여기서 고른다(pickIntentLine). 오늘 이미
+// 쓴 줄은 빼고, 어제 의도 선톡이 쓴 줄은 뒤로 보내 여는 모양이 날마다 같지 않게 한다.
+//
 // 유저 메시지가 오면 즉시 평상으로 돌아온다.
 //
 // 발송에 실패한 선톡 문안을 다음 틱까지 들고 있는 자리도 여기다(holdFailedDraft·
@@ -25,7 +28,7 @@ import {
   hasUserScheduleOn,
   lastUserTs,
 } from "./db.js";
-import { kstLogicalDate, logicalDateOf } from "./kst.js";
+import { kstLogicalDate, logicalDateOf, shiftDate } from "./kst.js";
 import {
   INTENT_LINE_NAME,
   PROACTIVE_KIND_NAME,
@@ -507,6 +510,10 @@ export const basisLineFromMeta = (
 // ── 의도 선톡이 쓸 줄 고르기 ─────────────────────────────────────────────
 // 1단계는 파고들 것과 이어갈 자리 둘만 의도 선톡이 된다. 흘릴 내 얘기는 근황 선톡에 얹고,
 // 시도할 플러팅은 아직 먼저 걸 자리가 아니다. 2단계부터 네 줄 전부 열린다.
+//
+// 순서만 따르면 파고들 것이 날마다 먼저 나가서 의도 선톡이 매일 상대가 전에 한 말로 열렸다.
+// 그래서 어제 의도 선톡이 쓴 줄은 오늘 쓸 다른 줄이 없을 때만 고른다(이슈 #462). 새벽 정리가
+// 어제 쓴 플러팅을 뒤로 보내는 것(moveCandidates)과 같은 방식이다.
 export const STAGE_INTENT_LINES: Record<RelationshipStage, IntentLine[]> = {
   1: ["dig", "thread"],
   2: ["dig", "share", "move", "thread"],
@@ -555,7 +562,42 @@ export const usedIntentLines = (
   return [...out];
 };
 
-/** 오늘의 의도 행에서 문안에 넣을 줄 하나. 값이 있고 아직 안 쓴 줄 가운데 앞선 것이다. */
+/**
+ * 어제 의도 선톡이 쓴 줄. 어제 논리일 시작부터 todayStart 전까지 나간 선톡의 intent_line만
+ * 센다 — 답장이 쓴 줄은 대화 중에 받은 말이라 다음 날 여는 모양과 상관이 없다.
+ * todayStart는 오늘 논리일 시작 시각("YYYY-MM-DD 05:00:00")이다.
+ */
+export const yesterdayIntentLines = (
+  chatId: string,
+  characterId: number,
+  todayStart: string,
+): IntentLine[] => {
+  const [date, time] = todayStart.split(" ");
+  const from = `${shiftDate(date, -1)} ${time}`;
+  const out = new Set<IntentLine>();
+  const rows = getAssistantMetaSince(chatId, characterId, from, {
+    like: ['%"intent_line"%'],
+  });
+  for (const row of rows) {
+    if (row.sent_at >= todayStart || !row.meta_json) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.meta_json);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const line = (parsed as LineMeta).intent_line;
+    if (typeof line === "string" && line in INTENT_LINE_NAME)
+      out.add(line as IntentLine);
+  }
+  return [...out];
+};
+
+/**
+ * 오늘의 의도 행에서 문안에 넣을 줄 하나. 값이 있고 아직 안 쓴 줄 가운데 어제 의도 선톡이
+ * 안 쓴 앞선 것이고, 그런 줄이 없으면 어제 쓴 줄 가운데 앞선 것이다.
+ */
 export interface IntentLineSource {
   dig?: string | null;
   share?: string | null;
@@ -568,6 +610,7 @@ export const pickIntentLine = (
   intent: IntentLineSource | null,
   stage: RelationshipStage,
   used: IntentLine[],
+  yesterday: IntentLine[] = [],
 ): IntentLine | null => {
   if (!intent) return null;
   // 고백 차례는 플러팅 코드 없이 자리만 적힌 날이라 move_note만 있어도 시도할 플러팅 줄이 산다.
@@ -577,7 +620,8 @@ export const pickIntentLine = (
     move: !!(intent.move || intent.move_note),
     thread: !!intent.thread,
   };
-  for (const line of STAGE_INTENT_LINES[stage])
-    if (filled[line] && !used.includes(line)) return line;
-  return null;
+  const open = STAGE_INTENT_LINES[stage].filter(
+    (line) => filled[line] && !used.includes(line),
+  );
+  return open.find((line) => !yesterday.includes(line)) ?? open[0] ?? null;
 };

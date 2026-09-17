@@ -25,6 +25,7 @@ const {
   pickIntentLine,
   proactiveBudget,
   usedIntentLines,
+  yesterdayIntentLines,
 } = await import("../src/proactive-policy.js");
 const { PROACTIVE_STAGE_BUDGET } = await import("../src/thresholds.js");
 
@@ -118,6 +119,14 @@ test("오늘 쓴 의도 줄은 선톡의 줄 코드와 답장이 쓴 줄을 함�
   assert.deepEqual(usedIntentLines(OPEN, openId, SINCE), []);
 });
 
+test("어제 쓴 의도 줄은 어제 논리일에 나간 의도 선톡의 줄 코드만 센다", () => {
+  // 9/7 논리일에서 보면 9/6 05시부터 9/7 05시 전까지가 어제다. 답장이 쓴 줄(move·thread)은 안 센다.
+  assert.deepEqual(yesterdayIntentLines(FULL, fullId, "2026-09-07 05:00:00"), ["dig"]);
+  // 9/6 논리일에서 보면 위 메시지는 전부 오늘 것이라 어제 줄이 없다.
+  assert.deepEqual(yesterdayIntentLines(FULL, fullId, SINCE), []);
+  assert.deepEqual(yesterdayIntentLines(OPEN, openId, "2026-09-07 05:00:00"), []);
+});
+
 test("근거 줄은 근거 종류마다 다른 칸을 읽는다", () => {
   assert.equal(
     basisLine({ kind: "intent", intentLine: "thread" }),
@@ -166,4 +175,21 @@ test("의도 줄은 단계가 여는 줄 가운데 값이 있고 아직 안 쓴 
   assert.equal(pickIntentLine({ thread: "다음 주 발표 준비" }, 2, []), "thread");
   assert.equal(pickIntentLine({ move_note: "저녁에 마음 확인" }, 2, []), "move");
   assert.equal(pickIntentLine(null, 2, []), null);
+});
+
+test("어제 의도 선톡이 쓴 줄은 다른 줄이 없을 때만 고른다", () => {
+  const intent = {
+    dig: "왜 그 팀을 그만뒀는지",
+    share: "요즘 새벽에 러닝 나가는 얘기",
+    move: "같이 볼 것 하나 고르기",
+    thread: "다음 주 발표 준비",
+  };
+  // 어제 파고들 것으로 열었으면 오늘은 그다음 줄부터 본다.
+  assert.equal(pickIntentLine(intent, 2, [], ["dig"]), "share");
+  assert.equal(pickIntentLine(intent, 1, [], ["dig"]), "thread");
+  // 남은 줄이 전부 어제 쓴 줄이면 그 가운데 앞선 것을 고른다.
+  assert.equal(pickIntentLine(intent, 1, [], ["dig", "thread"]), "dig");
+  assert.equal(pickIntentLine(intent, 1, ["thread"], ["dig"]), "dig");
+  // 오늘 이미 쓴 줄은 어제 줄 여부와 상관없이 빠진다.
+  assert.equal(pickIntentLine(intent, 1, ["dig", "thread"], []), null);
 });
