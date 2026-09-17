@@ -7,7 +7,8 @@
 // 관계 절(relationSection)은 수집이 센 단계·문턱 조건·처음 후보·시도할 플러팅 후보를 기억 정리
 // 프롬프트에 적어 모델이 다시 세지 않게 한다. 2→3 문턱의 반응 점수 평균은 숫자와 기준 없이 찼는지만
 // 적는다(relationship.md §6, 조건의 score 표시). 아침 선톡 상황 문단은 그날의 관계 의도
-// (MorningIntent)를 받아 intentSummary가 만든 한 줄을 엮을 후보에 넣는다(#355).
+// (MorningIntent)를 받아 intentSummary가 만든 한 줄을 엮을 후보에 넣는다(#355). 줄 코드와 내용 쌍은
+// intentLines가 만들고, 슬랙의 대화 계획 게시(nightly-trace.ts)는 그 쌍에 자기 줄 이름을 붙여 쓴다.
 //
 // 유저와는 메시지로만 이어진 사이라 관계 의도 네 줄에 유저와 만나는 자리는 적지 않는다. 대화에서
 // 유저가 먼저 만나자고 했을 때만 그 말을 받을 자리로 적고, 각자 따로 하고 서로에게 알리는 약속은
@@ -34,9 +35,11 @@ import { DIARY_TAG_MAX } from "../thresholds.js";
 import {
   FIRST_BY_NAME,
   FIRST_KIND_NAME,
+  INTENT_LINE_NAME,
   LEAD_TONE_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
+  type IntentLine,
   type LeadTone,
   type UserKnows,
 } from "../labels.js";
@@ -157,12 +160,15 @@ const LEAD_TONE_CODES = (Object.keys(LEAD_TONE_NAME) as LeadTone[])
   .map((k) => `${k}=${LEAD_TONE_NAME[k]}`)
   .join(" · ");
 
-/** 오늘의 의도 4줄을 한 줄로. 없는 줄은 뺀다. 선톡 상황 문단과 어제 의도 줄이 같이 쓴다. */
-export const intentSummary = (i: MorningIntent | null | undefined): string => {
-  if (!i) return "";
-  const parts: string[] = [];
-  if (i.dig) parts.push(`파고들 것: ${i.dig}`);
-  if (i.share) parts.push(`흘릴 내 얘기: ${i.share}`);
+/** 오늘의 의도 4줄을 줄 코드와 내용 쌍으로. 없는 줄은 빼고, 플러팅 코드와 결 코드는 이름으로
+ * 바꾼다. 줄 이름은 부르는 쪽이 붙인다 — 프롬프트와 슬랙 게시가 서로 다른 이름을 쓴다. */
+export const intentLines = (
+  i: MorningIntent | null | undefined,
+): [IntentLine, string][] => {
+  if (!i) return [];
+  const lines: [IntentLine, string][] = [];
+  if (i.dig) lines.push(["dig", i.dig]);
+  if (i.share) lines.push(["share", i.share]);
   const move =
     i.move && Object.hasOwn(MOVE_NAME, i.move)
       ? MOVE_NAME[i.move as keyof typeof MOVE_NAME]
@@ -172,12 +178,20 @@ export const intentSummary = (i: MorningIntent | null | undefined): string => {
       ? LEAD_TONE_NAME[i.lead_tone as LeadTone]
       : null;
   if (move || i.move_note)
-    parts.push(
-      `시도할 플러팅: ${[move, i.move_note].filter(Boolean).join(" ")}${tone ? `, 앞세울 결은 ${tone}` : ""}`,
-    );
-  if (i.thread) parts.push(`이어갈 자리: ${i.thread}`);
-  return parts.join(" / ");
+    lines.push([
+      "move",
+      `${[move, i.move_note].filter(Boolean).join(" ")}${tone ? `, 앞세울 결은 ${tone}` : ""}`,
+    ]);
+  if (i.thread) lines.push(["thread", i.thread]);
+  return lines;
 };
+
+/** 오늘의 의도 4줄을 한 줄로. 선톡 상황 문단과 어제 의도 줄이 같이 쓰고, 줄 이름은 프롬프트용
+ * 이름표(INTENT_LINE_NAME)를 붙인다. */
+export const intentSummary = (i: MorningIntent | null | undefined): string =>
+  intentLines(i)
+    .map(([k, v]) => `${INTENT_LINE_NAME[k]}: ${v}`)
+    .join(" / ");
 
 /** 기억 정리 프롬프트의 관계 단계 절 — 코드가 센 값과 모델이 고를 목록. 줄 앞의 영문은 출력
  * 규칙이 가리키는 이름이다. 반응 점수 조건은 숫자 없이 찼는지만 적는다. */
