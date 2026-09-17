@@ -9,7 +9,8 @@
 // 출력이 쓸 키의 행을 미리 읽어 둔다.
 //
 //   본문   — 반영 요약, 그날 오늘 메모, 각본과 달라진 하루, 관계 갱신(바뀐 자리 표시),
-//            관계 단계(문턱 조건별 값과 넘김 여부, 처음 확정과 취소, 오늘의 의도),
+//            관계 단계(문턱 조건별 값과 넘김 여부, 처음 확정과 취소, 반응 점수가 오르고 내린
+//            플러팅 3개씩, 오늘의 의도),
 //            상대 프로필 갱신, 새 일정, 일정 시각 고침
 //   스레드 — 기억 신규·덮어쓰기, 일기 전문, 오늘 선톡 문안과 발송 창, 새벽 정리가 부른 호출 원문
 //            (호출 원문 글에는 `call:12:nightly`처럼 호출 번호를 담은 키를 단다)
@@ -27,6 +28,7 @@ import {
   getConfirmedFirsts,
   getDiaryOn,
   getMemoryItemById,
+  getReactionScores,
   getRelationship,
   getScheduleById,
   getScheduledSendsOn,
@@ -39,6 +41,7 @@ import {
   untracedCallsSince,
   type FirstRow,
   type MemoryRow,
+  type ReactionScoreRow,
   type RelationshipRow,
   type StageRow,
   type StoredUserProfile,
@@ -61,6 +64,7 @@ import {
   INTEREST_NAME,
   MEMORY_ITEM_TYPE_NAME,
   MEMORY_OWNER_NAME,
+  MOVE_NAME,
   SPEECH_LEVEL_NAME,
   type FirstKind,
   type MemoryOrigin,
@@ -144,6 +148,8 @@ export interface NightlySnapshot {
   profile: StoredUserProfile;
   // 반영 전 단계 — 반영 뒤 값과 견줘 단계 전이 게시를 낸다.
   stage: StageRow | undefined;
+  // 반영 전 반응 점수 — 반영 뒤 값과 견줘 점수 변화 줄을 적는다.
+  scores: ReactionScoreRow[];
 }
 
 /**
@@ -205,6 +211,7 @@ export const beforeNightlyTrace = (
       relationship: getRelationship(g.characterId),
       profile: getUserProfile(g.chatId),
       stage: getStage(g.characterId),
+      scores: getReactionScores(g.chatId),
     };
   } catch (err) {
     console.error("[trace] 새벽 정리 이전 값 읽기 실패:", err);
@@ -323,13 +330,57 @@ const conditionLines = (g: NightlyGathered): string[] =>
     return `${c.name} ${v}/${need} ${c.met ? "찼음" : "안 찼음"}`;
   });
 
-/** 본문의 관계 단계 절. 단계와 문턱은 늘 적고, 넘김·처음·의도는 그 회차에 있을 때만 적는다. */
+const signed = (v: number): string =>
+  v < 0 ? `−${Math.abs(v).toFixed(2)}` : v.toFixed(2);
+
+/** 점수 변화 줄. 표본이 늘어난 플러팅 가운데 가장 많이 오른 3개와 가장 많이 내린 3개를
+ * 적고, 오르거나 내린 것이 없으면 null이다. */
+export const scoreChangeLine = (
+  before: ReactionScoreRow[],
+  after: ReactionScoreRow[],
+): string | null => {
+  const prev = new Map(before.map((r) => [r.move, r]));
+  const changes = after
+    .map((r) => {
+      const p = prev.get(r.move);
+      return {
+        row: r,
+        from: p?.score ?? 0,
+        grew: r.sample_count > (p?.sample_count ?? 0),
+      };
+    })
+    .filter((x) => x.grew && x.row.score !== x.from)
+    .map((x) => ({ ...x, delta: x.row.score - x.from }));
+  const label = (x: (typeof changes)[number]): string =>
+    `${MOVE_NAME[x.row.move]} ${signed(x.from)}→${signed(x.row.score)}`;
+  const up = changes
+    .filter((x) => x.delta > 0)
+    .sort((a, b) => b.delta - a.delta)
+    .slice(0, 3)
+    .map(label);
+  const down = changes
+    .filter((x) => x.delta < 0)
+    .sort((a, b) => a.delta - b.delta)
+    .slice(0, 3)
+    .map(label);
+  if (!up.length && !down.length) return null;
+  return [
+    up.length ? `오름 ${up.join(" · ")}` : "",
+    down.length ? `내림 ${down.join(" · ")}` : "",
+  ]
+    .filter(Boolean)
+    .join(" / ");
+};
+
+/** 본문의 관계 단계 절. 단계와 문턱은 늘 적고, 넘김·처음·점수 변화·의도는 그 회차에 있을 때만
+ * 적는다. */
 const relationStageBlock = (
   g: NightlyGathered,
   out: NightlyOutput,
   snap: NightlySnapshot,
   afterStage: StageRow | undefined,
   firsts: FirstChanges,
+  afterScores: ReactionScoreRow[],
 ): string => {
   const r = g.relation;
   const t = r.threshold;
@@ -365,6 +416,8 @@ const relationStageBlock = (
     lines.push(
       `> 상대가 먼저 한 처음: ${esc(firsts.userAdded.map(firstLabel).join(" / "))}`,
     );
+  const scoreChange = scoreChangeLine(snap.scores, afterScores);
+  if (scoreChange) lines.push(`> 점수 변화: ${esc(scoreChange)}`);
   if (r.confessionDue)
     lines.push(`> 고백 차례 — 오늘 의도에 마음 확인을 넣는 날`);
   const intent = out.extract?.relation?.intent;
@@ -462,6 +515,7 @@ const headText = (
   result: string,
   afterStage: StageRow | undefined,
   firsts: FirstChanges,
+  afterScores: ReactionScoreRow[],
 ): string => {
   const parts: string[] = [
     `:crescent_moon: *${dateLabel(g.diaryDate)} 새벽 정리* · ${clock()}`,
@@ -484,7 +538,7 @@ const headText = (
   const rel = relationshipBlocks(snap.relationship, after);
   if (rel.length)
     parts.push([`*관계 갱신* ${rel.length}항목`, ...rel].join("\n"));
-  parts.push(relationStageBlock(g, out, snap, afterStage, firsts));
+  parts.push(relationStageBlock(g, out, snap, afterStage, firsts, afterScores));
   const prof = profileBlocks(snap.profile, afterProfile);
   if (prof.length)
     parts.push([`*상대 프로필 갱신* ${prof.length}항목`, ...prof].join("\n"));
@@ -785,6 +839,7 @@ export const afterNightlyTrace = (
     const afterProfile = getUserProfile(g.chatId);
     const afterStage = getStage(g.characterId);
     const firsts = firstChangesOf(g);
+    const afterScores = getReactionScores(g.chatId);
     db.transaction(() => {
       recordTraceEvent({
         characterId: g.characterId,
@@ -800,6 +855,7 @@ export const afterNightlyTrace = (
           result,
           afterStage,
           firsts,
+          afterScores,
         ),
       });
       memoryChild(g, out, snap, parentKey);

@@ -44,7 +44,7 @@ yarn dev        # 로컬 기동 (long polling)
 | 영역 | 여기로 오는 변경 | 파일 |
 | --- | --- | --- |
 | 1. 기반과 저장 | 기준값·이름표·시각 계산, 표와 컬럼, 모델 호출 방식 | config, kst, labels, thresholds, db, db/*, llm |
-| 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-canon, tag-pick, user-profile |
+| 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-canon, tag-pick, user-profile, reaction-score |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
 | 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, context/*, prompts/reply, prompts/relationship, turns, reply-signal, reply-ask, reply-compose, reply-promise, user-state, relationship-update, speech-level, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 4개, 크론표 | index, bot, pending, pending-handlers, presence, glance, followup, dispatch, proactive-send |

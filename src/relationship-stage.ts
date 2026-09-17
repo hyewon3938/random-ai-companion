@@ -5,7 +5,7 @@
 // 새벽 정리 수집(gatherRelation)이 DB에서 읽어 그 함수들에 넣는다. 넘길지는 모델이 정한다 —
 // 조건이 다 찬 날에만 묻고, 조건이 찼다고 코드가 자동으로 올리지 않는다.
 //
-// 저장(applyRelationOutput)은 새벽 정리 트랜잭션 안에서 부른다. 순서는 처음 → 단계 → 의도다.
+// 저장(applyRelationOutput)은 새벽 정리 트랜잭션 안에서 부른다. 순서는 처음 → 단계 → 의도 → 반응 점수다.
 // 처음이 먼저인 이유는 3→4가 확정된 마음 확인 처음을 조건으로 해서다. 단계는 문턱이 찼고
 // 모델이 넘기자고 했고 지금 단계가 수집 때와 같을 때만 한 단계 올린다. 두 단계 올리거나
 // 내리는 출력은 여기서 버린다(raiseStage가 한 번 더 막는다).
@@ -14,8 +14,11 @@
 // "마음 확인"은 move를 비우고 move_note에 어떤 자리에서 말할지를 적는다. 답장 프롬프트의
 // 관계 절(context/relationship.ts)이 move 없는 move_note를 그대로 시도할 플러팅 줄로 낸다.
 //
-// 반응 점수 표본 계산은 아직 없다 — 구현 6이 reaction-score.ts를 만들면 gatherRelation이
-// 표본을 세고 applyRelationOutput의 점수 자리에서 저장한다. 지금은 저장된 점수 행만 읽는다.
+// 반응 점수는 reaction-score.ts가 계산한다. 수집은 어제 표본을 저장된 점수에 얹은 값으로 문턱과
+// 추천 목록, 잘 통하는 플러팅을 만들어서, 어제 반응이 오늘 목록에 바로 반영된다. 일기가 이미 있는
+// 날은 저장이 끝났으니 얹지 않는다. 저장은 의도 뒤에 같은 표본을 다시 세어 적는다. 입력에는
+// 플러팅 이름 목록과 문턱 조건의 평균값만 들어가고 플러팅마다의 점수는 넣지 않는다 — 외부
+// 스케줄러가 이 입력을 통째로 읽는다.
 
 import type {
   FirstBy,
@@ -42,9 +45,11 @@ import {
   getRelationshipSignals,
   getStage,
   getUnconfirmedFirsts,
+  hasDiaryOn,
   insertFirst,
   pruneRelationshipIntents,
   raiseStage,
+  saveReactionScore,
   saveRelationshipIntent,
   type FirstRow,
   type ReactionScoreRow,
@@ -53,6 +58,11 @@ import {
 } from "./db.js";
 import { logicalDateOf, shiftDate } from "./kst.js";
 import { STAGE_FIRSTS, openFirsts } from "./context/relationship.js";
+import {
+  applySamples,
+  collectReactionSamples,
+  projectReactionScores,
+} from "./reaction-score.js";
 import {
   MOVE_DROP_SCORE,
   MOVE_EXPLORE_EVERY,
@@ -456,7 +466,16 @@ export const gatherRelation = (
   const yesterdaySignals = signals.filter(
     (s) => s.at >= yesterdayFrom && s.at < yesterdayTo,
   );
-  const scores = getReactionScores(chatId);
+  const stored = getReactionScores(chatId);
+  const scores = hasDiaryOn(characterId, diaryDate)
+    ? stored
+    : projectReactionScores(
+        chatId,
+        characterId,
+        diaryDate,
+        stored,
+        yesterdayTo,
+      );
   const confirmed = getConfirmedFirsts(characterId);
   const pending = getUnconfirmedFirsts(characterId).filter(
     (f) => f.happened_at < yesterdayTo,
@@ -551,6 +570,8 @@ export interface RelationApplied {
   cancelled: FirstKind[];
   userAdded: FirstKind[];
   intentSaved: boolean;
+  /** 어제 반응 표본 수. 표본마다 점수 행 하나를 갱신한다. */
+  scoreSamples: number;
 }
 
 export interface RelationContext {
@@ -580,7 +601,7 @@ const userFirstHappenedAt = (g: RelationContext): string => {
     : `${g.diaryDate} 12:00:00`;
 };
 
-/** 트랜잭션 안에서 부른다. 순서는 처음 → 단계 → 의도. */
+/** 트랜잭션 안에서 부른다. 순서는 처음 → 단계 → 의도 → 반응 점수. */
 export const applyRelationOutput = (
   g: RelationContext,
   out: RelationOutput | null | undefined,
@@ -593,6 +614,7 @@ export const applyRelationOutput = (
     cancelled: [],
     userAdded: [],
     intentSaved: false,
+    scoreSamples: 0,
   };
   const rel = g.relation;
   // 후보 종류에 대한 출력은 by가 무엇이든 그 후보의 판정이다 — 답장이 유저 쪽으로 적어 둔
@@ -695,7 +717,19 @@ export const applyRelationOutput = (
     }
   }
 
-  // 반응 점수 — 구현 6이 표본 계산을 만들면 여기서 saveReactionScore로 적는다.
+  // 반응 점수 — 어제 표본을 다시 세어 점수에 얹고, 표본이 있던 플러팅 행만 적는다. 수집과 같은
+  // 창을 읽어 같은 값이 나온다.
+  const samples = collectReactionSamples(g.chatId, g.characterId, g.diaryDate);
+  const touched = new Set<Move>(samples.map((x) => x.move));
+  for (const row of applySamples(
+    g.chatId,
+    getReactionScores(g.chatId),
+    samples,
+    now,
+  ))
+    if (touched.has(row.move))
+      saveReactionScore(g.chatId, row.move, row.score, row.sample_count, now);
+  r.scoreSamples = samples.length;
 
   return r;
 };

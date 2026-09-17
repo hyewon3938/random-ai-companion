@@ -11,7 +11,7 @@
 | 영역 | 여기로 오는 변경 | 파일 |
 | --- | --- | --- |
 | 1. 기반과 저장 | 기준값·이름표·시각 계산, 표와 컬럼, 모델 호출 방식 | config, kst, labels, thresholds, db, db/*, llm |
-| 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-canon, tag-pick, user-profile |
+| 2. 기억 | 무엇을 저장하고 무엇을 꺼내 쓰는지 | memory, recall, tag-canon, tag-pick, user-profile, reaction-score |
 | 3. 캐릭터의 삶 | 캐릭터 생성, 삶의 큰 흐름, 월 리듬, 하루 각본, 일정 | character, arcs, life-plan, day-plan, schedule-dedupe |
 | 4. 대화 생성 | 무슨 말을 어떤 텀으로 하는지, 오늘 먼저 말을 걸어도 되는지 | context, context/*, prompts/reply, prompts/relationship, turns, reply-signal, reply-ask, reply-compose, reply-promise, user-state, relationship-update, speech-level, reply-timing, proactive-policy |
 | 5. 실행과 발송 | 텔레그램과 주고받기, 예약 발송, 선톡 틱 4개, 크론표 | index, bot, pending, pending-handlers, presence, glance, followup, dispatch, proactive-send |
@@ -26,7 +26,7 @@
 
 > 이 색인은 `node scripts/gen-modules.mjs`가 위 영역 표와 각 파일 맨 위 주석의 첫 줄에서 만든다. 손으로 고치지 않는다. 줄 수는 영역에 든 파일의 합이다.
 
-### 1. 기반과 저장 · 6,517줄
+### 1. 기반과 저장 · 6,604줄
 
 - `src/config.ts` — 환경변수를 한 번 읽어 두는 자리.
 - `src/kst.ts` — 시각을 다루는 자리 — 한국 시간, 논리일 경계, 공휴일 달력.
@@ -46,13 +46,14 @@
 - `src/db/sends.ts` — 예약 발송과 대기 중인 답장 표의 저장 함수.
 - `src/db/trace-events.ts` — 트레이스 표의 저장 함수와 보관 기간.
 
-### 2. 기억 · 1,069줄
+### 2. 기억 · 1,462줄
 
 - `src/memory.ts` — 기억을 저장하고 찾는 자리.
 - `src/recall.ts` — 태그로 찾은 것 중 무엇을 프롬프트에 넣을지 고르고, 넣을 줄을 만드는 자리.
 - `src/tag-canon.ts` — 저장할 태그 이름을 이미 쓰는 이름으로 모으는 자리.
 - `src/tag-pick.ts` — 이번 발화로 무엇을 검색할지 주제 태그를 고르는 자리.
 - `src/user-profile.ts` — 유저 프로필을 프롬프트 한 덩이로 만드는 자리.
+- `src/reaction-score.ts` — 반응 점수 — 플러팅을 쓴 답장마다 유저의 첫 턴으로 표본을 매기고, 대화방·플러팅별 점수를 지수 이동 평균으로 갱신한다.
 
 ### 3. 캐릭터의 삶 · 1,988줄
 
@@ -94,7 +95,7 @@
 - `src/dispatch.ts` — 아침·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 - `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
-### 6. 새벽 정리 · 3,502줄
+### 6. 새벽 정리 · 3,593줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 - `src/relationship-stage.ts` — 관계 단계 전이 — 어제까지의 값을 세어 문턱을 재고, 모델의 결정을 받아 단계·처음·의도를 저장한다.
@@ -273,11 +274,11 @@ V3(관계를 쌓는 캐릭터, 이슈 #326)의 새 파일과 고치는 파일이
 | 영역 | 새 파일 | 고치는 파일 |
 | --- | --- | --- |
 | 1. 기반과 저장 | | thresholds.ts에 자리 비움 하루 2 |
-| 2. 기억 | reaction-score.ts (표본 계산, 갱신) | |
+| 2. 기억 | | |
 | 3. 캐릭터의 삶 | | |
 | 4. 대화 생성 | | proactive-policy.ts 근거 종류와 단계별 상한 |
 | 5. 실행과 발송 | glance.ts (틈새 한 줄, 이슈 #339로 먼저 만듦) | followup.ts 의도 선톡, presence.ts 복귀 문안 |
-| 6. 새벽 정리 | | relationship-stage.ts 반응 점수 저장, nightly-trace.ts 관계 절에 점수 줄 |
+| 6. 새벽 정리 | | |
 | 7. 관측과 운영 | tools/relationship-view.ts (단계·처음·점수 확인) | |
 
 db/relationship.ts는 저장 함수만 갖고 정책은 갖지 않는다. 단계를 줄이는 저장을 거부하는 검사는 origin=creation 행의 수정 거부와 같은 자리이므로 저장 함수 안에 둔다. 반응 점수의 계산은 2번 영역이 맡고, 6번의 새벽 정리가 그 함수를 불러 쓴다. 시도할 플러팅 추천 목록과 잘 통하는 플러팅 목록은 단계마다 열리는 플러팅의 표를 읽어야 해서 6번의 relationship-stage.ts에 두었다.
