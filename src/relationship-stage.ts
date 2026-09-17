@@ -16,9 +16,10 @@
 //
 // 반응 점수는 reaction-score.ts가 계산한다. 수집은 어제 표본을 저장된 점수에 얹은 값으로 문턱과
 // 추천 목록, 잘 통하는 플러팅을 만들어서, 어제 반응이 오늘 목록에 바로 반영된다. 일기가 이미 있는
-// 날은 저장이 끝났으니 얹지 않는다. 저장은 의도 뒤에 같은 표본을 다시 세어 적는다. 입력에는
-// 플러팅 이름 목록과 문턱 조건의 평균값만 들어가고 플러팅마다의 점수는 넣지 않는다 — 외부
-// 스케줄러가 이 입력을 통째로 읽는다.
+// 날은 저장이 끝났으니 얹지 않는다. 저장은 의도 뒤에 같은 표본을 다시 세어 적는다. 모델이 읽는
+// 입력에는 점수 숫자를 넣지 않는다. 플러팅은 이름 목록으로만 들어가고, 2→3 문턱의 점수 평균은
+// 수집 결과에 숫자로 남아 슬랙 트레이스가 쓰지만 기억 정리 프롬프트(relationSection)와 외부
+// 스케줄러가 읽는 출력(nightly-read)은 thresholdForModel을 거쳐 표본이 있는지와 찼는지만 받는다.
 
 import type {
   FirstBy,
@@ -222,6 +223,20 @@ export interface ThresholdCondition {
   /** 기준값. 예·아니오 조건은 true다. */
   need: number | boolean;
   met: boolean;
+  /** 반응 점수 조건. 모델이 읽는 입력에서는 값과 기준을 빼고 표본이 있는지와 찼는지만 둔다. */
+  score?: true;
+}
+
+/** 모델이 읽는 문턱 조건. 반응 점수 조건은 숫자 없이 표본이 있는지(sampled)와 찼는지만 있다. */
+export type ModelThresholdCondition =
+  | Omit<ThresholdCondition, "score">
+  | { key: string; name: string; sampled: boolean; met: boolean };
+
+export interface ModelStageThreshold extends Omit<
+  StageThreshold,
+  "conditions"
+> {
+  conditions: ModelThresholdCondition[];
 }
 
 export interface StageThreshold {
@@ -281,12 +296,15 @@ export const evaluateThreshold = (
           c.askedCharDays,
           STAGE_2_TO_3.askedCharDays,
         ),
-        atLeast(
-          "stage_move_avg",
-          "2단계에서 열린 플러팅의 반응 점수 평균",
-          round2(c.stageMoveAvg),
-          STAGE_2_TO_3.moveAvgMin,
-        ),
+        {
+          ...atLeast(
+            "stage_move_avg",
+            "2단계에서 열린 플러팅의 반응 점수 평균",
+            round2(c.stageMoveAvg),
+            STAGE_2_TO_3.moveAvgMin,
+          ),
+          score: true,
+        },
         atLeast(
           "affection_count",
           "유저 쪽 호감 표현",
@@ -316,6 +334,19 @@ export const evaluateThreshold = (
     conditions,
   };
 };
+
+/** 모델이 읽는 문턱. 반응 점수 조건의 값과 기준을 뺀다 — 숫자를 보면 모델이 점수를 말하거나 올리려는
+ * 티를 내고 표본이 적을 때 값을 과신해서다(relationship.md §6). 슬랙 트레이스는 원래 문턱을 쓴다. */
+export const thresholdForModel = (t: StageThreshold): ModelStageThreshold => ({
+  from: t.from,
+  to: t.to,
+  met: t.met,
+  conditions: t.conditions.map((c) =>
+    c.score
+      ? { key: c.key, name: c.name, sampled: c.value !== null, met: c.met }
+      : { key: c.key, name: c.name, value: c.value, need: c.need, met: c.met },
+  ),
+});
 
 /** 3단계에서 사건 없이 오래 머물면 캐릭터의 고백을 오늘의 의도에 넣는다. 10일이 지나고 점수가
  * 양수이거나, 점수와 무관하게 20일이 지난 날이다. */
@@ -409,6 +440,14 @@ export interface NightlyRelation {
   yesterdayMoves: NightlyYesterdayMove[];
   confessionDue: boolean;
 }
+
+/** 봇 밖 새벽 정리가 읽는 관계 절. 문턱만 thresholdForModel로 바꾼다. */
+export const relationForModel = (
+  r: NightlyRelation,
+): Omit<NightlyRelation, "threshold"> & { threshold: ModelStageThreshold } => ({
+  ...r,
+  threshold: thresholdForModel(r.threshold),
+});
 
 const parseMeta = (json: string | null): Record<string, unknown> => {
   if (!json) return {};

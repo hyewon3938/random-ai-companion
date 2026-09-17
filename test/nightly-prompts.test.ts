@@ -242,6 +242,36 @@ test("relationSection은 문턱 조건·처음·추천 플러팅을 이름 붙�
   assert.ok(s.includes("yesterday_intent(어제 의도): 파고들 것: 러닝 얘기"));
   assert.ok(s.includes("confession_due(고백 차례): 아니오"));
 
+  // 반응 점수 평균은 숫자와 기준 없이 찼는지만 적는다
+  const scored = relationSection({
+    ...g.relation,
+    stageNo: 2,
+    threshold: {
+      from: 2,
+      to: 3,
+      met: false,
+      conditions: [
+        { key: "stage_move_avg", name: "플러팅 반응 점수 평균", value: 0.37, need: 0, met: true, score: true },
+        { key: "asked_char_days", name: "근황을 물은 날", value: 1, need: 3, met: false },
+      ],
+    },
+  });
+  assert.ok(scored.includes("2→3, 안 찼음 — 플러팅 반응 점수 평균 찼음, 근황을 물은 날 1/3 안 찼음"));
+  assert.ok(!scored.includes("0.37"));
+  const unsampled = relationSection({
+    ...g.relation,
+    threshold: {
+      from: 2,
+      to: 3,
+      met: false,
+      conditions: [
+        { key: "stage_move_avg", name: "플러팅 반응 점수 평균", value: null, need: 0, met: false, score: true },
+      ],
+    },
+  });
+  assert.ok(unsampled.includes("플러팅 반응 점수 평균 표본 없음 안 찼음"));
+  assert.ok(!unsampled.includes("/0"));
+
   const p = extractPrompt(g);
   assert.ok(p.includes("[관계 단계 — 코드가 센 값]\n" + s));
   assert.ok(p.includes('"relation":{"advance":{"go":true,"basis":"근거 한 줄"}|null'));
