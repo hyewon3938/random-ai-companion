@@ -5,7 +5,8 @@
 // 문안만 고친 커밋의 diff가 순서 코드와 섞이지 않는다(#298).
 //
 // 관계 절(relationSection)은 수집이 센 단계·문턱 조건·처음 후보·시도할 플러팅 후보를 기억 정리
-// 프롬프트에 적어 모델이 다시 세지 않게 하고, 아침 선톡 상황 문단은 그날의 관계 의도
+// 프롬프트에 적어 모델이 다시 세지 않게 한다. 2→3 문턱의 반응 점수 평균은 숫자와 기준 없이 찼는지만
+// 적는다(relationship.md §6, 조건의 score 표시). 아침 선톡 상황 문단은 그날의 관계 의도
 // (MorningIntent)를 받아 intentSummary가 만든 한 줄을 엮을 후보에 넣는다(#355).
 //
 // 유저와는 메시지로만 이어진 사이라 관계 의도 네 줄에 유저와 만나는 자리는 적지 않는다. 대화에서
@@ -179,13 +180,14 @@ export const intentSummary = (i: MorningIntent | null | undefined): string => {
 };
 
 /** 기억 정리 프롬프트의 관계 단계 절 — 코드가 센 값과 모델이 고를 목록. 줄 앞의 영문은 출력
- * 규칙이 가리키는 이름이다. */
+ * 규칙이 가리키는 이름이다. 반응 점수 조건은 숫자 없이 찼는지만 적는다. */
 export const relationSection = (r: NightlyRelation): string => {
   const t = r.threshold;
   const conditions = t.conditions
-    .map(
-      (c) =>
-        `${c.name} ${c.value === null ? "표본 없음" : typeof c.value === "boolean" ? (c.value ? "있음" : "없음") : c.value}/${typeof c.need === "boolean" ? "있음" : c.need} ${c.met ? "찼음" : "안 찼음"}`,
+    .map((c) =>
+      c.score
+        ? `${c.name} ${c.value === null ? "표본 없음 " : ""}${c.met ? "찼음" : "안 찼음"}`
+        : `${c.name} ${c.value === null ? "표본 없음" : typeof c.value === "boolean" ? (c.value ? "있음" : "없음") : c.value}/${typeof c.need === "boolean" ? "있음" : c.need} ${c.met ? "찼음" : "안 찼음"}`,
     )
     .join(", ");
   const threshold =

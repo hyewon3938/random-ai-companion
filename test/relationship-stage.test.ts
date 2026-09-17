@@ -44,6 +44,8 @@ const {
   isExploreDay,
   moveCandidates,
   rapportMoves,
+  relationForModel,
+  thresholdForModel,
 } = await import("../src/relationship-stage.js");
 const { STAGE_1_TO_2, STAGE_2_TO_3 } = await import("../src/thresholds.js");
 
@@ -165,6 +167,67 @@ test("2→3 문턱은 표본이 없는 플러팅 평균을 미충족으로 두�
     rounded.conditions.find((c) => c.key === "stage_move_avg")?.value,
     0.12,
   );
+});
+
+test("모델이 읽는 문턱은 반응 점수 평균의 값과 기준을 빼고 다른 조건의 숫자는 둔다", () => {
+  const base = counts({
+    stayDays: STAGE_2_TO_3.stayDays,
+    askedCharDays: 3,
+    affectionCount: 1,
+  });
+  const raw = evaluateThreshold(2, { ...base, stageMoveAvg: 0.4567 });
+  // 슬랙 트레이스가 읽는 원래 문턱에는 숫자가 남는다
+  assert.equal(
+    raw.conditions.find((c) => c.key === "stage_move_avg")?.value,
+    0.46,
+  );
+  const model = thresholdForModel(raw);
+  assert.equal(model.met, raw.met);
+  assert.deepEqual(
+    model.conditions.find((c) => c.key === "stage_move_avg"),
+    {
+      key: "stage_move_avg",
+      name: "2단계에서 열린 플러팅의 반응 점수 평균",
+      sampled: true,
+      met: true,
+    },
+  );
+  assert.deepEqual(model.conditions.find((c) => c.key === "stay_days"), {
+    key: "stay_days",
+    name: "체류 일수",
+    value: STAGE_2_TO_3.stayDays,
+    need: STAGE_2_TO_3.stayDays,
+    met: true,
+  });
+  const none = thresholdForModel(evaluateThreshold(2, base));
+  assert.deepEqual(
+    none.conditions.find((c) => c.key === "stage_move_avg"),
+    {
+      key: "stage_move_avg",
+      name: "2단계에서 열린 플러팅의 반응 점수 평균",
+      sampled: false,
+      met: false,
+    },
+  );
+
+  const rel = {
+    stageNo: 2,
+    stageSince: "2026-09-01",
+    stayDays: STAGE_2_TO_3.stayDays,
+    threshold: raw,
+    firstsDone: [],
+    firstsOpen: [],
+    firstsPending: [],
+    moveCandidates: ["nickname"],
+    rapportMoves: ["nickname"],
+    yesterdayIntent: null,
+    yesterdayMoves: [],
+    confessionDue: false,
+  } satisfies NightlyRelation;
+  const json = JSON.stringify(relationForModel(rel));
+  assert.ok(!json.includes("0.46"));
+  assert.ok(json.includes('"sampled":true'));
+  assert.equal(relationForModel(rel).moveCandidates, rel.moveCandidates);
 });
 
 test("3→4는 마음 확인 사건 하나로 정해지고 4단계는 다음 문턱이 없다", () => {

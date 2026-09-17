@@ -371,3 +371,41 @@ export const RAPPORT_MOVE_SCORE = 0.3;
 /** 탐색일 주기. 날짜 일련번호가 이 값으로 나누어떨어지는 날은 표본이 가장 적은 플러팅을 추천
  * 맨 앞에 둔다 — 점수가 좋은 플러팅만 되풀이해 나머지 플러팅의 표본이 영영 안 모이는 것을 막는다. */
 export const MOVE_EXPLORE_EVERY = 5;
+
+// ── 반응 점수 — relationship.md 「반응 점수」가 원본 ──────────────────────────
+// 표본 계산과 갱신은 reaction-score.ts에 있다. 여기는 값만 둔다.
+
+/** 신호 7개의 가중치. 합이 1이라 표본 값은 −1에서 +1 사이다. */
+export const REACTION_WEIGHTS = {
+  speed: 0.15,
+  length: 0.15,
+  laugh: 0.15,
+  ask: 0.15,
+  follow: 0.1,
+  state: 0.1,
+  move: 0.2,
+} as const;
+
+/** 플러팅을 쓴 답장 뒤 이 시간 안에, 같은 논리일 안에 온 유저 턴만 그 답장의 반응으로 센다. */
+export const REACTION_REPLY_WINDOW_MS = 6 * 3_600_000;
+
+/** 평소 답장 간격과 글자 수 중앙값을 재는 날 수(일기 날짜 포함)와, 속도·길이 신호를 매기는 데 필요한
+ * 유저 턴 수. 턴이 이만큼 안 되면 두 신호는 0이다. */
+export const REACTION_BASELINE_DAYS = 14;
+export const REACTION_BASELINE_MIN = 20;
+
+/** 답장 속도 — 간격이 중앙값의 fast배 안이면 +1, slow배를 넘으면 −1. */
+export const REACTION_SPEED = { fast: 0.5, slow: 2 } as const;
+
+/** 답장 길이 — 글자 수가 중앙값의 long배를 넘으면 +1, short배 아래면 −1. */
+export const REACTION_LENGTH = { long: 1.5, short: 0.5 } as const;
+
+/** 웃음 표기 — ㅋ·ㅎ을 합쳐 이만큼 이상이면 +1. */
+export const REACTION_LAUGH_MIN = 2;
+
+/** 이어진 턴 수 — 첫 답부터 이 시간 안의 유저 메시지가 min건 이상이면 +1. */
+export const REACTION_FOLLOW = { windowMs: 30 * 60_000, min: 3 } as const;
+
+/** 지수 이동 평균의 α. 표본 수가 earlySamples 미만이면 early, 그 뒤는 late다. 처음 몇 표본은
+ * 크게 움직여 초기값 0에서 빨리 벗어나게 한다. */
+export const REACTION_ALPHA = { early: 0.5, late: 0.3, earlySamples: 3 } as const;

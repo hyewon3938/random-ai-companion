@@ -215,6 +215,24 @@ export const getMessagesBetween = (
     text: string;
   }[];
 
+/** 한 창의 대화를 번호와 meta_json까지 보낸 순서로. 반응 점수가 플러팅을 쓴 답장과 그 뒤 유저 턴을
+ * 잇는다. from은 포함, to는 제외한다. */
+export const getMessageRowsBetween = (
+  chatId: string,
+  characterId: number,
+  from: string,
+  to: string,
+): (MessageRow & { meta_json: string | null })[] =>
+  db
+    .prepare(
+      `SELECT id, role, text, sent_at, meta_json FROM messages
+        WHERE chat_id = ? AND character_id = ? AND sent_at >= ? AND sent_at < ?
+        ORDER BY id`,
+    )
+    .all(chatId, characterId, from, to) as (MessageRow & {
+    meta_json: string | null;
+  })[];
+
 export const hasMessageBetween = (
   chatId: string,
   characterId: number,

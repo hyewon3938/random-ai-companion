@@ -1013,8 +1013,9 @@ const applyNightlyTxn = db.transaction(
       for (const r of out.rhythm)
         if (r.ym) applyMonthPlan(g.characterId, r.ym, r);
 
-    // 관계 — 처음 확정과 취소, 단계 전이, 오늘의 관계 의도. 관계 절이 없는 회차에도 부른다:
-    // 어제 답장이 표시한 처음 후보는 모델이 안 봤어도 확정으로 둔다. 순서와 검사는
+    // 관계 — 처음 확정과 취소, 단계 전이, 오늘의 관계 의도, 반응 점수. 관계 절이 없는 회차에도
+    // 부른다: 어제 답장이 표시한 처음 후보는 모델이 안 봤어도 확정으로 두고, 어제 표본은 모델
+    // 출력과 상관없이 점수에 얹는다. 순서와 검사는
     // relationship-stage.ts에 있다.
     const rel = applyRelationOutput(g, ex?.relation ?? null, ts);
     if (rel.advanceRejected)
@@ -1060,7 +1061,7 @@ const applyNightlyTxn = db.transaction(
       (relNow.user_state_since ?? "") < `${nextDate(g.diaryDate)} 05:00:00`;
     if (stateCleared) setUserState(g.characterId, null);
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${canon.size ? `, 새 태그 이름 ${canon.size}개는 기존 이름으로` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.advanceRejected ? `, 단계 전이 건너뜀(${rel.advanceRejected})` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${workFactCount ? ` + 작품 카드 ${workFactCount}건` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${canon.size ? `, 새 태그 이름 ${canon.size}개는 기존 이름으로` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.advanceRejected ? `, 단계 전이 건너뜀(${rel.advanceRejected})` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${rel.scoreSamples ? `, 반응 표본 ${rel.scoreSamples}건` : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${workFactCount ? ` + 작품 카드 ${workFactCount}건` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 

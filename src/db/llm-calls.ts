@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { db } from "./connection.js";
 import { getKstNow, kstDateString, kstLogicalDate } from "../kst.js";
+import type { UserStateCause, UserStateTone } from "../labels.js";
 
 // LLM 사용량을 논리일×모델 단위로 누적한다 — 캐시 절감이 실제로 작동하는지 로그를 뒤지지 않고
 // DB 질의 한 줄로 확인할 수 있게(cache_read가 input보다 훨씬 크게 유지되는 것이 정상 상태).
@@ -134,6 +135,36 @@ export const setCallContext = (callId: number, context: unknown): void => {
     callId,
   );
 };
+
+/** 한 캐릭터의 상대 상태 판정 가운데 상태를 바꾼 호출. 반응 점수가 턴마다 그때의 tone과 원인을
+ * 읽는다. from은 포함, to는 제외하고 호출 순서로 돌려준다. */
+export const getUserStateChanges = (
+  characterId: number,
+  from: string,
+  to: string,
+): {
+  id: number;
+  created_at: string;
+  tone: UserStateTone | null;
+  cause: UserStateCause | null;
+}[] =>
+  db
+    .prepare(
+      `SELECT id, created_at,
+              json_extract(context_json, '$.userState.state.tone') AS tone,
+              json_extract(context_json, '$.userState.state.cause') AS cause
+         FROM llm_calls
+        WHERE purpose = 'user_state' AND character_id = ?
+          AND created_at >= ? AND created_at < ?
+          AND json_extract(context_json, '$.userState.changed') = 1
+        ORDER BY id`,
+    )
+    .all(characterId, from, to) as {
+    id: number;
+    created_at: string;
+    tone: UserStateTone | null;
+    cause: UserStateCause | null;
+  }[];
 
 // 본문 보관 기간. 지나면 본문을 가리키는 해시와 판단 근거를 지우고 메타(언제·무슨 호출·
 // 토큰·지연)만 남긴다 — 본문에는 실제 대화가 통째로 들어 있어 오래 들고 있을 것이 아니고,
