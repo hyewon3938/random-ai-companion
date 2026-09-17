@@ -594,10 +594,6 @@ export const yesterdayIntentLines = (
   return [...out];
 };
 
-/**
- * 오늘의 의도 행에서 문안에 넣을 줄 하나. 값이 있고 아직 안 쓴 줄 가운데 어제 의도 선톡이
- * 안 쓴 앞선 것이고, 그런 줄이 없으면 어제 쓴 줄 가운데 앞선 것이다.
- */
 export interface IntentLineSource {
   dig?: string | null;
   share?: string | null;
@@ -606,6 +602,10 @@ export interface IntentLineSource {
   thread?: string | null;
 }
 
+/**
+ * 오늘의 의도 행에서 문안에 넣을 줄 하나. 값이 있고 아직 안 쓴 줄 가운데 어제 의도 선톡이
+ * 안 쓴 앞선 것이고, 그런 줄이 없으면 어제 쓴 줄 가운데 앞선 것이다.
+ */
 export const pickIntentLine = (
   intent: IntentLineSource | null,
   stage: RelationshipStage,
