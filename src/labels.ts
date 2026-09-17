@@ -291,6 +291,15 @@ export const INTENT_LINE_NAME: Record<IntentLine, string> = {
   thread: "이어갈 자리",
 };
 
+/** 슬랙 게시에 적는 의도 줄 이름 — 대화 계획 게시, 선톡 근거 줄, 답장 게시의 관계 줄이 함께 쓴다.
+ * 모델 프롬프트는 위 INTENT_LINE_NAME을 그대로 쓰고, 사람이 읽는 게시만 이 이름으로 적는다. */
+export const PLAN_LINE_NAME: Record<IntentLine, string> = {
+  dig: "더 물어볼 것",
+  share: "먼저 꺼낼 내 이야기",
+  move: "시도할 플러팅",
+  thread: "이어서 할 이야기",
+};
+
 /** 캐릭터가 먼저 거는 연락의 종류. 발송 쪽 이름표(bot.ts의 SendKind)는 여기에 답장과 복구를
  * 더한 것이고, 하루 예산과 근거 판정(proactive-policy.ts)은 이 목록만 본다. */
 export type ProactiveKind =

@@ -18,9 +18,9 @@ import {
   ACTIVITY_CATEGORY_NAME,
   FIRST_BY_NAME,
   FIRST_KIND_NAME,
-  INTENT_LINE_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
+  PLAN_LINE_NAME,
   RESPONSIVENESS_NAME,
   SPEECH_LEVEL_NAME,
   toActivityCategory,
@@ -507,7 +507,7 @@ const outcomeLines = (ctx: CallContext): string[] => {
     if (r.intentLines?.length)
       parts.push(
         `쓴 의도 줄 ${r.intentLines
-          .map((l) => INTENT_LINE_NAME[l] ?? l)
+          .map((l) => PLAN_LINE_NAME[l] ?? l)
           .join("·")}`,
       );
     if (r.first)
