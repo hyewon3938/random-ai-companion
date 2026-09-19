@@ -18,17 +18,28 @@
 // 관계 행에는 일곱 항목 밖에 상대의 오늘 상태 칸도 있다(이슈 #309). 이 값은 답장마다 판정
 // 호출(user-state)이 정하고 여기의 applyUserState가 바뀐 것만 적는다. 실시간 꼬리에 실리는
 // 값이라 캐시를 건드리지 않고, 새벽 정리가 읽은 뒤 비운다.
+//
+// 캐릭터의 오늘 생긴 마음 칸 넷(이슈 #473)도 같은 판정 호출이 정하고 applyMind가 적는다. 종류와
+// 세기가 저장된 값과 같으면 쓰지 않고, 종류가 바뀐 턴에만 생긴 시각을 지금으로 적는다 — 세기만
+// 바뀌었으면 생긴 시각은 그대로다. 평소(none)로 판정되면 네 칸을 모두 비운다. 상대 상태처럼
+// 실시간 꼬리에 실리는 값이고 새벽 정리가 비운다.
 
 import { currentSpeechLevel } from "./speech-level.js";
 import {
   getRelationship,
+  setMind,
   setSpeechLevel,
   setUserState,
   updateRelationshipNotes,
   type RelationshipNotes,
 } from "./db.js";
 import type { ReplySignals } from "./reply-signal.js";
-import { userStateLabel, type UserStateVerdict } from "./user-state.js";
+import {
+  userStateLabel,
+  type MindVerdict,
+  type UserStateVerdict,
+} from "./user-state.js";
+import { mindLabel, storedMind } from "./context/mind.js";
 import { logicalDateOf } from "./kst.js";
 
 /** 관계 한 항목이 실제로 바뀐 기록. 트레이스의 *관계 갱신* 줄이 이 모양을 읽는다. */
@@ -136,4 +147,33 @@ export const applyUserState = (
       today,
     ) ?? next.state;
   return [{ field: "상대 상태", from, to }];
+};
+
+/**
+ * 캐릭터 마음 판정을 반영한다. 판정을 못 받았거나 모델이 그대로라고 했으면 건드리지 않고, 종류와
+ * 세기가 저장된 값과 같으면 이유가 달라도 쓰지 않는다. 생긴 시각은 종류가 바뀐 턴에만 now로 적고
+ * 세기만 바뀌었으면 저장된 시각을 그대로 둔다. 평소로 바뀌면 네 칸을 비운다. 프롬프트를 조립하기
+ * 전에 불러야 이번 답장이 바뀐 마음을 읽는다.
+ */
+export const applyMind = (
+  characterId: number,
+  mind: MindVerdict | undefined,
+  now: string,
+): RelChange[] => {
+  if (!mind?.changed) return [];
+  const prev = storedMind(getRelationship(characterId));
+  const from = prev ? mindLabel(prev) : null;
+  if (!mind.kind || !mind.level) {
+    if (!prev) return [];
+    setMind(characterId, null);
+    return [{ field: "캐릭터 마음", from, to: "없음" }];
+  }
+  if (prev && prev.kind === mind.kind && prev.level === mind.level) return [];
+  const next = { kind: mind.kind, level: mind.level };
+  setMind(characterId, {
+    ...next,
+    reason: mind.reason ?? "",
+    since: prev?.kind === mind.kind ? prev.since : now,
+  });
+  return [{ field: "캐릭터 마음", from, to: mindLabel(next) }];
 };

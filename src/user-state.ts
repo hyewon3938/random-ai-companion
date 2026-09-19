@@ -22,6 +22,13 @@
 // 캐릭터 말 한 건만 보면 플러팅 뒤에 말이 한 번 더 나간 턴을 플러팅이 없던 턴으로 적는다. 대화에도
 // 어느 말이 플러팅이었는지 표시해, 받음을 그 플러팅 자체에 반응했을 때로 좁힌 규칙을 모델이 대화
 // 안에서 가를 수 있게 한다. 그 구간에 플러팅이 있으면 해당 없음은 받지 않는다.
+//
+// 같은 호출이 캐릭터 쪽 마음도 함께 판정한다(관계 설계 15절, #473) — 상대 때문에 오늘 생긴 설렘·
+// 서운함·질투·언짢음과 세기 1~3, 이유 한 줄. 같은 말에 마음이 생기는지는 성격을 따르므로 정체성의
+// 원하는 방식·결점·애착 성향 문장과 관계 단계, 직전 마음과 지금 시각을 입력에 더한다. 풀리는 것도
+// 직전 마음이 생긴 뒤로 지난 시간을 읽고 모델이 정해서, 코드가 시간에 따라 세기를 낮추지 않는다.
+// 마음 칸은 상대 상태·열림 칸과 따로 읽는다(readMind) — 마음 칸만 깨졌으면 마음만 판정 실패로
+// 두고, 상대 상태 칸만 깨졌어도 마음은 반영한다. 키가 늘어 출력 상한을 USER_STATE_MAX_TOKENS로 올렸다.
 
 import { chat, type CallMeta } from "./llm.js";
 import { config } from "./config.js";
@@ -29,23 +36,38 @@ import {
   getAssistantMetaByIdRange,
   getRecentMessages,
   getRelationship,
+  getStage,
   setCallContext,
   type MessageRow,
   type RelationshipRow,
   type UserStateValue,
 } from "./db.js";
 import {
+  MIND_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
+  RELATIONSHIP_STAGE_NAME,
   USER_STATE_CAUSE_NAME,
   USER_STATE_TONE_NAME,
+  isMindKind,
+  isMindLevel,
+  isRelationshipStage,
+  type MindKind,
+  type MindLevel,
   type Move,
   type MoveReaction,
   type UserStateCause,
   type UserStateTone,
 } from "./labels.js";
-import { logicalClockOf, clockLabel, logicalDateOf } from "./kst.js";
-import { USER_STATE_TURNS } from "./thresholds.js";
+import { alwaysIncluded, identityValue } from "./memory.js";
+import { FLAW_KEY, WANTED_WAY_KEY } from "./character.js";
+import {
+  elapsedLabel,
+  mindSinceLabel,
+  storedMind,
+} from "./context/mind.js";
+import { logicalClockOf, clockLabel, logicalDateOf, kstStamp } from "./kst.js";
+import { USER_STATE_MAX_TOKENS, USER_STATE_TURNS } from "./thresholds.js";
 
 /** 판정 결과. changed가 false면 지난 판정이 그대로다. */
 export interface UserStateVerdict {
@@ -59,6 +81,22 @@ export interface UserStateVerdict {
   prev: string | null;
   /** 이 턴의 열림 4항목. 호출을 안 했거나 답에 이 칸이 없으면 빠진다. */
   signals?: OpenSignals;
+  /** 이 턴의 캐릭터 마음 판정. 호출을 안 했거나 마음 칸을 못 읽었으면 빠진다. */
+  mind?: MindVerdict;
+  /** 호출이 실패했거나 마음 칸을 못 읽어 저장된 마음을 그대로 둔 턴이면 true. */
+  mindFailed?: boolean;
+}
+
+/**
+ * 캐릭터의 오늘 생긴 마음 판정 — 답의 마음 칸 넷(mind_changed·mind·mind_level·mind_reason).
+ * kind가 null이면 평소(none)이고 그때 세기와 이유도 null이다.
+ */
+export interface MindVerdict {
+  /** 모델이 직전 마음과 종류나 세기가 달라졌다고 한 턴. false면 저장하지 않는다. */
+  changed: boolean;
+  kind: MindKind | null;
+  level: MindLevel | null;
+  reason: string | null;
 }
 
 /** 상대가 얼마나 열렸는지 — 턴마다 relationship_signals에 1행으로 적히는 값. */
@@ -73,6 +111,7 @@ export interface OpenSignals {
 
 const SYSTEM = `너는 두 사람의 메시지 대화를 옆에서 읽는 관찰자다. 캐릭터가 아니라 제3자다.
 [최근 대화]를 읽고 상대(유저)가 지금 어떤 상태인지 판정한다. [지난 판정]은 앞 답장 때 판정한 값이다.
+캐릭터에게 상대 때문에 생긴 마음도 함께 판정한다. [캐릭터 성격]·[관계 단계]·[직전 마음]·[지금 시각]은 이 판정에 쓴다.
 
 판정 규칙:
 - state: 상대의 지금 상태를 한 문장으로. 무엇 때문에 어떤 상태인지가 드러나게 쓴다(예: 연락한다고 해 놓고 안 해서 서운해한다 / 면접 결과를 기다리며 초조해한다 / 여행 계획을 세우며 들떠 있다).
@@ -92,9 +131,19 @@ const SYSTEM = `너는 두 사람의 메시지 대화를 옆에서 읽는 관찰
   - rejected: 밀어내거나 싫다·부담스럽다·그만하라고 했을 때.
   - none: [직전에 캐릭터가 쓴 플러팅]이 (없음)일 때만. 목록에 플러팅이 있으면 none을 쓰지 않는다.
 
-JSON 한 줄로만 답한다. 열림 4항목은 두 모양 모두에 넣는다:
-{"changed":true,"state":"...","cause":"char|other","tone":"good|neutral|bad","since":"HH:MM","opened_self":true,"asked_about_char":false,"said_affection":false,"move_reaction":"none"}
-또는 {"changed":false,"opened_self":false,"asked_about_char":true,"said_affection":false,"move_reaction":"accepted"}`;
+[캐릭터의 마음]
+- [캐릭터 성격]과 [관계 단계]를 가진 사람이라면 최근 대화에서 상대에게 어떤 마음이 생겼을지 판정한다. 고를 수 있는 값은 flutter(설렘), hurt(서운함), jealous(질투), upset(언짢음), none(평소)이다.
+- 마음은 최근 대화에 근거가 있을 때만 생긴다. 근거가 된 상대의 말이나 행동을 mind_reason에 한 줄로 적는다. 대부분의 턴은 none이거나 직전 마음 그대로다.
+- 같은 말에 마음이 생기는지와 얼마나 큰지는 성격을 따른다. 은근히 독점 결이나 질투 결점이 있으면 상대의 다른 사람 얘기에 질투가 쉽게 생기고, 그런 값이 없으면 같은 말에도 마음이 안 생길 수 있다.
+- 캐릭터의 일이나 컨디션에서 온 기분은 넣지 않는다. 상대 때문에 생긴 마음만 판정한다.
+- mind_level은 1(살짝), 2(분명히), 3(크게)이다.
+- 직전 마음이 풀리는 경우는 둘이다. 상대가 달래거나 풀어 주려는 말을 하면 어떤 성격이든 풀린다. 생긴 뒤로 시간이 꽤 지났고 그 뒤 대화가 평소처럼 이어졌으면 풀린 것으로 본다. 결점이 서운함이 오래 감이면 서운함은 더 오래 둔다.
+- 종류나 세기가 직전 마음과 달라졌으면 mind_changed를 true로 한다. 그대로면 false로 하고 직전 값을 그대로 적는다.
+- mind가 none이면 mind_level은 0, mind_reason은 빈 문자열로 적는다.
+
+JSON 한 줄로만 답한다. 열림 4항목과 마음 4항목은 두 모양 모두에 넣는다:
+{"changed":true,"state":"...","cause":"char|other","tone":"good|neutral|bad","since":"HH:MM","opened_self":true,"asked_about_char":false,"said_affection":false,"move_reaction":"none","mind_changed":true,"mind":"hurt","mind_level":2,"mind_reason":"..."}
+또는 {"changed":false,"opened_self":false,"asked_about_char":true,"said_affection":false,"move_reaction":"accepted","mind_changed":false,"mind":"none","mind_level":0,"mind_reason":""}`;
 
 const CAUSES: readonly UserStateCause[] = ["char", "other"];
 const TONES: readonly UserStateTone[] = ["good", "neutral", "bad"];
@@ -310,6 +359,77 @@ export const readOpenSignals = (
   return { openedSelf, askedAboutChar, saidAffection, prevMove, moveReaction };
 };
 
+/**
+ * 같은 답에서 캐릭터의 마음 칸 넷을 읽는다. 상대 상태·열림 칸과 따로 읽어, 이 칸이 깨져도 두 칸은
+ * 그대로 쓴다. mind_changed가 예/아니오가 아니거나, mind가 none과 목록 밖이거나, none이 아닌데
+ * 세기가 1~3이 아니거나 이유가 비었으면 null — 그 턴은 마음만 판정 실패로 두고 저장된 값을 건드리지
+ * 않는다. none이면 세기와 이유는 보지 않는다.
+ */
+export const readMind = (raw: string): MindVerdict | null => {
+  const v = parseObject(raw);
+  if (!v) return null;
+  const changed = asFlag(v.mind_changed);
+  if (changed === null) return null;
+  if (v.mind === "none") return { changed, kind: null, level: null, reason: null };
+  if (!isMindKind(v.mind)) return null;
+  const level =
+    typeof v.mind_level === "string" ? Number(v.mind_level) : v.mind_level;
+  const reason = typeof v.mind_reason === "string" ? v.mind_reason.trim() : "";
+  if (!isMindLevel(level) || !reason) return null;
+  return { changed, kind: v.mind, level, reason };
+};
+
+/** 정체성의 성격 문장 셋 — 같은 말에 마음이 생기는지와 얼마나 큰지를 가르는 재료. 원하는 방식과
+ * 결점은 생성 코드가 만드는 행이라 그 키를 그대로 쓴다. */
+const PERSONALITY_KEYS: readonly { area: string; subject: string }[] = [
+  WANTED_WAY_KEY,
+  FLAW_KEY,
+  { area: "태도", subject: "애착 성향" },
+];
+
+/** [캐릭터 성격] 블록. 값이 없는 줄은 빼고, 하나도 없으면 (없음). */
+export const personalityBlock = (characterId: number): string => {
+  const identity = alwaysIncluded(characterId);
+  const lines = PERSONALITY_KEYS.flatMap(({ area, subject }) => {
+    const value = identityValue(identity, area, subject)?.trim();
+    return value ? [`- ${subject}: ${value}`] : [];
+  });
+  return lines.length ? lines.join("\n") : "(없음)";
+};
+
+/** [관계 단계] 블록 — 단계 번호와 이름 한 줄. */
+export const stageBlock = (stageNo: number | undefined): string =>
+  stageNo !== undefined && isRelationshipStage(stageNo)
+    ? `${stageNo}단계 · ${RELATIONSHIP_STAGE_NAME[stageNo]}`
+    : "(없음)";
+
+/**
+ * [직전 마음] 블록 — 종류, 세기, 생긴 시각과 지난 시간, 이유. 없으면 (없음). now는 KST 타임스탬프로
+ * [지금 시각]과 같은 값이다.
+ */
+export const prevMindBlock = (
+  rel: RelationshipRow | undefined,
+  now: string,
+): string => {
+  const mind = storedMind(rel);
+  if (!mind) return "(없음)";
+  const since = mindSinceLabel(mind.since, logicalDateOf(now));
+  const elapsed = elapsedLabel(mind.since, now);
+  return [
+    `${MIND_NAME[mind.kind]}, 세기 ${mind.level}/3`,
+    `${since}부터${elapsed ? `(${elapsed} 지남)` : ""}`,
+    mind.reason ? `이유: ${mind.reason}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+};
+
+/** [지금 시각] 블록 — 대화와 같은 시계 표기에 논리일을 M/D로 붙인다. */
+export const nowBlock = (now: string): string => {
+  const date = logicalDateOf(now);
+  return `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))} ${clockLabel(logicalClockOf(now))}`;
+};
+
 const noChange = (
   failed: boolean,
   callId: number | null,
@@ -320,6 +440,12 @@ const noChange = (
   callId,
   prev: null,
 });
+
+/** 마음 판정을 판정 결과에 붙이는 모양 — 읽었으면 mind, 못 읽었으면 mindFailed. */
+const mindPart = (
+  mind: MindVerdict | null,
+): Pick<UserStateVerdict, "mind" | "mindFailed"> =>
+  mind ? { mind } : { mindFailed: true };
 
 /**
  * 상대의 지금 상태를 판정한다. 실패하면 값을 그대로 둔다 — 없던 상태를 만들지 않는 쪽이
@@ -336,7 +462,12 @@ export const judgeUserState = async (
   const prev = rel ? userStateLabel(rel, logicalDateOf(last.sent_at)) : null;
   const moves = pendingMoves(chatId, characterId, rows);
   const prevMove = moves[moves.length - 1]?.move ?? null;
+  const now = kstStamp();
   const content = [
+    `[캐릭터 성격]\n${personalityBlock(characterId)}`,
+    `[관계 단계]\n${stageBlock(getStage(characterId)?.stage_no)}`,
+    `[직전 마음]\n${prevMindBlock(rel, now)}`,
+    `[지금 시각]\n${nowBlock(now)}`,
     `[지난 판정]\n${prev ?? "(없음)"}`,
     `[직전에 캐릭터가 쓴 플러팅]\n${pendingMovesBlock(moves, rows)}`,
     `[최근 대화]\n${userStateTranscript(rows, new Map(moves.map((m) => [m.id, m.move])))}`,
@@ -346,17 +477,21 @@ export const judgeUserState = async (
     const out = await chat(
       SYSTEM,
       [{ role: "user", content }],
-      260,
+      USER_STATE_MAX_TOKENS,
       config.model,
       meta,
       { think: false },
     );
-    const parsed = parseUserStateVerdict(out, rows);
     const callId = meta.callId ?? null;
+    // 마음 칸은 상대 상태 칸과 따로 읽는다 — 한쪽이 깨져도 다른 쪽은 반영한다.
+    const mind = readMind(out);
+    if (!mind)
+      console.warn("[user-state] 마음 칸을 못 읽었다 — 저장된 마음을 그대로 둔다");
+    const parsed = parseUserStateVerdict(out, rows);
     if (!parsed) {
       console.warn("[user-state] 판정 형식이 깨졌다 — 값을 그대로 둔다");
-      if (callId) record(callId, { failed: true });
-      return noChange(true, callId);
+      if (callId) record(callId, { failed: true, ...mindPart(mind) });
+      return { ...noChange(true, callId), ...mindPart(mind) };
     }
     const signals = readOpenSignals(out, prevMove);
     if (!signals)
@@ -367,6 +502,7 @@ export const judgeUserState = async (
         state: parsed.state,
         prev,
         ...(signals ? { opened: signals } : {}),
+        ...mindPart(mind),
       });
     return {
       ...parsed,
@@ -374,10 +510,11 @@ export const judgeUserState = async (
       callId,
       prev: parsed.changed ? prev : null,
       ...(signals ? { signals } : {}),
+      ...mindPart(mind),
     };
   } catch (e) {
     console.warn("[user-state] 판정 호출 실패 — 값을 그대로 둔다:", e);
-    return noChange(true, meta.callId ?? null);
+    return { ...noChange(true, meta.callId ?? null), mindFailed: true };
   }
 };
 

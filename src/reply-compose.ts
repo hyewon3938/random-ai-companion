@@ -18,6 +18,9 @@
 // 답장 행 meta_json에 싣는다 — 다음 판정 호출과 [지금 관계] 절이 그 행을 읽고, 의도 선톡은
 // 오늘 이미 쓴 줄을 그 칸으로 센다(이슈 #390).
 //
+// 같은 판정 호출이 돌려준 캐릭터의 마음(#473)도 상대 상태와 함께 조립 전에 저장한다 — 이번
+// 답장이 새 마음을 읽고, 바뀐 턴은 관계 갱신 목록과 슬랙 답장 게시의 캐릭터 마음 줄에 남는다.
+//
 // 형식이 깨진 답은 한 번 더 부르는데, 첫 답이 생각 과정에 출력 상한을 써서 잘렸으면 다시
 // 부를 때 생각 과정을 끈다(이슈 #471).
 //
@@ -61,11 +64,13 @@ import {
 } from "./reply-signal.js";
 import { recordHold } from "./reply-timing.js";
 import {
+  applyMind,
   applyReplySignals,
   applyUserState,
   speechRatchet,
   type RelChange,
 } from "./relationship-update.js";
+import { mindLabel, storedMind } from "./context/mind.js";
 import { todayNotesByMessage } from "./memory.js";
 import { pickTags } from "./tag-pick.js";
 import {
@@ -214,9 +219,35 @@ export interface ComposedReply {
 }
 
 /**
+ * 슬랙 답장 게시의 캐릭터 마음 줄 재료. changed는 이번 턴에 실제로 바꿔 적은 것만이다 — 모델이
+ * 바뀌었다고 했어도 저장된 값과 같아 안 적었으면 그대로로 남긴다. rel은 저장을 마친 뒤의 행이다.
+ */
+export const mindTrace = (
+  rel: Parameters<typeof storedMind>[0],
+  change: RelChange[],
+  failed: boolean,
+): {
+  changed: boolean;
+  failed: boolean;
+  label: string | null;
+  prev: string | null;
+  reason: string | null;
+} => {
+  const now = storedMind(rel);
+  const changed = change.length > 0;
+  return {
+    changed,
+    failed,
+    label: now ? mindLabel(now) : null,
+    prev: changed ? (change[0]?.from ?? null) : null,
+    reason: changed && now?.reason ? now.reason : null,
+  };
+};
+
+/**
  * 답장 한 통을 만든다. 보내지 않으며, 버린 답장은 null이다.
  *
- * 순서: 말투 래칫 → 검색 태그·상대 상태 판정 → 3층 프롬프트 조립 → 대화 기록 → 호출 → 관계 신호 저장 →
+ * 순서: 말투 래칫 → 검색 태그·상대 상태와 캐릭터 마음 판정 → 3층 프롬프트 조립 → 대화 기록 → 호출 → 관계 신호 저장 →
  * stay 신호로 일정 기록 → 빈 답·새 메시지 폐기 판정. 호출 기록(llm_calls)에는 검색한
  * 태그·기억, 대화 길이, 관계 갱신, 객체를 읽은 길, 말풍선 수가 붙고, 기록이 실패해도 답장은
  * 그대로 나간다.
@@ -249,12 +280,15 @@ export const composeReply = async (
     dropped: [],
   };
   // 상대 상태 판정은 검색 태그와 나란히 돈다 — 둘 다 짧은 호출이고 서로 모른다. 바뀐 값은
-  // 조립 전에 저장해야 이번 답장이 읽는다(관계 갱신 목록에 같이 쌓인다).
+  // 조립 전에 저장해야 이번 답장이 읽는다(관계 갱신 목록에 같이 쌓인다). 캐릭터의 마음도
+  // 같은 호출이 정해서 여기서 함께 저장한다.
   const [pick, verdict] = await Promise.all([
     pickTags(characterId, turn.text),
     judge(characterId, chatId),
   ]);
   relUpdates.push(...applyUserState(characterId, verdict, kstStamp()));
+  const mindChange = applyMind(characterId, verdict.mind, kstStamp());
+  relUpdates.push(...mindChange);
   const system = buildSystemBlocks(characterId, chatId, {
     pick,
     trace: built,
@@ -442,6 +476,9 @@ export const composeReply = async (
       label: rel ? userStateLabel(rel, logicalDateOf(kstStamp())) : null,
       prev: verdict.prev,
     },
+    // 캐릭터 마음 — 이번 턴에 실제로 바꿔 적었는지, 마음 칸을 못 읽었는지, 지금 값. 바뀐 턴은
+    // 직전 값과 이유를 함께 남겨 슬랙이 이전 → 지금 · 이유로 적는다.
+    mind: mindTrace(rel, mindChange, verdict.mindFailed === true),
     bubbles: bubbles.length,
     // 말풍선 사이 간격은 발송할 때 글자 수에서 나온다(1초 안쪽 흔들림) — 길이를 남겨 둔다.
     bubbleLens: bubbles.map((b) => b.length),

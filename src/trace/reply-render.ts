@@ -139,6 +139,17 @@ export interface CallContext {
     prev?: string | null;
   };
   /**
+   * 캐릭터의 오늘 생긴 마음 — 같은 판정 호출이 정한 값(#473). changed는 이번 턴에 실제로 바꿔
+   * 적은 것이고, 그때 prev에 바로 전 값, reason에 새 값의 이유가 있다. label은 서운함 2 꼴.
+   */
+  mind?: {
+    changed?: boolean;
+    failed?: boolean;
+    label?: string | null;
+    prev?: string | null;
+    reason?: string | null;
+  };
+  /**
    * 관계 — 지금 단계와 며칠째, 오늘 시도하기로 둔 플러팅, 이 답장이 쓴 플러팅과 나머지 의도
    * 줄, 처음으로 적은 일(#353·#390).
    */
@@ -490,6 +501,20 @@ const outcomeLines = (ctx: CallContext): string[] => {
           ? `*상대 상태* 바뀜 · ${u.prev ? esc(u.prev) : "없음"} → ${now}`
           : `*상대 상태* 그대로 · ${now}`,
     );
+  }
+  // 캐릭터 마음 — 상대 상태 줄과 같은 모양이다. 값이 없고 그대로인 턴은 줄을 두지 않는다 —
+  // 대부분의 턴이 평소라, 늘 적으면 바뀐 턴이 묻힌다.
+  if (ctx.mind) {
+    const m = ctx.mind;
+    const now = m.label ? esc(m.label) : "없음";
+    if (m.failed) out.push(`*캐릭터 마음* 판정 실패 · ${now}`);
+    else if (m.changed)
+      out.push(
+        `*캐릭터 마음* 바뀜 · ${m.prev ? esc(m.prev) : "없음"} → ${now}${
+          m.reason ? ` · ${esc(m.reason)}` : ""
+        }`,
+      );
+    else if (m.label) out.push(`*캐릭터 마음* 그대로 · ${now}`);
   }
   // 관계와 열림은 상대 상태 옆에 둔다 — 단계가 오르는 근거(처음·열림 신호)를 답장마다 같은
   // 자리에서 보게 하려는 것이다.
