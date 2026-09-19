@@ -134,7 +134,7 @@ test("근황 문단은 네 시간 침묵과 여는 방식을 적고 고른 방�
   const out = catchupSituation([], [...ALL_OPENINGS]);
   assert.match(out, /^\[문안 — 지금 보낼 근황 한 통\]/);
   assert.match(out, /네 시간 넘게 조용하다/);
-  assert.match(out, /- ask\(뭐 하냐고 묻기\): 상대가 지금 뭐 하는지 묻는다\./);
+  assert.match(out, /- ask\(뭐 하냐고 묻기\): 상대가 지금 뭐 하는지 묻는다\. 이 방식을 지금 써도 되는지는 \[관계 단계\]를 따른다\./);
   assert.match(out, /- reminded\(뭐 하다가 네 생각이 났다고 하기\): .*\[관계 단계\]를 따른다\./);
   assert.match(out, /- my_day\(내 일상 전하기\): /);
   assert.match(out, /- my_question\(내 일상에서 나온 물음\): /);

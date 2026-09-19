@@ -425,7 +425,7 @@ export const catchupLines = (
 
 // 여는 방식마다 문안 모델에게 건네는 설명. 이름표는 proactive-policy의 OPENING_NAME이다.
 const OPENING_HOW: Record<OpeningMethod, string> = {
-  ask: `상대가 지금 뭐 하는지 묻는다.`,
+  ask: `상대가 지금 뭐 하는지 묻는다. 이 방식을 지금 써도 되는지는 [관계 단계]를 따른다.`,
   reminded: `위 [지금]에서 하던 일을 말하고, 그러다 상대 생각이 났다고 한다. 이 방식을 지금 써도 되는지는 [관계 단계]를 따른다.`,
   my_day: `위 [지금]에서 네가 하는 일이나 오늘 네 하루의 장면 하나를 전한다. 막 시작하는 참이면 이제 그걸 하러 간다고 한다.`,
   my_question: `네 하루에서 생긴 일 하나를 말하고, 거기서 떠오른 가벼운 물음을 상대에게 건넨다.`,
