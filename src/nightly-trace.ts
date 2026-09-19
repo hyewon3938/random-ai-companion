@@ -80,6 +80,7 @@ import {
 } from "./labels.js";
 import { intentLines } from "./prompts/nightly.js";
 import { wordDiff } from "./trace/diff.js";
+import type { ThresholdCondition } from "./relationship-stage.js";
 import { currentRowOf, currentRows, keyProblem } from "./memory.js";
 import { getKstNow, shiftDate } from "./kst.js";
 import type {
@@ -319,13 +320,15 @@ const firstChangesOf = (g: NightlyGathered): FirstChanges => {
   return { confirmed, cancelled, userAdded };
 };
 
-const firstLabel = (r: FirstRow): string =>
+/** 처음 한 건을 게시 한 줄로. 주간 요약과 관계 확인 도구도 같은 꼴로 적는다. */
+export const firstLabel = (r: FirstRow): string =>
   `${FIRST_KIND_NAME[r.kind]} · ${FIRST_BY_NAME[r.by]} · ${r.happened_at.slice(5, 16)}${
     r.message_id ? ` · 메시지 #${r.message_id}` : ""
   }`;
 
-const conditionLines = (g: NightlyGathered): string[] =>
-  g.relation.threshold.conditions.map((c) => {
+/** 다음 단계 문턱 조건을 `이름 값/기준 찼음` 꼴로. 관계 확인 도구도 같은 꼴로 적는다. */
+export const conditionLines = (conditions: ThresholdCondition[]): string[] =>
+  conditions.map((c) => {
     const v =
       c.value === null
         ? "표본 없음"
@@ -338,7 +341,8 @@ const conditionLines = (g: NightlyGathered): string[] =>
     return `${c.name} ${v}/${need} ${c.met ? "찼음" : "안 찼음"}`;
   });
 
-const signed = (v: number): string =>
+/** 점수 표기. 음수는 긴 빼기 기호를 붙인다. */
+export const signed = (v: number): string =>
   v < 0 ? `−${Math.abs(v).toFixed(2)}` : v.toFixed(2);
 
 /** 점수 변화 줄. 표본이 늘어난 플러팅 가운데 가장 많이 오른 3개와 가장 많이 내린 3개를
@@ -399,7 +403,7 @@ const relationStageBlock = (
         : `${t.from}→${t.to} ${t.met ? "찼음" : "안 찼음"}`
     }`,
   ];
-  const conds = conditionLines(g);
+  const conds = conditionLines(g.relation.threshold.conditions);
   if (conds.length) lines.push(`> 조건: ${esc(conds.join(" · "))}`);
   const adv = out.extract?.relation?.advance;
   if (adv)
@@ -448,7 +452,7 @@ const stageChangeEvent = (
     text: [
       `:arrow_up: *단계 전이* ${snap.stage.stage_no}단계 → ${afterStage.stage_no}단계 · ${clock()}`,
       `> ${snap.stage.stage_no}단계에 ${g.relation.stageSince}부터 ${g.relation.stayDays}일 머묾`,
-      `> 조건: ${esc(conditionLines(g).join(" · ") || "없음")}`,
+      `> 조건: ${esc(conditionLines(g.relation.threshold.conditions).join(" · ") || "없음")}`,
       basis ? `> 근거: ${esc(basis)}` : null,
     ]
       .filter(Boolean)
@@ -486,7 +490,7 @@ const firstEvents = (g: NightlyGathered, firsts: FirstChanges): void => {
 // 저장된 근거를 줄 코드마다 한 문장으로 읽는다. 모델이 정한 모양({"dig":"21:10 러닝 얘기"})과
 // 다르거나 깨진 값이면 근거 없이 게시한다 — 근거 한 줄 때문에 계획 게시가 빠지면 안 된다.
 // 계획 줄과 달리 근거는 저장할 때 다듬지 않아서, 줄바꿈이 인용 표시를 끊지 않게 공백을 합친다.
-const planBasis = (
+export const planBasis = (
   json: string | null | undefined,
 ): Partial<Record<IntentLine, string>> => {
   const out: Partial<Record<IntentLine, string>> = {};
