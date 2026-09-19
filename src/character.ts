@@ -237,7 +237,7 @@ export const LEAD_TONE_SHAPE: Record<LeadTone, { base: string; when: string }> =
       when: "직진한 말이 무거워질 때",
     },
     possessive: {
-      base: "살짝 서운해하거나 삐진다",
+      base: "서운해하거나 삐진다",
       when: "다른 사람이나 다른 약속 얘기, 늦은 연락, 너무 바쁠 때, 자기를 신경 쓰지 않을 때",
     },
     silent_care: {
