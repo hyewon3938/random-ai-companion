@@ -20,6 +20,10 @@
 // 그 신호가 실제로 오는지를 가르므로, 칸을 더할 때 SIGNAL_LINES 위 문단을 먼저 읽는다.
 // 늘 넣는 쪽에 두면 ALWAYS_KEYS에도 이름을 넣는다 — 평가가 그 목록으로 형식을 재고, 값이
 // null인 것과 칸이 아예 안 온 것을 가르는 자리가 거기뿐이다(이슈 #385).
+//
+// 말풍선을 가르는 세 길(JSON·잘린 JSON·줄바꿈)은 모두 첫 말풍선 맨 앞의 오를 지운다
+// (dropLeadOh, 이슈 #469). 규칙층에서 세 번 막아도 다시 나와서, 글자 하나로 가려지는 이 금지만
+// 코드가 맡는다.
 
 import type { FirstBy, FirstKind, IntentLine, Move } from "./labels.js";
 import {
@@ -191,10 +195,10 @@ export const REPLY_ENVELOPE = `[내보내는 형식 — 이번 답장에만 해�
 - 그 밖의 칸은 해당할 때만 넣는다. 해당하지 않으면 키째 뺀다(빈 값이나 false로 채우지 않는다).
 ${SIGNAL_LINES}
 - 신호도 이 객체 안의 항목이다. } 를 닫은 뒤에는 한 글자도 쓰지 않는다. 남길 말이 있으면 위 항목 안에 넣는다.
-- 예: {"reply": ["아 진짜요?", "그럼 오늘은 좀 일찍 자요"], "note": ["상대가 다음 주 화요일에 면접을 본다"], "move": null, "first": null}
-- 남길 것이 둘인 예: {"reply": ["나도 대전에서 컸어", "무슨 중학교 나왔어?"], "note": ["상대가 중학교까지 대전에서 살았다", "내가 자란 동네를 둔산동이라고 말했다"], "move": null, "first": null}
-- 플러팅을 쓴 답장의 예: {"reply": ["아까 그거 다 했어?", "끝나면 알려줘"], "note": [], "move": "remember", "first": null}
-- 오늘 의도와 앞일이 함께 든 예: {"reply": ["요즘 그 팀이랑은 좀 괜찮아졌어?", "나는 금요일에 워크샵 가"], "note": [], "move": null, "first": null, "intent_lines": ["dig"], "plan_ref": ["9/18 팀 워크샵"]}
+- 예: {"reply": ["아 진짜요?", "화요일이면 얼마 안 남았네요", "어디 보는 거예요?"], "note": ["상대가 다음 주 화요일에 면접을 본다"], "move": null, "first": null}
+- 남길 것이 둘인 예(상대가 나 오이 진짜 못 먹어라고 한 답): {"reply": ["오이 냄새도 싫어?", "난 오이는 괜찮은데 가지를 못 먹어", "물컹한 게 싫더라구"], "note": ["상대가 오이를 못 먹는다", "내가 가지를 못 먹는다고 말했다"], "move": null, "first": null}
+- 플러팅을 쓴 답장의 예: {"reply": ["아까 쓴다던 보고서 다 끝났어?"], "note": [], "move": "remember", "first": null}
+- 오늘 의도와 앞일이 함께 든 예: {"reply": ["나는 금요일에 우리 팀 워크샵 가는데 벌써 피곤해", "너 그 때 그 팀이랑 좀 괜찮아졌어?"], "note": [], "move": null, "first": null, "intent_lines": ["dig"], "plan_ref": ["9/18 팀 워크샵"]}
 - reply 안의 문장만 상대에게 그대로 나간다. 나머지 칸도 이 형식도 상대에게 보이지 않는다.
 - 형식이 JSON이라고 말이 굳으면 안 된다. 문장은 평소처럼 메신저에 치듯 쓰고, 표기 규칙대로 문장 안에 큰따옴표를 쓰지 않는다.`;
 
@@ -222,6 +226,27 @@ const stripLeadTag = (line: string): string => {
 
 const lines = (text: string): string[] =>
   text.split("\n").map(stripLeadTag).filter(Boolean);
+
+// 첫 말풍선 맨 앞의 오 지우기(이슈 #469). 오 진짜?·오 좋다처럼 앞에 붙는 오는 규칙층에서 세 번
+// 막았는데도(#373·#387·#441) 다시 나왔고, 9/10 뒤 오로 시작한 말풍선 13개 가운데 12개가
+// 답장의 첫 말풍선이었다. 모양은 평가의 OH_OPENER(eval/output-rules.ts)와 같다 — 오 뒤에 공백·
+// 문장부호·ㅋㅎ가 오거나 말풍선이 오뿐일 때만 잡아서 오늘·오랜만·오케이는 그대로 둔다. 오 뒤의
+// 공백과 문장부호도 같이 지우고, 지우고 나서 빈 말풍선은 빼고 그다음 말풍선을 다시 본다.
+// 선톡 문안은 말풍선을 나누는 경로가 달라(bot.ts) 여기를 타지 않는다.
+const LEAD_OH = /^오+(?=[\s,.!?~…ㅋㅎ]|$)[\s,.!?~…]*/;
+
+export const dropLeadOh = (parts: string[]): string[] => {
+  const out = [...parts];
+  while (out.length && LEAD_OH.test(out[0])) {
+    const rest = out[0].replace(LEAD_OH, "").trim();
+    if (rest) {
+      out[0] = rest;
+      break;
+    }
+    out.shift();
+  }
+  return out;
+};
 
 const stripFence = (raw: string): string =>
   raw
@@ -330,7 +355,7 @@ const toBubbles = (v: unknown): string[] => {
       ? [v]
       : [];
   return capBubbles(
-    raw.flatMap((el) => (typeof el === "string" ? lines(el) : [])),
+    dropLeadOh(raw.flatMap((el) => (typeof el === "string" ? lines(el) : []))),
   );
 };
 
@@ -471,7 +496,7 @@ const salvage = (
     if (at >= 0) found[key] = arrayItems(text.slice(text.indexOf("[", at) + 1));
   }
   return {
-    bubbles: capBubbles(parts),
+    bubbles: capBubbles(dropLeadOh(parts)),
     signals: readSignals(found),
     slots: ALWAYS_KEYS.filter((k) => k in found),
   };
@@ -509,7 +534,7 @@ export const parseReplyOutput = (raw: string): ReplyOutput => {
     const got = salvage(text);
     return { ...got, parse: got.bubbles.length ? "salvage" : "empty" };
   }
-  const bubbles = capBubbles(lines(text));
+  const bubbles = capBubbles(dropLeadOh(lines(text)));
   return {
     bubbles,
     signals: EMPTY_SIGNALS,
