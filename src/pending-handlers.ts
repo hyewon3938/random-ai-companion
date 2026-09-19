@@ -34,6 +34,7 @@ import {
 import { chatJson, type CallMeta } from "./llm.js";
 import { saveTodayNote } from "./memory.js";
 import {
+  PROACTIVE_DRAFT_MAX_TOKENS,
   PROACTIVE_RECENT_LINES,
   PROACTIVE_USER_MEMORY_LINES,
 } from "./thresholds.js";
@@ -279,7 +280,7 @@ export const createWakeHandler = (deps: WakeHandlerDeps): WakeHandler => {
             : deps.returnSituation(activity),
         }),
         "위 상황 문단대로 문안을 만들어.",
-        400,
+        PROACTIVE_DRAFT_MAX_TOKENS,
         config.model,
         draftMeta,
       );
@@ -462,7 +463,7 @@ export const createPromiseHandler = (
           situation: deps.promiseSituation(promise, activity, false),
         }),
         "위 상황 문단대로 문안을 만들어.",
-        400,
+        PROACTIVE_DRAFT_MAX_TOKENS,
         config.model,
         draftMeta,
       );

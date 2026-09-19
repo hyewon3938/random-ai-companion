@@ -6,10 +6,10 @@
 //               먼저 내보내고 기다린다.
 //   점심      — 무응답 이틀째 12:05~12:50에 1통. 그날은 아침 선톡과 이 한 통이 나가고 낮 근황은
 //               겹치지 않는다(이슈 #314).
-//   의도      — 오늘의 관계 의도 네 줄 가운데 아직 안 쓴 줄 하나로 먼저 거는 한 통. 어제 의도 선톡이
-//               쓴 줄은 다른 줄이 없을 때만 고른다. 각본이 답할 수 있는 블록이고 양쪽 마지막 말이
-//               2시간 넘게 지난 09~23시에 나간다. 하루 몇 통까지 쓸 수 있는지는 관계 단계가 정한다
-//               (설계 원본 §7).
+//   의도      — 오늘의 관계 의도 가운데 아직 안 쓴 줄로 먼저 거는 한 통. 남은 줄을 전부 넘기고
+//               지금 맞는 줄은 모델이 고른다. 어제 의도 선톡이 쓴 줄은 목록 뒤로 보낸다. 각본이
+//               답할 수 있는 블록이고 양쪽 마지막 말이 2시간 넘게 지난 09~23시에 나간다. 하루
+//               몇 통까지 쓸 수 있는지는 관계 단계가 정한다(설계 원본 §7).
 //   밤 인사   — 자정~새벽 5시에 유저가 잔다는 말 없이 1시간 넘게 조용하면 1회.
 //   달래기    — 관계 행의 상대 상태(user-state가 답장마다 판정)가 나 때문에 안 좋은데 그 뒤로
 //               답이 끊기면 30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다. 어떤 상태를
@@ -34,7 +34,9 @@
 // 다시 만족해 같은 물음을 또 던지고, 의도 선톡의 창 09~23시면 하루 최대 56번이다(이슈 #359).
 // 자리는 지금 각본 블록과 마지막 말 둘로 잡는다. 블록이 바뀌거나 누가 말을 하면 물어볼 상황
 // 자체가 달라져서 다시 묻고, 그 사이에는 접은 채로 둔다. 틈새 한 줄이 쓰는 방법과 같다
-// (glance.ts의 judged). 점심은 창이 12:05~12:50뿐이라 접혀도 하루 3번을 넘지 않아 그냥 둔다.
+// (glance.ts의 judged). 모델 호출이 실패한 자리도 같은 방법으로 기억한다 — 안 기억하면 실패한
+// 호출을 15분마다 같은 자리에서 다시 부른다(이슈 #471). 점심은 창이 12:05~12:50뿐이라 접혀도
+// 하루 3번을 넘지 않아 그냥 둔다.
 
 import {
   getActiveCharacter,
@@ -54,8 +56,8 @@ import {
   budgetAllows,
   budgetLabel,
   budgetedSinceLastUser,
+  intentCandidates,
   lunchDueToday,
-  pickIntentLine,
   proactiveAllowed,
   proactiveBudget,
   proactiveKindCountToday,
@@ -69,6 +71,8 @@ import {
   readSendText,
   readText,
   sendProactiveDraft,
+  type DraftRead,
+  type ProactiveDraftResult,
 } from "./proactive-send.js";
 import {
   kstClock,
@@ -87,6 +91,7 @@ import {
   INTENT_WINDOW,
   LUNCH_WINDOW,
   MEND_SILENCE_MS,
+  PROACTIVE_DRAFT_MAX_TOKENS,
   RECENT_USER_MS,
 } from "./thresholds.js";
 
@@ -120,7 +125,10 @@ const elapsedLabel = (minutes: number): string =>
     ? `${Math.max(10, Math.floor(minutes / 10) * 10)}분쯤`
     : `${Math.round(minutes / 60)}시간쯤`;
 
-/** 모델이 안 보낸다고 답한 자리를 기억한다 — 키는 chatId와 종류, 값은 그때의 자리 이름. */
+/**
+ * 모델이 안 보낸다고 답했거나 모델 호출이 실패한 자리를 기억한다 — 키는 chatId와 종류, 값은
+ * 그때의 자리 이름.
+ */
 const declined = new Map<string, string>();
 
 /** 안 보낸다는 판정을 기억하는 종류 — 보낼지까지 모델이 정하는 선톡들. */
@@ -137,7 +145,7 @@ export const declinedHere = (
   spot: string,
 ): boolean => declined.get(`${chatId}:${kind}`) === spot;
 
-/** 안 보낸다는 답을 기억한다. 자리마다 하나라 다음 자리가 오면 덮어쓴다. */
+/** 안 보낸다는 답이나 호출 실패를 기억한다. 자리마다 하나라 다음 자리가 오면 덮어쓴다. */
 export const rememberDecline = (
   chatId: string,
   kind: DeclineKind,
@@ -155,9 +163,71 @@ export const readSendTextOnce =
     const text = readSendText(d);
     if (!text) {
       rememberDecline(chatId, kind, spot);
-      console.log(`[followup] ${kind} ${chatId} 접음 — 지금은 보낼 자리가 아니다 (${spot})`);
+      console.log(
+        `[followup] ${kind} ${chatId} 접음 — 지금은 보낼 자리가 아니다 (${spot})`,
+      );
     }
     return text;
+  };
+
+/**
+ * 문안 호출이 실패했으면 그 자리를 안 보낸다는 답처럼 기억한다. 발송 실패와 달리 들고 있을
+ * 문안이 없어서, 안 기억하면 다음 틱이 같은 자리에서 모델을 다시 부른다(이슈 #471).
+ */
+export const rememberFailure = (
+  result: ProactiveDraftResult,
+  chatId: string,
+  kind: DeclineKind,
+  spot: string,
+): void => {
+  if (result !== "failed") return;
+  rememberDecline(chatId, kind, spot);
+  console.log(
+    `[followup] ${kind} ${chatId} 접음 — 문안 호출이 실패했다 (${spot})`,
+  );
+};
+
+/**
+ * 의도 선톡 응답의 line을 후보 줄 코드로 읽는다. 코드나 이름표를 그대로 적었으면 그 줄이고,
+ * 앞뒤에 말을 덧붙였으면 그 안에 든 후보가 하나일 때만 그 줄이다. 후보가 하나뿐이면 line을
+ * 안 적었거나 잘못 적어도 그 줄이다.
+ */
+export const pickedIntentLine = (
+  raw: unknown,
+  candidates: IntentLine[],
+): IntentLine | null => {
+  if (typeof raw === "string") {
+    const v = raw.trim();
+    const exact = candidates.find((l) => l === v || INTENT_LINE_NAME[l] === v);
+    if (exact) return exact;
+    const inside = candidates.filter(
+      (l) => v.includes(l) || v.includes(INTENT_LINE_NAME[l]),
+    );
+    if (inside.length === 1) return inside[0];
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+};
+
+/**
+ * 의도 선톡의 read. 안 보낸다는 답이면 그 자리를 기억하고, 보낸다는 답이면 고른 줄 코드를
+ * 발송 기록의 intent_line에 실어 돌려준다 — 오늘 쓴 줄은 이 값으로 센다(usedIntentLines).
+ * 고른 줄을 후보에서 찾지 못하면 어느 줄을 썼는지 셀 수 없어서 보내지 않고, 안 보낸다는
+ * 답처럼 그 자리를 기억한다.
+ */
+export const readIntentOnce =
+  (chatId: string, spot: string, candidates: IntentLine[]) =>
+  (d: { send: boolean; line?: unknown; text?: string }): DraftRead | null => {
+    const text = readSendTextOnce(chatId, "intent", spot)(d);
+    if (!text) return null;
+    const line = pickedIntentLine(d.line, candidates);
+    if (!line) {
+      rememberDecline(chatId, "intent", spot);
+      console.log(
+        `[followup] intent ${chatId} 접음 — 고른 줄(${String(d.line)})이 후보(${candidates.join(",")})에 없다`,
+      );
+      return null;
+    }
+    return { text, meta: { intent_line: line } };
   };
 
 // 근황 선톡의 침묵 조건 — 유저의 마지막 말도, 캐릭터의 마지막 말도 네 시간은 지났어야 한다.
@@ -282,8 +352,12 @@ export const catchupSituation = (
       `- 기본은 이거다. 위 [지금]에서 네가 하는 일이 [상대가 전에 한 말]이나 [방금까지 오간 말]의 상대 말 가운데 무엇을 떠올리게 하면, 그 말을 꺼낸다. 상대가 전에 했던 말이 지금 장면과 이어질 때 그렇게 연다.`,
       `- 떠오르는 게 없으면 네가 하는 일이나 네 하루의 장면을 가볍게 한 마디 전한다. 막 시작하는 참이면 이제 그걸 하러 간다고 흘리는 결.`,
       `- [방금까지 오간 말]에 있는 네 앞선 먼저 건 말이 상대가 전에 한 말을 꺼내며 열었으면, 이번에는 떠오르는 게 있어도 네 장면으로 연다.`,
-      share ? `- 오늘 흘릴 내 얘기로 둔 건 이거다: ${share}. 지금 장면에 얹을 자리가 있으면 흘린다.` : ``,
-      dig ? `- 오늘 파고들 것으로 둔 건 이거다: ${dig}. 지금 장면과 이어지면 그게 궁금하다는 걸 한 마디로 꺼내되, 물음으로 끝내지 않고 답을 안 해도 되는 말을 붙여 닫는다.` : ``,
+      share
+        ? `- 오늘 흘릴 내 얘기로 둔 건 이거다: ${share}. 지금 장면에 얹을 자리가 있으면 흘린다.`
+        : ``,
+      dig
+        ? `- 오늘 파고들 것으로 둔 건 이거다: ${dig}. 지금 장면과 이어지면 그게 궁금하다는 걸 한 마디로 꺼내되, 물음으로 끝내지 않고 답을 안 해도 되는 말을 붙여 닫는다.`
+        : ``,
       `- 재촉하지 않는다. 왜 답이 없냐고 묻거나 답을 요구하지 않고, 알려 달라·말해 달라는 부탁도 하지 않는다.`,
       `- 기다리고 있다는 티는 은근하게 한 마디까지다(오늘 몇 번 확인했다는 결). 몇 시간째인지 세지 않고, 답이 없는 걸 상대 탓으로 돌리지 않으며, 네 앞선 말에서 이미 기다렸다고 했으면 다시 하지 않는다.`,
       `- 지금 상황에서 이 말이 억지스러우면 send=false.`,
@@ -294,47 +368,62 @@ export const catchupSituation = (
 };
 
 /**
- * 의도 선톡의 상황 문단 — 오늘의 의도 네 줄 가운데 아직 안 쓴 줄 하나를 넣는다.
+ * 의도 선톡의 상황 문단 — 오늘의 의도 가운데 아직 안 쓴 줄을 전부 넣고, 지금 맞는 줄 하나를
+ * 모델이 골라 그 줄 코드를 답에 적게 한다.
  *
- * 다른 선톡은 각본의 시각이 부르지만 이 한 통은 오늘 하려던 것이 부른다. 어느 줄을 썼는지는
- * 발송 기록의 intent_line으로 세므로 여기서 고른 줄을 그대로 발송 쪽에 넘긴다(설계 원본 §7).
+ * 다른 선톡은 각본의 시각이 부르지만 이 한 통은 오늘 하려던 것이 부른다. 코드가 줄 하나만 골라
+ * 넘기면 저녁 일정을 다룬 줄처럼 아직 때가 아닌 줄이 앞에 있는 동안 모델은 안 보낸다는 답만
+ * 하고, 지금 맞는 뒷줄은 차례를 받지 못한다. 어느 줄을 썼는지는 발송 기록의 intent_line으로
+ * 센다(설계 원본 §7, 이슈 #471). 새벽 정리가 앞으로 있을 상대 일로 줄을 쓸 때 언제부터
+ * 꺼낼지를 줄 안에 적으므로, 그 전에는 그 줄을 고르지 않게 한다.
  *
  * 상대가 전에 한 말은 지금 하는 일 안에 그것이 실제로 있을 때만 꺼내게 한다. 말을 여는 사물을 상대
  * 말에서 가져오라고만 했을 때는 지금 장면과 이어지지 않는 옛말을 갑자기 생각났다며 꺼냈다. 의도 줄에
- * 쓸 장면이 적혀 있으면 그 장면일 때만 보내고, 새벽에 지난 대화로 적은 메모라는 것도 밝혀 전날 얘기를
+ * 쓸 장면이 적혀 있으면 그 장면일 때만 고르고, 새벽에 지난 대화로 적은 메모라는 것도 밝혀 전날 얘기를
  * 아까 한 얘기처럼 부르지 않게 한다(이슈 #438).
  *
  * 여는 모양은 줄마다 정한다. 흘릴 내 얘기와 시도할 플러팅은 캐릭터 쪽 얘기라 캐릭터의 장면으로
  * 열고, 파고들 것과 이어갈 자리는 상대 쪽 얘기지만 상대가 한 말을 첫마디로 꺼내며 열지 않는다.
  * 파고들 것이 날마다 먼저 나가고 매번 상대 말로 열어서 의도 선톡이 날마다 같은 모양이었다. 어느
- * 줄이든 알려 달라는 부탁을 하지 않고, 답 없이 남은 캐릭터의 앞선 말이 이미 꺼낸 얘기면 보내지
- * 않는다(이슈 #462).
+ * 줄이든 알려 달라는 부탁을 하지 않고, 답 없이 남은 캐릭터의 앞선 말이 이미 꺼낸 얘기의 줄은
+ * 고르지 않는다(이슈 #462).
  */
 const INTENT_OPENING: Record<IntentLine, string> = {
-  share: `- 이 줄은 네 쪽 얘기라 위 [지금]에서 네가 하는 일이나 네 하루의 장면 하나로 연다. 상대가 전에 한 말을 꺼내며 열지 않는다.`,
-  move: `- 이 줄은 네 쪽 마음이라 위 [지금]에서 네가 하는 일이나 네 하루의 장면 하나로 연다. 상대가 전에 한 말을 꺼내며 열지 않는다.`,
-  dig: `- 이 줄은 상대 쪽 얘기지만 상대가 한 말을 첫마디로 꺼내며 열지 않는다(네가 말한 그거, 했었잖아). 네가 궁금해진 마음이나 지금 장면으로 열고 그 얘기로 넘어간다.`,
-  thread: `- 이 줄은 상대 쪽 얘기지만 상대가 한 말을 첫마디로 꺼내며 열지 않는다(네가 말한 그거, 했었잖아). 네가 궁금해진 마음이나 지금 장면으로 열고 그 얘기로 넘어간다.`,
+  share: `- ${INTENT_LINE_NAME.share}를 고르면 네 쪽 얘기라 위 [지금]에서 네가 하는 일이나 네 하루의 장면 하나로 연다. 상대가 전에 한 말을 꺼내며 열지 않는다.`,
+  move: `- ${INTENT_LINE_NAME.move}을 고르면 네 쪽 마음이라 위 [지금]에서 네가 하는 일이나 네 하루의 장면 하나로 연다. 상대가 전에 한 말을 꺼내며 열지 않는다.`,
+  dig: `- ${INTENT_LINE_NAME.dig}을 고르면 상대 쪽 얘기지만 상대가 한 말을 첫마디로 꺼내며 열지 않는다(네가 말한 그거, 했었잖아). 네가 궁금해진 마음이나 지금 장면으로 열고 그 얘기로 넘어간다.`,
+  thread: `- ${INTENT_LINE_NAME.thread}를 고르면 상대 쪽 얘기지만 상대가 한 말을 첫마디로 꺼내며 열지 않는다(네가 말한 그거, 했었잖아). 네가 궁금해진 마음이나 지금 장면으로 열고 그 얘기로 넘어간다.`,
 };
 
-export const intentSituation = (line: IntentLine, text: string): string =>
+/** 의도 선톡이 고를 수 있는 줄 하나 — 줄 코드와 그 줄의 내용. */
+export interface IntentCandidate {
+  line: IntentLine;
+  text: string;
+}
+
+export const intentSituation = (candidates: IntentCandidate[]): string =>
   situationText(
     [
       `[문안 — 지금 보낼 한 통]`,
-      `오늘 상대에게 하려던 것 가운데 이게 아직 남았다. ${INTENT_LINE_NAME[line]}: ${text}`,
-      `상대도 너도 두 시간 넘게 말이 없다. 용건이 있어서가 아니라 그게 마음에 남아서 먼저 거는 한 통이다.`,
+      `오늘 상대에게 하려던 것 가운데 아직 남은 줄이다. 줄마다 앞에 코드를 적었다.`,
+      ...candidates.map(
+        (c) => `- ${c.line}(${INTENT_LINE_NAME[c.line]}): ${c.text}`,
+      ),
+      `상대도 너도 두 시간 넘게 말이 없다. 이 가운데 지금 상황에 맞는 줄 하나를 골라 먼저 거는 한 통이다. 용건이 있어서가 아니라 그게 마음에 남아서 거는 연락이다.`,
       `- 위 줄은 새벽에 지난 대화를 읽고 적어 둔 메모다. [방금까지 오간 말]에 없는 얘기를 아까·방금 한 얘기라고 부르지 않는다.`,
+      `- 줄에 언제부터 꺼낼지 적혀 있으면 그 전에는 그 줄을 고르지 않는다.`,
+      `- 줄에 어떤 장면에서 쓸지 적혀 있으면 지금이 그 장면일 때만 그 줄을 고른다.`,
       `- 위 [상대가 전에 한 말]이나 [방금까지 오간 말]을 생각났다며 꺼내는 건 위 [지금]에서 네가 하는 일 안에 그것이 실제로 있을 때만이다. 지금 하는 일과 이어지지 않는 말을 떠올린 척 끌어오지 않는다.`,
-      `- 위 줄에 어떤 장면에서 쓸지 적혀 있으면 지금이 그 장면일 때만 쓴다. 아니면 send=false.`,
-      `- [방금까지 오간 말]의 끝에는 상대가 아직 답하지 않은 네 말이 있다. 그 말이 위 줄 얘기를 이미 꺼냈으면 send=false. 그 말에 남긴 물음이나 부탁은 다시 꺼내지 않고, 그 말과 같은 첫마디로 열지 않는다.`,
-      INTENT_OPENING[line],
+      `- [방금까지 오간 말]의 끝에는 상대가 아직 답하지 않은 네 말이 있다. 그 말이 이미 꺼낸 얘기의 줄은 고르지 않는다. 그 말에 남긴 물음이나 부탁은 다시 꺼내지 않고, 그 말과 같은 첫마디로 열지 않는다.`,
+      `- 지금 맞는 줄이 여럿이면 위에 먼저 적은 줄을 고른다.`,
+      ...candidates.map((c) => INTENT_OPENING[c.line]),
       `- 네 하루를 보고하듯 늘어놓지 않는다. 장면으로 열어도 한 장면이면 된다.`,
-      `- 위 줄을 그대로 읊지 않는다. 무슨 말을 걸지 네가 정해 둔 메모지, 상대에게 알릴 내용이 아니다.`,
+      `- 고른 줄을 그대로 읊지 않는다. 무슨 말을 걸지 네가 정해 둔 메모지, 상대에게 알릴 내용이 아니다.`,
       `- 답을 재촉하지 않는다. 왜 조용하냐고 묻지 않고, 알려 달라·말해 달라는 부탁을 하지 않는다. 물음을 넣었으면 그 뒤에 답을 안 해도 되는 말을 붙여 닫는다.`,
-      `- 지금 상황에서 이 말이 억지스러우면 send=false.`,
+      `- 지금 맞는 줄이 없거나 어느 줄로 걸어도 억지스러우면 send=false.`,
       `- 1~2개 말풍선(줄바꿈 구분).`,
     ],
-    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
+    `JSON으로만 답한다: {"send":true,"line":"고른 줄의 코드","text":"..."} 또는 {"send":false}`,
   );
 
 // 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
@@ -354,7 +443,7 @@ const followupTickBody = async (): Promise<void> => {
     if (!lu) continue;
 
     // 오늘의 관계 의도. 밤 인사는 이어갈 자리 줄을, 근황은 흘릴 내 얘기와 파고들 것을, 의도
-    // 선톡은 아직 안 쓴 줄 하나를 여기서 꺼낸다(설계 원본 §4).
+    // 선톡은 아직 안 쓴 줄 전부를 여기서 꺼낸다(설계 원본 §4).
     const today = kstLogicalDate();
     const intent = getRelationshipIntent(c.id, today) ?? null;
 
@@ -386,7 +475,7 @@ const followupTickBody = async (): Promise<void> => {
         kind: "goodnight",
         lastSentAt: last.sent_at,
         situation: goodnightSituation(intent),
-        maxTokens: 300,
+        maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
         read: readText,
         label: "[followup] 굿나잇",
         sentLog: `[followup] goodnight to ${c.chat_id}`,
@@ -416,7 +505,7 @@ const followupTickBody = async (): Promise<void> => {
         kind: "mend",
         lastSentAt: last.sent_at,
         situation: mendSituation(),
-        maxTokens: 300,
+        maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
         read: readText,
         // 문안 게시가 어떤 상태를 보고 나가는 통인지 머리에 적게 한다.
         context: {
@@ -443,7 +532,7 @@ const followupTickBody = async (): Promise<void> => {
         kind: "care",
         lastSentAt: last.sent_at,
         situation: careSituation(minutesSince(lu)),
-        maxTokens: 300,
+        maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
         read: readText,
         context: {
           userState: { label: userStateLabel(rel, logicalDateOf(kstStamp())) },
@@ -475,7 +564,7 @@ const followupTickBody = async (): Promise<void> => {
           kind: "lunch",
           lastSentAt: last.sent_at,
           situation: lunchSituation(),
-          maxTokens: 500,
+          maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
           read: readSendText,
           label: "[followup] 점심",
           sentLog: `[followup] lunch to ${c.chat_id} @ ${lunchBlock.activity}`,
@@ -484,7 +573,8 @@ const followupTickBody = async (): Promise<void> => {
       }
     }
 
-    // 의도 선톡: 오늘의 관계 의도 네 줄 가운데 아직 안 쓴 줄 하나를 근거로 먼저 건다.
+    // 의도 선톡: 오늘의 관계 의도 가운데 아직 안 쓴 줄 하나를 근거로 먼저 건다. 어느 줄이 지금
+    // 맞는지는 모델이 고른다.
     //
     // 다른 선톡은 각본의 시각이 부른다 — 아침이라서, 점심이라서, 네 시간 조용해서. 이 한 통만
     // 오늘 하려던 것이 부르고, 그래서 2단계부터는 용건 없이 오는 연락이 열린다. 조건은 설계
@@ -505,40 +595,44 @@ const followupTickBody = async (): Promise<void> => {
       !isWaiting(c.chat_id) &&
       !hasPendingSendOn(c.id, today)
     ) {
-      // 어제 의도 선톡이 쓴 줄은 뒤로 보낸다 — 순서대로만 고르면 날마다 같은 줄로 열린다(이슈 #462).
-      const line = pickIntentLine(
+      // 오늘 아직 안 쓴 줄을 전부 넘기고 지금 맞는 줄은 모델이 고른다(이슈 #471). 어제 의도
+      // 선톡이 쓴 줄은 목록 뒤로 보낸다 — 순서대로만 고르면 날마다 같은 줄로 열린다(이슈 #462).
+      const candidates = intentCandidates(
         intent,
         budget.stage,
         usedIntentLines(c.chat_id, c.id, dayStart()),
         yesterdayIntentLines(c.chat_id, c.id, dayStart()),
-      );
-      const text = line ? intentLineText(intent, line) : null;
+      ).flatMap((line): IntentCandidate[] => {
+        const text = intentLineText(intent, line);
+        return text ? [{ line, text }] : [];
+      });
       const intentBlock = currentBlock(c.id);
       const intentSpot = intentBlock
         ? declineSpot(intentBlock.start, last.sent_at)
         : null;
       if (
-        line &&
-        text &&
+        candidates.length &&
         intentBlock &&
         intentSpot &&
         intentBlock.responsiveness !== "unavailable" &&
         // 이 블록에서 이미 안 보낸다고 답했으면 같은 물음을 다시 던지지 않는다(이슈 #359).
         !declinedHere(c.chat_id, "intent", intentSpot)
       ) {
-        await sendProactiveDraft({
+        const lines = candidates.map((x) => x.line);
+        const result = await sendProactiveDraft({
           characterId: c.id,
           chatId: c.chat_id,
           kind: "intent",
           lastSentAt: last.sent_at,
-          situation: intentSituation(line, text),
-          maxTokens: 500,
-          read: readSendTextOnce(c.chat_id, "intent", intentSpot),
-          // 어느 줄을 썼는지는 발송 기록의 intent_line으로 센다(usedIntentLines).
-          extraMeta: { intent_line: line },
+          situation: intentSituation(candidates),
+          maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
+          // 모델이 고른 줄은 발송 기록의 intent_line에 실린다(usedIntentLines가 센다). 나간 로그
+          // 끝에도 intent_line=…으로 붙는다.
+          read: readIntentOnce(c.chat_id, intentSpot, lines),
           label: "[followup] 의도",
-          sentLog: `[followup] intent(${line}) to ${c.chat_id} · ${budgetLabel(budget)}`,
+          sentLog: `[followup] intent to ${c.chat_id} · ${budgetLabel(budget)}`,
         });
+        rememberFailure(result, c.chat_id, "intent", intentSpot);
         continue;
       }
     }
@@ -554,9 +648,11 @@ const followupTickBody = async (): Promise<void> => {
     // 앞질러 나간다(이슈 #314).
     if (hasPendingSendOn(c.id, today)) continue;
     // 점심 선톡이 나간 날은 그 통이 그날 낮의 한 통이다. 겹쳐 보내지 않는다.
-    if (proactiveKindCountToday(c.chat_id, c.id, dayStart(), "lunch") >= 1) continue;
+    if (proactiveKindCountToday(c.chat_id, c.id, dayStart(), "lunch") >= 1)
+      continue;
     // 근황은 하루 한 통. 보낸 뒤에도 답이 없으면 그날은 더 보내지 않고 다음 날 아침으로 넘긴다.
-    if (proactiveKindCountToday(c.chat_id, c.id, dayStart(), "catchup") >= 1) continue;
+    if (proactiveKindCountToday(c.chat_id, c.id, dayStart(), "catchup") >= 1)
+      continue;
     // 하루 합계 상한. 관계 단계가 정하고, 자리 비움·복귀·약속·달래기·틈새 한 줄은 빠진다.
     if (!budgetAllows(budget, "catchup")) continue;
 
@@ -566,17 +662,18 @@ const followupTickBody = async (): Promise<void> => {
     const catchupSpot = declineSpot(block.start, last.sent_at);
     if (declinedHere(c.chat_id, "catchup", catchupSpot)) continue;
 
-    await sendProactiveDraft({
+    const result = await sendProactiveDraft({
       characterId: c.id,
       chatId: c.chat_id,
       kind: "catchup",
       lastSentAt: last.sent_at,
       situation: catchupSituation(intent),
-      maxTokens: 500,
+      maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
       read: readSendTextOnce(c.chat_id, "catchup", catchupSpot),
       label: "[followup]",
       sentLog: `[followup] sent to ${c.chat_id} @ ${block.activity}`,
     });
+    rememberFailure(result, c.chat_id, "catchup", catchupSpot);
   }
 };
 

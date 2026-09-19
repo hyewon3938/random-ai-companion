@@ -18,6 +18,9 @@
 // 답장 행 meta_json에 싣는다 — 다음 판정 호출과 [지금 관계] 절이 그 행을 읽고, 의도 선톡은
 // 오늘 이미 쓴 줄을 그 칸으로 센다(이슈 #390).
 //
+// 형식이 깨진 답은 한 번 더 부르는데, 첫 답이 생각 과정에 출력 상한을 써서 잘렸으면 다시
+// 부를 때 생각 과정을 끈다(이슈 #471).
+//
 // 만드는 동안 유저가 말을 더 보냈거나 답이 비어 있으면 null을 돌려준다. 그때도 호출 기록에는
 // 버린 이유와 객체를 어느 길로 읽었는지가 남는다 — 형식이 깨진 날을 되짚는 자리다.
 //
@@ -42,8 +45,11 @@ import {
 import { kstLogicalDate, kstStamp } from "./kst.js";
 import { intentLineText, stageDays } from "./context/relationship.js";
 import {
-  chat,
+  chatWithStop,
+  cutByThinking,
   type CallMeta,
+  type ChatOptions,
+  type ChatStop,
   type ChatTurn,
   type SystemBlock,
 } from "./llm.js";
@@ -62,7 +68,11 @@ import {
 } from "./relationship-update.js";
 import { todayNotesByMessage } from "./memory.js";
 import { pickTags } from "./tag-pick.js";
-import { judgeUserState, userStateLabel, type UserStateVerdict } from "./user-state.js";
+import {
+  judgeUserState,
+  userStateLabel,
+  type UserStateVerdict,
+} from "./user-state.js";
 import { getRelationship } from "./db.js";
 import { logicalDateOf } from "./kst.js";
 import { RECENT_MESSAGE_FETCH_MAX, RECENT_TURN_COUNT } from "./thresholds.js";
@@ -129,19 +139,38 @@ export type ReplyAsker = (
   meta: CallMeta,
 ) => Promise<ReplyDraft>;
 
+/** 모델을 한 번 부르고 멈춘 이유를 함께 받는 자리. 검사에서 정해 둔 응답을 주는 함수로 바꿔 끼운다. */
+export type ReplyCall = (
+  system: SystemBlock[],
+  turns: ChatTurn[],
+  meta: CallMeta,
+  opts?: ChatOptions,
+) => Promise<ChatStop>;
+
 // 답장 한 통을 받아 온다. 무엇을 고르고 무엇을 합치는지는 reply-ask.ts에 있다.
-export const askReplyWith: ReplyAsker = (system, turns, meta) =>
-  askReply(async (attempt) => {
-    const callMeta: CallMeta = attempt === 1 ? meta : { ...meta, attempt };
-    const text = await chat(
-      system,
-      turns,
-      REPLY_MAX_TOKENS,
-      config.model,
-      callMeta,
-    );
-    return { text, callId: callMeta.callId ?? null };
-  });
+// 첫 호출이 생각 과정에 출력 상한을 써서 멈췄으면 다시 부를 때 생각 과정을 끈다 — 생각이
+// 상한을 거의 다 써서 답이 잘린 경우라 같은 조건으로 다시 부르면 또 잘린다(이슈 #471).
+export const askReplyVia =
+  (call: ReplyCall): ReplyAsker =>
+  (system, turns, meta) => {
+    let firstCut = false;
+    return askReply(async (attempt) => {
+      const callMeta: CallMeta = attempt === 1 ? meta : { ...meta, attempt };
+      const out = await call(
+        system,
+        turns,
+        callMeta,
+        attempt > 1 && firstCut ? { think: false } : undefined,
+      );
+      if (attempt === 1) firstCut = cutByThinking(out);
+      return { text: out.text, callId: callMeta.callId ?? null };
+    });
+  };
+
+export const askReplyWith: ReplyAsker = askReplyVia(
+  (system, turns, meta, opts) =>
+    chatWithStop(system, turns, REPLY_MAX_TOKENS, config.model, meta, opts),
+);
 
 /** 붙잡기 판정이 붙잡는 말로 읽어 지금 답하는 자리의 상황 문단. 일정을 어떻게 할지는 답장이 정한다. */
 export const holdSituation = (activity: string): string =>
@@ -201,7 +230,11 @@ export const composeReply = async (
 
   // 말투 래칫 — 프롬프트를 조립하기 전에 부른다. 저장해 두면 이번 답장은 물론 최근 대화를
   // 안 보는 경로(선톡 문안)도 같은 값을 읽는다. 단계·호칭은 답을 읽은 뒤에 같은 목록에 쌓인다.
-  const relUpdates: RelChange[] = speechRatchet(characterId, chatId, kstStamp());
+  const relUpdates: RelChange[] = speechRatchet(
+    characterId,
+    chatId,
+    kstStamp(),
+  );
 
   // 3층(불변/일간/실시간) 블록 — 앞 두 층은 프롬프트 캐시 경계가 걸려 재사용된다.
   // 검색 태그는 답장을 만들기 전에 짧은 호출로 먼저 고른다 — 이번 답장에 바로 쓰기 때문에
@@ -319,7 +352,11 @@ export const composeReply = async (
   // 표시는 한 방향이라 안 말한 일정까지 안다고 적으면 되돌릴 길이 없다.
   if (signals.toldPlan)
     try {
-      const todays = getActiveSchedulesOn(characterId, "char", kstLogicalDate());
+      const todays = getActiveSchedulesOn(
+        characterId,
+        "char",
+        kstLogicalDate(),
+      );
       if (todays.length === 1) markScheduleKnown(characterId, todays[0]!.id);
     } catch (e) {
       console.error(`${logTag} 일정 말함 표시 실패:`, e);
@@ -335,7 +372,9 @@ export const composeReply = async (
         lastAssistantTs(chatId, characterId) ?? null,
       );
       if (replaced)
-        console.log(`${logTag} 열림 신호 ${replaced}행을 이번 답장 것으로 바꾼다 (chat=${chatId})`);
+        console.log(
+          `${logTag} 열림 신호 ${replaced}행을 이번 답장 것으로 바꾼다 (chat=${chatId})`,
+        );
       insertRelationshipSignal({
         characterId,
         chatId,

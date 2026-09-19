@@ -57,6 +57,7 @@ import {
   AWAY_BACK_TO_BACK_BEFORE_MIN,
   AWAY_BACK_TO_BACK_AFTER_MIN,
   AWAY_DAILY_MAX,
+  PROACTIVE_DRAFT_MAX_TOKENS,
   RECENT_USER_MS,
 } from "./thresholds.js";
 import {
@@ -254,7 +255,7 @@ const presenceTickBody = async (): Promise<void> => {
         prevAct,
         last.role === "user",
       ),
-      maxTokens: 400,
+      maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
       // 자리를 비우는 일을 적는 칸이 비었으면 보내지 않는다 — 상대 말에 답만 하고 나간 문안이
       // 이 모양이다(이슈 #265). 다음 틱에 아직 알릴 창 안이면 다시 만든다.
       read: (draft, meta) => {
