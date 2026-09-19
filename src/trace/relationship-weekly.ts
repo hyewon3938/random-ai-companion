@@ -2,8 +2,10 @@
 //
 // 월요일 10~23시에 매시 크론이 부른다(index.ts). 지난주는 논리일(새벽 5시 경계)로 월요일부터
 // 일요일까지이고, 일요일 몫 새벽 정리가 월요일 05:40에 끝난 뒤라 저장된 점수에 그 주 표본이 다
-// 얹혀 있다. 매시 부르는 것은 배포·재시작으로 한 시각을 놓쳐도 그날 안에 올리려는 것이고, 같은 주
-// 두 번째 게시는 트레이스 표의 중복 키(relationship_weekly:<캐릭터 번호>:<주 시작일>)가 막는다.
+// 얹혀 있다. 매시 부르는 것은 배포·재시작으로 한 시각을 놓쳐도 그날 안에 쌓으려는 것이고, 같은 주
+// 두 번째 행은 트레이스 표의 중복 키(relationship_weekly:<캐릭터 번호>:<주 시작일>)가 막는다.
+// 중복 키는 행이 있는지만 보고 게시 상태는 보지 않아서, 슬랙 게시가 실패해 행이 failed가 된 주는
+// 다시 쌓지 않고 그 주 요약이 빠진다. 월요일 10~23시 내내 봇이 꺼져 있던 주도 따라잡지 않는다.
 // 주마다 따로 적어 두는 표나 설정 행은 없다.
 //
 // 모델은 부르지 않고 DB 값만 모은다. 반응 점수는 이력을 남기지 않아서, 그 주 변화는 새벽 정리와
@@ -246,11 +248,16 @@ export const postWeeklyRelationship = (
     if (logicalDateOf(c.created_at) >= weekEnd) continue;
     const dedupeKey = `relationship_weekly:${c.id}:${weekStart}`;
     if (hasTraceEvent(dedupeKey)) continue;
-    recordTraceEvent({
-      characterId: c.id,
-      kind: "relationship_weekly",
-      dedupeKey,
-      text: weeklyRelationshipText(c, weekStart),
-    });
+    // 한 캐릭터의 요약을 만들다 실패해도 뒤 캐릭터는 쌓는다.
+    try {
+      recordTraceEvent({
+        characterId: c.id,
+        kind: "relationship_weekly",
+        dedupeKey,
+        text: weeklyRelationshipText(c, weekStart),
+      });
+    } catch (err) {
+      console.error(`[trace] 주간 관계 요약 준비 실패 #${c.id}:`, err);
+    }
   }
 };
