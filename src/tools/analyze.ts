@@ -1,6 +1,7 @@
 // 애착 신호 분석: messages 원시 로그에서 행동 신호를 날짜별로 집계한다 (README의 신호 표 대응).
 // 기본은 정량(LLM 콜 없음). --tag 를 붙이면 취약성 개방·관계 감정 표현을 LLM(opus)으로 태깅한다.
 // 사용: docker exec random-ai-companion npx tsx src/tools/analyze.ts [--tag]
+// 선톡 반응은 outbox의 아침·안부 행과 v16 전에 나간 scheduled_messages_legacy 행을 합쳐 본다(#476).
 import { db, type CharacterRow } from "../db.js";
 import { chatJson } from "../llm.js";
 import { config } from "../config.js";
@@ -111,12 +112,32 @@ for (const m of msgs) {
   prev = m;
 }
 
-// 선톡 반응: 발송된 선톡 후 첫 유저 응답까지 걸린 시간
+// 선톡 반응: 발송된 선톡 후 첫 유저 응답까지 걸린 시간. 아침·안부 선톡은 v16부터 outbox에
+// 있고, 그 전에 나간 것은 scheduled_messages_legacy에 남아 있어서 둘을 합친다.
+const hasLegacySends = !!db
+  .prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_messages_legacy'`,
+  )
+  .get();
 const sends = db
   .prepare(
-    `SELECT date, sent_at FROM scheduled_messages WHERE character_id = ? AND status = 'sent'`,
+    `SELECT CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.date') END AS date,
+            sent_at FROM outbox
+      WHERE character_id = ? AND kind IN ('morning','checkin')
+        AND status IN ('sent','partial')
+     ${
+       hasLegacySends
+         ? `UNION ALL
+     SELECT date, sent_at FROM scheduled_messages_legacy
+      WHERE character_id = ? AND status = 'sent'`
+         : ""
+     }
+     ORDER BY sent_at`,
   )
-  .all(row.id) as { date: string; sent_at: string }[];
+  .all(...(hasLegacySends ? [row.id, row.id] : [row.id])) as {
+  date: string;
+  sent_at: string;
+}[];
 const sendReact = sends.map((snd) => {
   const reply = msgs.find(
     (m) => m.role === "user" && snd.sent_at && m.sent_at > snd.sent_at,

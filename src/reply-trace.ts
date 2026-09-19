@@ -13,6 +13,8 @@
 // 불가 구간의 몰아 답장 표시도 걸고 거두고 울리는 자리마다 쌓고(traceWake), 답장 경로가
 // 답장 없이 예외로 끝난 자리도 단계와 사유를 남긴다(traceReplyFault, 이슈 #379) — 이 둘이
 // 없으면 답장이 안 나간 날과 아직 기다리는 날이 밖에서 똑같이 조용해 보인다.
+// 게시 키에 적는 행 번호는 v16부터 outbox 행 번호다. 그 전에 걸린 키의 번호는 옛 표
+// (*_legacy)의 행 번호라서, 피드백을 되짚을 때는 그 표에서 찾는다(이슈 #476).
 
 import { kstLogicalDate, clockLabel } from "./kst.js";
 import { recordTraceEvent, traceEnabled } from "./trace.js";
@@ -29,7 +31,7 @@ import {
 
 /**
  * 만들어 둔 답장의 발송·폐기 결과를 그 답장 스레드에 단다(pending.ts가 부른다).
- * 답장을 만든 호출 번호를 모르면(복구 발송·깨우기 표시) 올리지 않는다.
+ * 답장을 만든 호출 번호를 모르면(복구 발송·구간 끝 행) 올리지 않는다.
  */
 export const traceReplyOutcome = (p: {
   callId: number | null;
@@ -92,7 +94,7 @@ export const traceProactiveSend = (p: {
   basis?: string | null;
   /** 문안을 만든 호출 번호. 봇 밖에서 만든 예약 문안은 없다. */
   callId?: number;
-  /** 예약 발송(아침·안부)이면 scheduled_messages 행 번호. */
+  /** 예약 발송(아침·안부)이면 outbox 행 번호. v16 전에 나간 발송은 scheduled_messages_legacy 행 번호다. */
   scheduledId?: number;
 }): void => {
   if (!traceEnabled()) return;
@@ -209,7 +211,7 @@ export const traceGlanceSkip = (p: {
 
 /** 약속 행이 울린 뒤 갈 수 있는 길. 값은 kind에 그대로 실어 나중에 길별로 셀 수 있게 한다. */
 export type PromiseStage =
-  | "deferred" // 깨우기 표시가 걸려 있어 몰아 답장에 맡겼다
+  | "deferred" // 구간 끝 행이 걸려 있어 몰아 답장에 맡겼다
   | "rescheduled" // 답장 불가 구간이라 다음 블록 끝으로 다시 걸었다
   | "no_slot" // 답장 불가 구간인데 다시 걸 블록이 없어 접었다
   | "replied" // 그 사이 온 말이 있어 답장으로 지켰다
@@ -219,7 +221,7 @@ export type PromiseStage =
   | "gave_up"; // 재시도를 다 쓰고 포기했다
 
 const PROMISE_STAGE_NAME: Record<PromiseStage, string> = {
-  deferred: "깨우기 표시가 걸려 있어 몰아 답장에 맡김",
+  deferred: "구간 끝 행이 걸려 있어 몰아 답장에 맡김",
   rescheduled: "답장 불가 구간이라 다시 걺",
   no_slot: "답장 불가 구간인데 다시 걸 블록이 없어 접음",
   replied: "그 사이 온 말이 있어 답장으로 지킴",
@@ -248,7 +250,7 @@ const PROMISE_STAGE_ICON: Record<PromiseStage, string> = {
  */
 export const tracePromise = (p: {
   characterId: number;
-  /** pending_replies의 약속 행 번호. */
+  /** outbox의 약속 행 번호. v16 전에 걸린 행은 pending_replies_legacy 번호와 같다. */
   rowId: number;
   stage: PromiseStage;
   promise: string;
@@ -286,7 +288,7 @@ export const tracePromise = (p: {
 
 // ── 몰아 답장을 걸어 두는 표시가 그 뒤 어떻게 됐는지 ──────────────────
 
-/** 깨우기 표시가 지나는 자리. 값은 kind에 그대로 실어 나중에 자리별로 셀 수 있게 한다. */
+/** 구간 끝 행이 지나는 자리. 값은 kind에 그대로 실어 나중에 자리별로 셀 수 있게 한다. */
 export type WakeStage =
   | "armed" // 답장 불가 구간이라 구간 끝에 울릴 표시를 걸었다
   | "merged" // 표시가 이미 걸려 있어 메시지만 쌓는다
@@ -326,18 +328,18 @@ const WAKE_STAGE_ICON: Record<WakeStage, string> = {
 };
 
 /**
- * 몰아 답장 표시가 그 뒤 어떻게 됐는지(bot.ts 답장·깨우기 처리, pending.ts).
+ * 몰아 답장 표시가 그 뒤 어떻게 됐는지(bot.ts 답장·구간 끝 처리, pending.ts·pending-handlers.ts).
  *
  * 불가 구간에 온 메시지는 답장을 만들지 않고 구간 끝에 울릴 표시만 걸어 두는데, 이 자리가
  * 콘솔에만 남아 있어서 밖에서는 구간이 끝날 때까지 아무 일도 없는 것처럼 보였다(이슈 #379).
- * 표시가 울린 뒤 답장 없이 끝나는 갈래는 더 무겁다 — pending.ts가 그 행을 보낸 것으로
- * 확정해 재시도도 걸리지 않으므로, 여기 적히지 않으면 답장이 사라진 사실 자체가 남지 않는다.
+ * 표시가 울린 뒤 답장 없이 끝나는 갈래는 더 무겁다 — 재시도가 걸리지 않고 행은 사유와 함께
+ * 닫히기만 하므로, 여기 적히지 않으면 슬랙에서는 답장이 사라진 사실을 알 수 없다.
  *
  * 같은 행의 같은 자리는 한 번만 쌓는다. 행 번호를 모르는 자리는 블록 단위로 하루 한 번 쌓는다.
  */
 export const traceWake = (p: {
   characterId: number;
-  /** pending_replies의 깨우기 행 번호. 걸기 전이거나 알 수 없으면 없다. */
+  /** outbox의 구간 끝 행 번호. 걸기 전이거나 알 수 없으면 없다. v16 전에 걸린 행은 pending_replies_legacy 번호와 같다. */
   rowId?: number | null;
   stage: WakeStage;
   activity: string;

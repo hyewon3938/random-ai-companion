@@ -4,8 +4,8 @@
 // 기다리는 시간은 그 유저가 이어 보내던 간격을 학습해 20~40초 사이에서 정한다.
 //
 // 답장 순서는 텀 결정(reply-timing.ts) → 생성(reply-compose.ts) → 대기 → 발송(pending.ts)이다.
-// 답장 불가 구간에 온 말은 답장을 만들지 않고 깨우기 표시만 걸어 두고, 구간이 끝나면
-// wake 핸들러가 네 갈래로 나뉜다 — 쌓인 메시지에 몰아 답하거나, 답할 수 있는 블록이면
+// 답장 불가 구간에 온 말은 답장을 만들지 않고 구간 끝 행만 걸어 두고, 구간이 끝나면
+// 구간 끝 핸들러가 네 갈래로 나뉜다 — 쌓인 메시지에 몰아 답하거나, 답할 수 있는 블록이면
 // 복귀 인사를 하거나, 다음 블록도 자리 비움이면 사이 예고를 보내고 그 끝에 표시를 다시 걸거나,
 // 아무것도 하지 않는다(pickReturnAction). 몰아 답장도 같은 생성 순서를 타고, 상황 문단과
 // 시간 표시 기준만 다르게 준다. 예고한 블록이 시작하기 전까지 온 말에는 farewellSituation으로
@@ -13,10 +13,9 @@
 // 그 시각에 promise 핸들러가 그 사이 온 말에 답하거나 먼저 연락한다(이슈 #308). 약속이 그 뒤
 // 어떻게 됐는지는 단계마다 약속을 한 답장의 슬랙 스레드에 남긴다(tracePromise, 이슈 #312).
 //
-// 깨우기 표시를 걸고 올리고 거두는 자리, 그 표시가 울린 뒤 답장 없이 끝나는 갈래, 답장 경로가
-// 예외로 끝나는 자리는 전부 트레이스 표에 쌓는다(traceWake·traceReplyFault, 이슈 #379). 표시가
-// 울린 뒤 답장 없이 끝나면 pending.ts가 그 행을 보낸 것으로 확정해 재시도도 걸리지 않으므로,
-// 여기서 적지 않으면 답장이 사라진 사실 자체가 어디에도 남지 않는다.
+// 구간 끝 행을 걸고 첫 발화 시각을 적고 거두는 자리, 답장 경로가 예외로 끝나는 자리는 트레이스
+// 표에 쌓는다(traceWake·traceReplyFault, 이슈 #379). 행이 울린 뒤 답장 없이 끝나면 그 사유는
+// 연락 예약 표(outbox)의 행에 상태·사유로 남는다(이슈 #476).
 //
 // 말풍선을 실제로 내보내는 sendBubbleList 한 곳에서 깨진 글자(U+FFFD·짝 없는 서러게이트)를
 // 걸러낸다(stripGarbledChars, 이슈 #395). 답장·선톡이 전부 이 함수를 지나므로 여기 한 곳만
@@ -30,9 +29,10 @@
 // 피하려고 주입한다. 발송기가 돌려주는 값은 그 답장을 적은 대화 기록 행의 번호다. 오늘
 // 메모를 그 번호로 이어 두면 다음 답장 프롬프트의 기록에서 그 턴의 메모 칸이 실제 값으로
 // 채워진다(이슈 #346) — 몰아 답장과 약속 답장은 여기서 직접 기록을 적으므로 그 자리에서
-// 번호를 받아 넘긴다.
+// 번호를 받아 넘긴다. 실제로 나간 말풍선 수도 함께 돌려줘서, 일부만 나갔으면 pending.ts가
+// 그 행을 부분 발송으로 닫는다.
 //
-// 깨우기·약속 핸들러의 실제 갈래 판단은 pending-handlers.ts의 createWakeHandler·
+// 구간 끝·약속 핸들러의 실제 갈래 판단은 pending-handlers.ts의 createWakeHandler·
 // createPromiseHandler가 갖는다(이슈 #449). 이 파일은 말풍선 발송·선톡 발송·약속 재예약·
 // 선톡 상호 배제·상황 문단 빌더를 deps로 담아 넘기고, 그 결과를 setWakeHandler·
 // setPromiseHandler로 pending.ts에 등록한다 — 이미 내보낸 함수라도 pending-handlers.ts가
@@ -87,12 +87,12 @@ import {
   dropPromiseRows,
   dropWakeRows,
   isWaiting,
+  scheduleBlockEndRow,
   schedulePendingReply,
-  scheduleWakeRow,
+  schedulePromiseRow,
   setPendingSender,
   setPromiseHandler,
   setWakeHandler,
-  type WakeMeta,
 } from "./pending.js";
 import { createPromiseHandler, createWakeHandler } from "./pending-handlers.js";
 import {
@@ -110,10 +110,12 @@ import {
   getRecoveryMark,
   lastMessage,
   logMessage,
+  parsePayload,
   promoteWakeRow,
   setRecoveryMark,
   waitingWakeRow,
-  type PendingReplyRow,
+  type OutboxRow,
+  type ReplyPayload,
 } from "./db.js";
 import {
   kstLogicalClock,
@@ -719,7 +721,7 @@ bot.on("callback_query:data", async (ctx) => {
 // (자체 앱이라면 유저의 '입력중' 신호를 받아 치는 동안엔 안 답하고 멈춤에만 답할 수 있다 — 텔레그램 봇의 한계)
 const pending = new Map<string, ReturnType<typeof setTimeout>>();
 const responding = new Set<string>();
-// 답장을 만들거나 발송 대기 중이면 그쪽이 답한다 — 깨우기·약속 핸들러가 함께 보는 조건이라
+// 답장을 만들거나 발송 대기 중이면 그쪽이 답한다 — 구간 끝·약속 핸들러가 함께 보는 조건이라
 // pending-handlers.ts에 deps로 넘긴다(isBusy).
 const isBusy = (chatId: string): boolean =>
   pending.has(chatId) || responding.has(chatId);
@@ -924,10 +926,10 @@ export const promiseSituation = (
  * 답장에서 한 연락 약속을 코드가 지킬 시각에 걸어 둔다(이슈 #308). 시각은 각본 블록 경계에서
  * 고른다(reply-promise.ts). 한 대화에 약속은 하나라 앞 약속이 있으면 거두고 새로 건다 —
  * 거둔 건수는 replaced로 돌려줘 답장 게시에 적힌다. callId는 약속을 한 답장의 호출 번호로,
- * 행의 meta에 실어 두면 약속이 그 뒤 어떻게 됐는지가 그 답장 스레드에 달린다(이슈 #312).
- * 각본에 남은 블록이 없으면 걸지 않고 null — 그 약속은 코드가 시각을 정할 수 없다.
+ * 행의 모델 호출 번호 컬럼에 적어 두면 약속이 그 뒤 어떻게 됐는지가 그 답장 스레드에 달린다
+ * (이슈 #312). 각본에 남은 블록이 없거나 같은 약속의 대기 행이 이미 있으면 걸지 않고 null이다.
  * exceptRowId는 지금 울리고 있는 약속 행 — 그 핸들러 안에서 새로 걸 때는 그 행을 거두지 않는다
- * (울린 행은 핸들러가 끝나면 sent로 닫힌다).
+ * (울린 행은 핸들러가 돌려준 결과대로 pending.ts가 닫는다).
  */
 const keepPromise = (
   chatId: string,
@@ -954,21 +956,26 @@ const keepPromise = (
     console.log(
       `[promise] 앞 약속 ${replaced}건 거둠 — 새 약속으로 갈아 끼운다`,
     );
-  const meta: WakeMeta = {
-    activity: slot.block.activity,
-    blockStart: slot.block.start,
-    blockEnd: slot.block.end,
-    promise,
-    callId,
-  };
-  const { sendAt } = scheduleWakeRow({
+  const kept = schedulePromiseRow({
     chatId,
     characterId,
     userMsgAt,
     waitMs: slot.waitMs,
-    meta,
-    kind: "promise",
+    block: {
+      activity: slot.block.activity,
+      blockStart: slot.block.start,
+      blockEnd: slot.block.end,
+    },
+    promise,
+    callId,
   });
+  if (!kept) {
+    console.warn(
+      `[promise] 같은 약속의 대기 행이 이미 있어 걸지 않음 (chat=${chatId}): ${promise}`,
+    );
+    return null;
+  }
+  const { sendAt } = kept;
   return {
     sendAt,
     block: `${slot.block.start}~${slot.block.end}`,
@@ -982,9 +989,9 @@ const keepPromise = (
 // 예전에는 각본상 자리를 비운 시간만큼 먼저 기다린 뒤 생성했다. 그러면 30분 뒤에 나가는 답장도
 // 방금 대화를 보고 쓴 것처럼 읽혔고, 그사이 일정이 바뀐 것도 반영하지 못했다.
 // 지금은 유저 말이 도착한 참에 답장을 만들어 두고, 정한 시각에 그대로 내보낸다.
-// 만들어 둔 답장은 pending_replies에 남아 프로세스가 다시 떠도 이어진다.
+// 만들어 둔 답장은 연락 예약 표(outbox)에 남아 프로세스가 다시 떠도 이어진다.
 //
-// 답장 불가 구간만 예외다 — 몇 시간 뒤의 답장을 지금 만들지 않고, 깨우기 표시(wake 행)를 걸어
+// 답장 불가 구간만 예외다 — 몇 시간 뒤의 답장을 지금 만들지 않고, 구간 끝 행(block_end)을 걸어
 // 구간이 끝날 때 쌓인 메시지를 한 번에 읽고 답한다(setWakeHandler 아래).
 const respond = async (
   chatId: string,
@@ -1035,22 +1042,30 @@ const respond = async (
         : await decideReplyTiming(character.id, turn.text, {
             burst: { n: turn.n, firstAt: turn.firstAt },
           });
-    // 답장 불가 구간 — 지금 만들지 않는다. 구간 끝에 울릴 깨우기 표시만 걸어 두면
-    // 그때 쌓인 메시지를 한 번에 읽고 답한다. 표시가 이미 걸려 있으면 메시지만 쌓는다.
+    // 답장 불가 구간 — 지금 만들지 않는다. 구간 끝에 울릴 행만 걸어 두면 그때 쌓인 메시지를
+    // 한 번에 읽고 답한다. 행이 이미 걸려 있으면 메시지만 쌓는다.
     if (timing.gather) {
       const block = {
         start: timing.gather.blockStart,
         end: timing.gather.blockEnd,
       };
       const existing = waitingWakeRow(chatId);
-      if (!existing) {
-        const armed = scheduleWakeRow({
-          chatId,
-          characterId: character.id,
-          userMsgAt: turn.at,
-          waitMs: timing.waitMs,
-          meta: timing.gather,
-        });
+      // 같은 구간의 대기 행이 이미 있으면 넣지 않고 null이 온다 — 바로 위에서 없다고 봤으니
+      // 그사이 다른 경로가 넣은 경우뿐이고, 그 행이 이 구간을 맡는다.
+      const armed = existing
+        ? null
+        : scheduleBlockEndRow({
+            chatId,
+            characterId: character.id,
+            block: {
+              activity: timing.gather.activity,
+              blockStart: timing.gather.blockStart,
+              blockEnd: timing.gather.blockEnd,
+            },
+            userFirstAt: turn.at,
+            waitMs: timing.waitMs,
+          });
+      if (armed) {
         traceWake({
           characterId: character.id,
           rowId: armed.id,
@@ -1061,15 +1076,15 @@ const respond = async (
         });
       }
       // 이미 걸려 있으면 새로 만들지 않는다 — 한 구간에 행은 하나다. 다만 자리 비움 틱이
-      // 걸어 둔 'return' 행이면 답할 말이 생긴 것이라 'wake'로 올린다. 그래야 구간이 끝날 때
+      // 걸어 둔 행이라 유저 첫 발화 시각이 비어 있으면 지금 시각을 적는다. 그래야 구간이 끝날 때
       // 복귀 인사가 아니라 몰아 답장으로 간다.
       else if (promoteWakeRow(chatId, turn.at)) {
         console.log(
-          `[pending] 구간 끝 표시를 깨우기로 올림 — 이 구간에 온 말에 답한다 (chat=${chatId})`,
+          `[pending] 구간 끝 행에 첫 발화 시각을 적음 — 이 구간에 온 말에 답한다 (chat=${chatId})`,
         );
         traceWake({
           characterId: character.id,
-          rowId: existing.id,
+          rowId: existing?.id,
           stage: "promoted",
           activity: timing.gather.activity,
           block,
@@ -1077,26 +1092,26 @@ const respond = async (
         });
       } else {
         console.log(
-          `[pending] 깨우기 이미 걸림 — 메시지만 쌓는다 (chat=${chatId})`,
+          `[pending] 구간 끝 행이 이미 걸림 — 메시지만 쌓는다 (chat=${chatId})`,
         );
         traceWake({
           characterId: character.id,
-          rowId: existing.id,
+          rowId: existing?.id,
           stage: "merged",
           activity: timing.gather.activity,
           block,
         });
       }
-      // 이 메시지의 답장 책임은 깨우기 행이 진다 — 복구 틱이 다시 답하지 않게 표시한다.
+      // 이 메시지의 답장 책임은 구간 끝 행이 진다 — 복구 틱이 다시 답하지 않게 표시한다.
       setRecoveryMark(chatId, turn.at);
       return;
     }
-    // 불가 구간이 아닌 길로 답장이 나간다 — 걸려 있던 깨우기 표시가 있으면 거둔다.
+    // 불가 구간이 아닌 길로 답장이 나간다 — 걸려 있던 구간 끝 행이 있으면 거둔다.
     // (붙잡는 말이라 지금 답하거나 구간이 끝난 경우. 지금 만드는 답장이 쌓인 메시지까지 함께 답한다.)
     const droppedWake = dropWakeRows(chatId, "지금 답장이 대신한다");
     if (droppedWake)
       console.log(
-        `[pending] 깨우기 ${droppedWake}건 거둠 — 지금 답장이 대신한다 (chat=${chatId})`,
+        `[pending] 구간 끝 행 ${droppedWake}건 거둠 — 지금 답장이 대신한다 (chat=${chatId})`,
       );
 
     // 2. 지금 만든다 — 순서는 reply-compose.ts에 있다. 예고해 둔 자리 비움이 곧 시작되면
@@ -1127,7 +1142,7 @@ const respond = async (
     const { bubbles, signals } = reply;
 
     // 3. 정한 시각에 나가게 저장한다. 대기가 0이어도 같은 길로 보낸다 —
-    // 발송 직전에 죽어도 pending_replies에 남아 다시 뜰 때 이어진다.
+    // 발송 직전에 죽어도 연락 예약 표에 남아 다시 뜰 때 이어진다.
     const scheduled = schedulePendingReply({
       chatId,
       characterId: character.id,
@@ -1142,6 +1157,13 @@ const respond = async (
       // 쓴 플러팅·오늘 일정 말함 — 발송할 때 대화 기록 행의 meta_json으로 옮겨 적는다.
       replyMeta: reply.replyMeta,
     });
+    // 같은 유저 메시지에 답하는 대기 답장이 이미 있으면 넣지 않는다(중복 방지 키). 그 행이 이 메시지에
+    // 답하므로 책임 표시만 찍고, 이 답장에서 나온 약속은 걸지 않는다.
+    if (!scheduled) {
+      reply.attach({ dropped: "같은 메시지의 대기 답장이 이미 있음" });
+      setRecoveryMark(chatId, turn.at);
+      return;
+    }
     reply.attach({ sendAt: scheduled.sendAt });
     // 답장 책임은 여기서 확정된다 — 저장된 행이 발송을 보장하므로 복구 틱이 다시 답하지 않게 한다.
     setRecoveryMark(chatId, turn.at);
@@ -1170,8 +1192,9 @@ const respond = async (
 
 // 저장해 둔 답장을 실제로 내보내는 자리 — pending.ts가 정한 시각에 부른다.
 // (pending.ts가 bot.ts를 부르면 서로 물고 늘어져서, 발송만 여기서 끼워 넣는다.)
-setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
-  const kind = (row.kind === "recover" ? "recover" : "reply") as SendKind;
+setPendingSender(async (row: OutboxRow, bubbles: string[]) => {
+  const payload = parsePayload<ReplyPayload>(row);
+  const kind: SendKind = payload.recover ? "recover" : "reply";
   const { sent, error } = await sendBubbleList(
     row.chat_id,
     bubbles,
@@ -1184,7 +1207,7 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
     console.warn(
       `[send] 부분 발송 kind=${kind} ${sent.length}/${bubbles.length}`,
     );
-  return logMessage(
+  const messageId = logMessage(
     row.chat_id,
     row.character_id,
     "assistant",
@@ -1192,33 +1215,21 @@ setPendingSender(async (row: PendingReplyRow, bubbles: string[]) => {
     kstStamp(),
     {
       kind,
-      // 답장 행의 meta_json에 실어 온 관계 값(move·told_plan)을 기록 행으로 옮긴다. 복구 답장도
+      // 답장 행의 종류별 값에 실어 온 관계 값(move·told_plan)을 기록 행으로 옮긴다. 복구 답장도
       // 같은 길로 만든 것이라 같이 옮긴다 — 빠지면 다음 판정이 직전 플러팅을 못 본다.
-      ...parseReplyMeta(row.meta_json),
+      ...(payload.replyMeta ?? {}),
       ...(sent.length < bubbles.length
         ? { partial: `${sent.length}/${bubbles.length}` }
         : {}),
     },
   );
+  return { messageId, delivered: sent.length };
 });
-
-/** 예약 답장 행의 meta_json을 기록 행에 옮길 모양으로. 없거나 깨졌으면 빈 객체. */
-const parseReplyMeta = (raw: string | null): Record<string, unknown> => {
-  if (!raw) return {};
-  try {
-    const v = JSON.parse(raw) as unknown;
-    return v && typeof v === "object" && !Array.isArray(v)
-      ? (v as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-};
 
 // 구간 끝 표시가 울리는 자리 — 답장 불가 구간이 끝났다. 갈래 판단과 문안 만들기는
 // pending-handlers.ts의 createWakeHandler가 갖는다(이슈 #449). presence.ts에 따로 있던 복귀
 // 알림 경로를 여기로 합쳤다 — 답장과 복귀 인사가 겹쳐 나가는 이중 발송이 구조적으로 사라진다
-// (답할 말이 있는 kind='wake' 행이 있는 동안 isWaiting이 선톡 틱을 전부 막고, 그 자리에서
+// (유저 첫 발화 시각이 있는 구간 끝 행이 있는 동안 isWaiting이 선톡 틱을 전부 막고, 그 자리에서
 // 몰아 답장·복귀 인사·사이 예고·조용히 지나감 가운데 하나만 고른다).
 setWakeHandler(
   createWakeHandler({
@@ -1237,7 +1248,7 @@ setWakeHandler(
 
 // 약속 시각이 울리는 자리 — 답장에서 한 연락 약속을 지킨다(이슈 #308). 갈래 판단과 문안
 // 만들기는 pending-handlers.ts의 createPromiseHandler가 갖는다(이슈 #449). 답장 생성이
-// 진행 중이면 그쪽이 던져서 pending의 재시도(1·2분)를 탄다.
+// 진행 중이면 잠금 충돌로 돌려줘서, 시도로 세지 않고 같은 간격으로 다시 걸린다(이슈 #476).
 setPromiseHandler(
   createPromiseHandler({
     sendBubbleList,
@@ -1310,7 +1321,7 @@ bot.on("message:text", async (ctx) => {
       `[pending] 유저 추가 발화로 ${dropped}건 폐기 (chat=${chatId})`,
     );
   // 여기서 기다리는 건 유저 말이 다 도착할 때까지의 시간뿐이다(20~40초).
-  // 각본상 자리를 비운 만큼의 텀은 답장을 만든 뒤 pending_replies가 맡는다.
+  // 각본상 자리를 비운 만큼의 텀은 답장을 만든 뒤 연락 예약 표의 답장 행이 맡는다.
   const waitMs = computeWait(chatId, character.id);
   const prevArrival = arrivals.get(chatId);
   arrivals.set(chatId, {

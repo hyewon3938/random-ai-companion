@@ -24,13 +24,36 @@ process.env.SLACK_TRACE_CHANNEL = "C_TEST";
 
 // DB 경로와 슬랙 값을 정한 뒤에 읽어야 임시 파일로 열리고 트레이스가 켜진다.
 const { tracePromise } = await import("../src/reply-trace.js");
-const { db, insertPendingReply } = await import("../src/db.js");
+const { db, insertOutboxRow } = await import("../src/db.js");
 const { dropPromiseRows } = await import("../src/pending.js");
 const { createFixtureCharacter } = await import(
   "../src/eval/fixture-character.js"
 );
 
 const characterId = createFixtureCharacter("chat-promise-trace");
+
+let seq = 0;
+/** 대기 약속 행을 넣는다. 답장 호출 번호는 행의 모델 호출 번호 컬럼에 둔다. */
+const insertPromise = (chatId: string, promise: string, callId: number): number => {
+  const id = insertOutboxRow({
+    kind: "promise",
+    chatId,
+    characterId,
+    dedupeKey: `test:${++seq}`,
+    sendAt: "2026-09-07 14:00:30",
+    payload: {
+      activity: "통화",
+      blockStart: "13:00",
+      blockEnd: "14:00",
+      promise,
+      userMsgAt: "2026-09-07 13:20:00",
+    },
+    callId,
+    createdAt: "2026-09-07 13:20:00",
+  });
+  assert.ok(id !== null);
+  return id;
+};
 
 interface EventRow {
   kind: string;
@@ -112,24 +135,7 @@ test("호출 번호가 하나도 없으면 독립 행으로 쌓이고, 같은 �
 
 test("새 약속이 앞 약속을 거두면 거둔 행마다 그 답장 스레드에 남는다", () => {
   const chat = "chat-promise-trace-drop";
-  const meta = {
-    activity: "통화",
-    blockStart: "13:00",
-    blockEnd: "14:00",
-    promise: "통화 끝나고 다시 연락",
-    callId: 430,
-  };
-  const rowId = insertPendingReply({
-    chatId: chat,
-    characterId,
-    userMsgAt: "2026-09-07 13:20:00",
-    bubbles: [],
-    notesToSave: [],
-    sendAt: "2026-09-07 14:00:30",
-    kind: "promise",
-    metaJson: JSON.stringify(meta),
-    createdAt: "2026-09-07 13:20:00",
-  });
+  const rowId = insertPromise(chat, "통화 끝나고 다시 연락", 430);
   const from = lastId();
   assert.equal(dropPromiseRows(chat), 1);
   const rows = eventsAfter(from);
@@ -147,24 +153,13 @@ test("새 약속이 앞 약속을 거두면 거둔 행마다 그 답장 스레�
 
 test("지금 울리고 있는 약속 행은 그 핸들러가 새로 거는 약속에 거둬지지 않는다", () => {
   const chat = "chat-promise-trace-except";
-  const insert = (): number =>
-    insertPendingReply({
-      chatId: chat,
-      characterId,
-      userMsgAt: "2026-09-07 13:20:00",
-      bubbles: [],
-      notesToSave: [],
-      sendAt: "2026-09-07 14:00:30",
-      kind: "promise",
-      metaJson: JSON.stringify({ promise: "통화 끝나고 연락", callId: 440 }),
-      createdAt: "2026-09-07 13:20:00",
-    });
+  const insert = (): number => insertPromise(chat, "통화 끝나고 연락", 440);
   const firing = insert();
   const from = lastId();
   assert.equal(dropPromiseRows(chat, undefined, firing), 0);
   assert.equal(eventsAfter(from).length, 0);
   assert.equal(
-    (db.prepare(`SELECT status FROM pending_replies WHERE id = ?`).get(firing) as {
+    (db.prepare(`SELECT status FROM outbox WHERE id = ?`).get(firing) as {
       status: string;
     }).status,
     "waiting",

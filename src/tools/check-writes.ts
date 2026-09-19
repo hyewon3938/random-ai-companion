@@ -1,5 +1,8 @@
 // 쓰기 전환 관찰 도구: 새 저장 구조에 무엇이 쌓였는지 한 번에 본다. 읽기 전용이라 DB를 바꾸지 않는다.
 // 사용: docker exec random-ai-companion npx tsx src/tools/check-writes.ts [--days 3] [--json]
+//
+// 연락 행(답장·구간 끝·약속·선톡)은 outbox 한 표에서 센다. v16에서 옮기기 전 날짜의 행은
+// *_legacy 표에 남아 있어서, 기간이 그 날짜를 걸치면 두 곳을 합쳐 보여 준다(#476).
 import { db } from "../db.js";
 import { kstLogicalDate } from "../kst.js";
 import {
@@ -165,16 +168,55 @@ const relationships = all<{
    FROM relationships ORDER BY character_id`,
 );
 
-const pending = all<{ status: string; n: number }>(
-  `SELECT status, COUNT(*) AS n FROM pending_replies GROUP BY status ORDER BY status`,
-);
-const pendingNotes = count(
-  `SELECT COUNT(*) AS n FROM pending_replies WHERE note_to_save IS NOT NULL AND date(created_at) >= ?`,
+// 연락 행은 v16부터 outbox 한 표에 있다. 옮기기 전 날짜의 행은 *_legacy 표에 남아 있어서
+// 기간이 옮긴 날을 걸치면 두 곳을 합쳐 센다. 옮길 때 기다리던 행은 outbox로 건너갔으므로
+// 옛 표에서는 빼고 센다. 새로 만든 DB에는 옛 표가 없다.
+const hasTable = (name: string): boolean =>
+  !!one(`SELECT 1 AS n FROM sqlite_master WHERE type = 'table' AND name = ?`, name);
+const legacyReplies = hasTable("pending_replies_legacy");
+const legacyScheduled = hasTable("scheduled_messages_legacy");
+
+const outboxCounts = all<{ kind: string; status: string; n: number }>(
+  `SELECT kind, status, COUNT(*) AS n FROM outbox
+   WHERE status = 'waiting' OR date(created_at) >= ?
+   GROUP BY kind, status ORDER BY kind, status`,
   since,
 );
-const scheduledMsgs = all<{ date: string; kind: string; status: string; skip_reason: string | null }>(
-  `SELECT date, kind, status, skip_reason FROM scheduled_messages
-   WHERE date >= ? ORDER BY date DESC, id DESC LIMIT 10`,
+const outboxNotes =
+  count(
+    `SELECT COUNT(*) AS n FROM outbox
+     WHERE kind = 'reply'
+       AND (CASE WHEN json_valid(payload_json) THEN json_array_length(payload_json, '$.notes') END) > 0
+       AND date(created_at) >= ?`,
+    since,
+  ) +
+  (legacyReplies
+    ? count(
+        `SELECT COUNT(*) AS n FROM pending_replies_legacy
+         WHERE status != 'waiting' AND note_to_save IS NOT NULL AND date(created_at) >= ?`,
+        since,
+      )
+    : 0);
+const scheduledMsgs = all<{
+  date: string;
+  kind: string;
+  status: string;
+  reason: string | null;
+  detail: string | null;
+}>(
+  `SELECT date, kind, status, reason, detail FROM (
+     SELECT CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.date') END AS date,
+            kind, status, reason, detail,
+            created_at AS at, id
+       FROM outbox WHERE kind IN ('morning','checkin')
+     ${
+       legacyScheduled
+         ? `UNION ALL
+     SELECT date, kind, status, NULL AS reason, skip_reason AS detail, created_at AS at, id
+       FROM scheduled_messages_legacy WHERE status != 'pending'`
+         : ""
+     }
+   ) WHERE date >= ? ORDER BY date DESC, at DESC, id DESC LIMIT 10`,
   since,
 );
 
@@ -325,8 +367,8 @@ if (asJson) {
         seedRunway,
         schedulesUpcoming,
         relationships,
-        pending,
-        pendingNotes,
+        outboxCounts,
+        outboxNotes,
         scheduledMsgs,
         msgsByDay,
         usage,
@@ -413,11 +455,16 @@ for (const r of relationships) {
   );
 }
 
-head("발송 대기");
-line(`  대기 답장: ${pending.map((p) => `${p.status} ${p.n}`).join(" · ") || "없음"}`);
-line(`  기간 안 답장에 딸린 메모: ${pendingNotes}건`);
+head("연락 행");
+line(
+  `  기다리는 행과 기간 안 행: ${
+    outboxCounts.map((p) => `${p.kind} ${p.status} ${p.n}`).join(" · ") || "없음"
+  }`,
+);
+line(`  기간 안 답장에 딸린 메모: ${outboxNotes}건`);
 for (const s of scheduledMsgs) {
-  line(`  선톡 ${s.date} ${s.kind} ${s.status}${s.skip_reason ? ` (${s.skip_reason})` : ""}`);
+  const why = [s.reason, s.detail].filter(Boolean).join(" · ");
+  line(`  선톡 ${s.date} ${s.kind} ${s.status}${why ? ` (${why})` : ""}`);
 }
 
 head("대화량과 모델 사용");

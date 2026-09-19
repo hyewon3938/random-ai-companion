@@ -8,6 +8,10 @@
 //
 // 이 모듈을 부르면 DB를 쓰기로 열고 마이그레이션까지 돌린다. 값을 보기만 하는 도구
 // (관리 대시보드)는 그래서 이쪽을 쓰지 않고 읽기 전용으로 따로 연다.
+//
+// 캐릭터가 보낼 연락은 outbox 한 표에 쌓는다(이슈 #476, 설계는 outgoing.md). 예전 두 표
+// (pending_replies·scheduled_messages)는 v16에서 *_legacy 이름으로 남겨 두고 기다리던 행만
+// 옮긴다. 옛 표의 정의는 LEGACY_TABLES에 두고, v16 이전 마이그레이션만 그 정의를 쓴다.
 
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
@@ -21,8 +25,11 @@ import {
   LEAD_TONE_NAME,
   MOVE_NAME,
   MOVE_REACTION_NAME,
+  PROACTIVE_KIND_NAME,
   SCHEDULE_PARENT_KIND_NAME,
+  type ProactiveKind,
 } from "../labels.js";
+import { sendDeadline } from "../kst.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
@@ -40,6 +47,103 @@ const inList = (names: Record<string, string>): string =>
   Object.keys(names)
     .map((k) => `'${k}'`)
     .join(",");
+
+// ── 연락 예약 표(outbox)의 닫힌 목록 ────────────────────────────────────────
+// 종류·상태·사유의 저장 값과 이름. 설계 원본은 outgoing.md 「발송 상태와 사유」다.
+// 이름표는 labels.ts로 모으는 것이 원칙인데, 이 세션의 범위가 표 모양까지라 여기 둔다 —
+// 선톡 틱이 이 표로 들어오는 단계에서 labels.ts로 옮길 후보다.
+
+/** 연락 행의 종류. 답장·구간 끝 둘에 선톡 종류 전부를 더한 목록이다. */
+export type OutboxKind = "reply" | "block_end" | ProactiveKind;
+
+export const OUTBOX_KIND_NAME: Record<OutboxKind, string> = {
+  reply: "답장",
+  block_end: "구간 끝",
+  ...PROACTIVE_KIND_NAME,
+};
+
+/** 연락 행이 어떻게 끝났는지. 대기만 아직 끝나지 않은 상태다. */
+export type OutboxStatus =
+  | "waiting"
+  | "sent"
+  | "partial"
+  | "skipped"
+  | "dropped"
+  | "failed";
+
+export const OUTBOX_STATUS_NAME: Record<OutboxStatus, string> = {
+  waiting: "대기",
+  sent: "보냄",
+  partial: "부분 발송",
+  skipped: "건너뜀",
+  dropped: "폐기",
+  failed: "실패",
+};
+
+/** 보냄·부분 발송이 아닌 행이 왜 그렇게 끝났는지. 목록 밖 설명은 상세(detail)에 적는다. */
+export type OutboxReason =
+  | "user_followup"
+  | "yielded"
+  | "replaced_promise"
+  | "character_ended"
+  | "expired"
+  | "conversation_moved"
+  | "model_declined"
+  | "model_failed"
+  | "no_turn"
+  | "already_done"
+  | "sleep_block"
+  | "rescheduled"
+  | "no_slot"
+  | "held"
+  | "cap"
+  | "user_silent"
+  | "user_first"
+  | "off_day"
+  | "morning_pending"
+  | "out_of_window"
+  | "retries_exhausted"
+  | "broken_payload";
+
+export const OUTBOX_REASON_NAME: Record<OutboxReason, string> = {
+  user_followup: "유저 추가 발화",
+  yielded: "다른 연락에 양보",
+  replaced_promise: "새 약속으로 교체",
+  character_ended: "캐릭터 종료",
+  expired: "만료",
+  conversation_moved: "대화가 다른 데로 감",
+  model_declined: "모델이 안 보내기로",
+  model_failed: "모델 호출 실패",
+  no_turn: "답할 차례 없음",
+  already_done: "직전에 이미 함",
+  sleep_block: "잠 블록",
+  rescheduled: "재예약",
+  no_slot: "시각을 정할 수 없음",
+  held: "붙잡기 중",
+  cap: "상한",
+  user_silent: "유저 침묵",
+  user_first: "유저가 먼저 연락함",
+  off_day: "보내지 않는 날",
+  morning_pending: "아침 문안 대기 중",
+  out_of_window: "창 밖",
+  retries_exhausted: "발송 재시도 소진",
+  broken_payload: "내용 손상",
+};
+
+/**
+ * 종류마다 중복 방지 키를 짓는 함수(outgoing.md 「중복 방지 키」). 행을 넣는 쪽과 v16
+ * 마이그레이션이 같은 함수를 쓴다. 이 파일에 두는 까닭은 마이그레이션이 모듈을 부르는 순간
+ * 돌아서, sends.ts에 두면 서로 부르는 순환이 되기 때문이다. 키를 지을 값이 없는 행은
+ * row(행 번호)로 대신한다.
+ */
+export const outboxKey = {
+  reply: (userMsgAt: string): string => `답장:${userMsgAt}`,
+  blockEnd: (blockStart: string): string => `구간끝:${blockStart}`,
+  promise: (callId: number | string): string => `약속:${callId}`,
+  morning: (date: string): string => `아침:${date}`,
+  checkin: (date: string): string => `안부:${date}`,
+  row: (id: number): string => `row${id}`,
+};
 
 const TABLES: Record<string, string> = {
   characters: `
@@ -297,48 +401,26 @@ const TABLES: Record<string, string> = {
   text TEXT NOT NULL,
   meta_json TEXT`,
 
-  // 만들어 둔 답장을 보관했다가 정한 시각에 보낸다. 봇이 내려가도 보낼 것이 남는다.
-  // kind='wake'와 'return'은 답장이 아니라 깨우기 표시다 — 불가 구간에는 답장을 미리
-  // 만들지 않고, 구간이 끝나는 시각에 이 행이 울리면 그때 무엇을 할지 정한다. 둘의 차이는
-  // 유저가 그 구간에 말을 걸었는가다. 'return'은 자리 비움 틱이 구간에 들어갈 때 걸어 두는
-  // 행이라 아직 답할 말이 없고, 유저가 그 구간에 말을 걸면 'wake'로 바뀐다. 이 구분이
-  // 필요한 이유는 선톡을 막는 isWaiting이 'wake'만 세야 하기 때문이다 — 'return'까지 세면
-  // 불가 구간 내내 모든 선톡 틱이 멈춰 다음 예고와 아침·점심 선톡이 창을 놓친다.
-  // 'promise'는 캐릭터가 답장에서 한 연락 약속이다(이슈 #308) — 문안 없이 약속 시각(각본 블록
-  // 경계)에 걸어 두고, 울리면 그때 모델을 불러 말을 만든다. meta_json에 약속 문장이 있다.
-  // 'return'처럼 선톡을 막지 않고, 유저가 말을 더 보내도 살아남는다.
-  pending_replies: `
+  // 캐릭터가 보낼 연락 한 건이 한 행이다(outgoing.md 「연락 예약 표」, 이슈 #476). 만들어 둔
+  // 답장, 구간 끝에 깨울 표시, 약속, 전날 밤에 만든 아침·안부 문안이 전부 여기 쌓이고, 정한
+  // 시각(send_at)에 발송 틱이 꺼내 보낸다. 봇이 내려가도 보낼 것이 남는다.
+  // 같은 일을 두 번 거는 것은 (chat_id, kind, dedupe_key) 고유 인덱스가 막는다. 이 인덱스는
+  // 기다리는 행에만 걸어서, 다시 예약하는 핸들러가 자기 행을 먼저 닫고 같은 키로 새 행을 넣을
+  // 수 있다. 종류마다 다른 값은 payload_json에 두고, 끝난 행은 status·reason·detail로 남긴다.
+  outbox: `
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN (${inList(OUTBOX_KIND_NAME)})),
   chat_id TEXT NOT NULL,
   character_id INTEGER NOT NULL REFERENCES characters(id),
-  user_msg_at TEXT NOT NULL,
-  bubbles_json TEXT NOT NULL,
-  note_to_save TEXT,
+  dedupe_key TEXT NOT NULL,
   send_at TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover','wake','return','promise')),
-  meta_json TEXT,
+  expires_at TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}',
   call_id INTEGER,
-  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','sent','superseded','failed')),
+  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN (${inList(OUTBOX_STATUS_NAME)})),
+  reason TEXT CHECK (reason IS NULL OR reason IN (${inList(OUTBOX_REASON_NAME)})),
+  detail TEXT,
   attempts INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT,
-  created_at TEXT NOT NULL,
-  sent_at TEXT`,
-
-  // 미리 만들어 둔 아침 · 안부 선톡 문안. 만든 자리에서 바로 보내지 않고 여기 적어 두면
-  // 봇이 내려가도 보낼 것이 남고, 실패한 시도를 같은 행에 세어 둘 수 있다.
-  scheduled_messages: `
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  character_id INTEGER NOT NULL REFERENCES characters(id),
-  chat_id TEXT NOT NULL,
-  date TEXT NOT NULL,
-  window_start TEXT NOT NULL,
-  window_end TEXT NOT NULL,
-  text TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'morning' CHECK (kind IN ('morning','checkin')),
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','skipped')),
-  skip_reason TEXT,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT,
   created_at TEXT NOT NULL,
   sent_at TEXT`,
 
@@ -465,6 +547,47 @@ const TABLES: Record<string, string> = {
   thread_ts TEXT`,
 };
 
+// v16에서 outbox로 합친 예전 두 표의 마지막 정의. 새 DB에는 만들지 않고, v16 이전 단계의
+// 마이그레이션이 옛 DB를 그 시점 모양으로 맞출 때만 쓴다. v16은 이 두 표를 *_legacy로
+// 이름만 바꿔 남기므로, 옛 행 번호로 적힌 트레이스 키·피드백이 계속 원래 행을 찾는다.
+const LEGACY_TABLES: Record<string, string> = {
+  // 만들어 둔 답장을 보관했다가 정한 시각에 보낸다. kind='wake'와 'return'은 구간 끝의 깨우기
+  // 표시, 'promise'는 연락 약속이다. v16부터 outbox의 reply·block_end·promise 행이 된다.
+  pending_replies: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id TEXT NOT NULL,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  user_msg_at TEXT NOT NULL,
+  bubbles_json TEXT NOT NULL,
+  note_to_save TEXT,
+  send_at TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'reply' CHECK (kind IN ('reply','recover','wake','return','promise')),
+  meta_json TEXT,
+  call_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','sent','superseded','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT`,
+
+  // 미리 만들어 둔 아침 · 안부 선톡 문안. v16부터 outbox의 morning·checkin 행이 된다.
+  scheduled_messages: `
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  chat_id TEXT NOT NULL,
+  date TEXT NOT NULL,
+  window_start TEXT NOT NULL,
+  window_end TEXT NOT NULL,
+  text TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'morning' CHECK (kind IN ('morning','checkin')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','skipped')),
+  skip_reason TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT`,
+};
+
 const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_characters_chat ON characters (chat_id)`,
   `CREATE INDEX IF NOT EXISTS idx_memory_items_type ON memory_items (character_id, item_type)`,
@@ -473,9 +596,11 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_schedules_date ON schedules (character_id, date)`,
   `CREATE INDEX IF NOT EXISTS idx_day_actuals_date ON day_actuals (character_id, date)`,
   `CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages (chat_id, sent_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_pending_replies_due ON pending_replies (status, send_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_pending_replies_chat ON pending_replies (chat_id, status)`,
-  `CREATE INDEX IF NOT EXISTS idx_scheduled_messages_due ON scheduled_messages (status, date)`,
+  // 같은 연락을 두 번 거는 것을 막는 제약. 대기 행에만 걸어서 끝난 행과 같은 키로 새 행을
+  // 넣을 수 있다(outgoing.md 「중복 방지 키」). INSERT의 ON CONFLICT가 이 인덱스를 가리킨다.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_waiting_key ON outbox (chat_id, kind, dedupe_key) WHERE status = 'waiting'`,
+  `CREATE INDEX IF NOT EXISTS idx_outbox_due ON outbox (status, send_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_outbox_chat ON outbox (chat_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_trace_events_pending ON trace_events (status, id)`,
   `CREATE INDEX IF NOT EXISTS idx_trace_events_thread ON trace_events (thread_key)`,
   `CREATE INDEX IF NOT EXISTS idx_llm_calls_created ON llm_calls (created_at)`,
@@ -492,7 +617,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 16;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -521,7 +646,7 @@ const rebuild = (
   source: string = name,
 ): void => {
   db.exec(`ALTER TABLE ${source} RENAME TO ${name}__old`);
-  db.exec(`CREATE TABLE ${name} (${TABLES[name]}\n)`);
+  db.exec(`CREATE TABLE ${name} (${TABLES[name] ?? LEGACY_TABLES[name]}\n)`);
   db.exec(
     `INSERT INTO ${name} (${columns}) SELECT ${select} FROM ${name}__old`,
   );
@@ -779,7 +904,11 @@ const migrateToV4 = (): void => {
         db.exec(sql);
 
     if (sendsAreOld) {
-      // 새 이름의 빈 테이블은 부팅할 때 이미 만들어졌다. 값을 옮기고 옛 테이블을 지운다.
+      // 새 이름의 빈 테이블은 v16 전까지 부팅할 때 만들어졌다. v16부터는 createSchema가 이 표를
+      // 만들지 않으므로 여기서 그 시점 모양으로 만든 다음 값을 옮기고 옛 테이블을 지운다.
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS scheduled_messages (${LEGACY_TABLES.scheduled_messages}\n)`,
+      );
       db.exec(`
         INSERT INTO scheduled_messages
           (id, character_id, chat_id, date, window_start, window_end, text, kind,
@@ -1112,7 +1241,7 @@ if (schemaVersion() < 11) migrateToV11();
 if (schemaVersion() < 12) migrateToV12();
 if (schemaVersion() < 13) migrateToV13();
 if (schemaVersion() < 14) migrateToV14();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV15();
+if (schemaVersion() < 15) migrateToV15();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를
@@ -1132,7 +1261,7 @@ const migratePendingWake = (): void => {
     db.exec(`ALTER TABLE pending_replies RENAME TO pending_replies_old`);
     db.exec(`DROP INDEX IF EXISTS idx_pending_replies_due`);
     db.exec(`DROP INDEX IF EXISTS idx_pending_replies_chat`);
-    db.exec(`CREATE TABLE pending_replies (${TABLES.pending_replies}\n)`);
+    db.exec(`CREATE TABLE pending_replies (${LEGACY_TABLES.pending_replies}\n)`);
     db.exec(`
       INSERT INTO pending_replies
         (id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save,
@@ -1220,7 +1349,7 @@ const rebuildPendingReplies = (marker: string): void => {
     db.exec(`ALTER TABLE pending_replies RENAME TO pending_replies_old`);
     db.exec(`DROP INDEX IF EXISTS idx_pending_replies_due`);
     db.exec(`DROP INDEX IF EXISTS idx_pending_replies_chat`);
-    db.exec(`CREATE TABLE pending_replies (${TABLES.pending_replies}\n)`);
+    db.exec(`CREATE TABLE pending_replies (${LEGACY_TABLES.pending_replies}\n)`);
     db.exec(`
       INSERT INTO pending_replies
         (id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save,
@@ -1283,6 +1412,283 @@ rebuildSendFailures("lunch");
 rebuildSendFailures("glance");
 rebuildSendFailures("intent");
 rebuildSendFailures("care");
+
+// v16: 예전 두 표(pending_replies·scheduled_messages)를 outbox 한 표로 합친다(이슈 #476,
+// 설계는 outgoing.md). 옛 표는 지우지 않고 *_legacy로 이름만 바꿔 남긴다 — 옛 행 번호가
+// 트레이스 키(scheduled:<번호>:send, promise:<번호>:<단계>, wake:<캐릭터>:<번호>)와 발송 기록의
+// meta_json(scheduled_id·promise_row)에 적혀 있어서, 피드백을 되짚을 때 원래 행을 찾아야 한다.
+//
+// 옮기는 것은 아직 기다리던 행뿐이다(답장 쪽 waiting, 예약 쪽 pending). 답장 쪽 행은 번호를
+// 그대로 옮겨서 걸려 있던 트레이스 키가 계속 같은 행을 가리키고, 예약 쪽 행은 새 번호를 받고
+// 옛 번호를 payload의 legacyId로 남긴다. 새 행의 번호는 두 옛 표의 가장 큰 번호보다 크게
+// 시작한다 — 옛 표 둘은 번호를 따로 셌으므로, 이어 세지 않으면 새 행 번호가 옛 행 번호와 겹쳐
+// 트레이스 키가 엉뚱한 행을 가리킨다.
+//
+// 키를 지을 값이 없는 행(깨우기 표시에 blockStart가 없거나 약속에 호출 번호가 없는 행)은
+// row<번호>를 키로 쓴다. 같은 키가 이미 기다리고 있어도 같은 방식으로 비켜 넣는다.
+const migrateToV16 = (): void => {
+  const exists = (name: string): boolean =>
+    !!db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
+      .get(name);
+  const hasPending = exists("pending_replies");
+  const hasScheduled = exists("scheduled_messages");
+  if (!hasPending && !hasScheduled) {
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    return;
+  }
+
+  const parseObj = (raw: string | null): Record<string, unknown> => {
+    if (!raw) return {};
+    try {
+      const v: unknown = JSON.parse(raw);
+      return v && typeof v === "object" && !Array.isArray(v)
+        ? (v as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  };
+  const parseList = (raw: string | null): string[] => {
+    if (!raw) return [];
+    try {
+      const v: unknown = JSON.parse(raw);
+      return Array.isArray(v)
+        ? v.filter((b): b is string => typeof b === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  };
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v ? v : undefined;
+  // 옛 meta에 없던 값은 빈 문자열로 채우지 않고 뺀다 — 핸들러가 빈 값일 때 쓰는 기본값
+  // (활동은 하던 일, 복귀 표시는 true)이 옛 행과 같게 나와야 한다.
+  const block = (meta: Record<string, unknown>): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const k of ["activity", "blockStart", "blockEnd"]) {
+      const v = str(meta[k]);
+      if (v) out[k] = v;
+    }
+    return out;
+  };
+
+  const insertWithId = db.prepare(
+    `INSERT INTO outbox
+       (id, kind, chat_id, character_id, dedupe_key, send_at, expires_at,
+        payload_json, call_id, detail, attempts, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (chat_id, kind, dedupe_key) WHERE status = 'waiting' DO NOTHING`,
+  );
+  const insertNew = db.prepare(
+    `INSERT INTO outbox
+       (kind, chat_id, character_id, dedupe_key, send_at, expires_at,
+        payload_json, call_id, detail, attempts, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (chat_id, kind, dedupe_key) WHERE status = 'waiting' DO NOTHING`,
+  );
+
+  let moved = 0;
+  let movedScheduled = 0;
+  let fallbackKeys = 0;
+
+  db.pragma("foreign_keys = OFF");
+  db.pragma("legacy_alter_table = ON");
+  db.transaction(() => {
+    if (hasPending)
+      db.exec(`ALTER TABLE pending_replies RENAME TO pending_replies_legacy`);
+    if (hasScheduled)
+      db.exec(
+        `ALTER TABLE scheduled_messages RENAME TO scheduled_messages_legacy`,
+      );
+
+    if (hasPending) {
+      const rows = db
+        .prepare(
+          `SELECT id, chat_id, character_id, user_msg_at, bubbles_json, note_to_save,
+                  send_at, kind, meta_json, call_id, attempts, last_error, created_at
+             FROM pending_replies_legacy WHERE status = 'waiting' ORDER BY id`,
+        )
+        .all() as {
+        id: number;
+        chat_id: string;
+        character_id: number;
+        user_msg_at: string;
+        bubbles_json: string;
+        note_to_save: string | null;
+        send_at: string;
+        kind: string;
+        meta_json: string | null;
+        call_id: number | null;
+        attempts: number;
+        last_error: string | null;
+        created_at: string;
+      }[];
+      for (const r of rows) {
+        const meta = parseObj(r.meta_json);
+        let kind: OutboxKind;
+        let key: string | null;
+        let payload: Record<string, unknown>;
+        let callId: number | null = null;
+        if (r.kind === "reply" || r.kind === "recover") {
+          kind = "reply";
+          key = outboxKey.reply(r.user_msg_at);
+          const notes = (r.note_to_save ?? "").split("\n").filter(Boolean);
+          payload = {
+            userMsgAt: r.user_msg_at,
+            bubbles: parseList(r.bubbles_json),
+            ...(notes.length ? { notes } : {}),
+            ...(r.kind === "recover" ? { recover: true } : {}),
+            ...(Object.keys(meta).length ? { replyMeta: meta } : {}),
+          };
+          callId = r.call_id;
+        } else if (r.kind === "promise") {
+          kind = "promise";
+          const call = meta.callId;
+          const hasCall = typeof call === "number";
+          key = hasCall ? outboxKey.promise(call) : null;
+          payload = {
+            ...block(meta),
+            ...(str(meta.promise) ? { promise: str(meta.promise) } : {}),
+            userMsgAt: r.user_msg_at,
+          };
+          callId = hasCall ? call : null;
+        } else {
+          // wake·return → 구간 끝. 깨우기 표시(wake)는 유저가 그 구간에 말을 걸었다는 뜻이라
+          // 그 시각을 userFirstAt으로 옮기고, 복귀 표시(return)는 비워 둔다.
+          kind = "block_end";
+          const start = str(meta.blockStart);
+          key = start ? outboxKey.blockEnd(start) : null;
+          payload = {
+            ...block(meta),
+            ...(r.kind === "wake" ? { userFirstAt: r.user_msg_at } : {}),
+          };
+        }
+        const args = (k: string): unknown[] => [
+          r.id,
+          kind,
+          r.chat_id,
+          r.character_id,
+          k,
+          r.send_at,
+          null,
+          JSON.stringify(payload),
+          callId,
+          r.last_error,
+          r.attempts,
+          r.created_at,
+        ];
+        const done = key ? insertWithId.run(...args(key)).changes : 0;
+        if (!done) {
+          insertWithId.run(...args(outboxKey.row(r.id)));
+          fallbackKeys++;
+        }
+        moved++;
+      }
+    }
+
+    // 새 번호가 두 옛 표의 가장 큰 번호 뒤에서 시작하게 한다. AUTOINCREMENT는 sqlite_sequence의
+    // 값과 표의 가장 큰 번호 중 큰 쪽 다음을 쓰므로, outbox 줄을 그 값 이상으로 올려 둔다.
+    const seqOf = (name: string): number =>
+      (
+        db
+          .prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`)
+          .get(name) as { seq: number } | undefined
+      )?.seq ?? 0;
+    const maxIdOf = (name: string): number =>
+      exists(name)
+        ? ((
+            db.prepare(`SELECT MAX(id) AS m FROM ${name}`).get() as {
+              m: number | null;
+            }
+          ).m ?? 0)
+        : 0;
+    const floor = Math.max(
+      seqOf("pending_replies_legacy"),
+      seqOf("scheduled_messages_legacy"),
+      maxIdOf("pending_replies_legacy"),
+      maxIdOf("scheduled_messages_legacy"),
+    );
+    const bumped = db
+      .prepare(
+        `UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'outbox'`,
+      )
+      .run(floor).changes;
+    if (!bumped)
+      db.prepare(
+        `INSERT INTO sqlite_sequence (name, seq) VALUES ('outbox', ?)`,
+      ).run(Math.max(floor, maxIdOf("outbox")));
+
+    if (hasScheduled) {
+      const rows = db
+        .prepare(
+          `SELECT id, character_id, chat_id, date, window_start, window_end, text,
+                  kind, attempts, last_error, created_at
+             FROM scheduled_messages_legacy WHERE status = 'pending' ORDER BY id`,
+        )
+        .all() as {
+        id: number;
+        character_id: number;
+        chat_id: string;
+        date: string;
+        window_start: string;
+        window_end: string;
+        text: string;
+        kind: string;
+        attempts: number;
+        last_error: string | null;
+        created_at: string;
+      }[];
+      for (const r of rows) {
+        const kind: OutboxKind = r.kind === "checkin" ? "checkin" : "morning";
+        const key =
+          kind === "checkin" ? outboxKey.checkin(r.date) : outboxKey.morning(r.date);
+        const args = (k: string): unknown[] => [
+          kind,
+          r.chat_id,
+          r.character_id,
+          k,
+          `${r.date} ${r.window_start}:00`,
+          `${r.date} ${sendDeadline(r.window_start, r.window_end)}:00`,
+          JSON.stringify({
+            date: r.date,
+            windowStart: r.window_start,
+            windowEnd: r.window_end,
+            text: r.text,
+            legacyId: r.id,
+          }),
+          null,
+          r.last_error,
+          r.attempts,
+          r.created_at,
+        ];
+        if (!insertNew.run(...args(key)).changes) {
+          // 같은 날 같은 종류가 이미 기다리고 있으면 번호가 정해진 뒤 row<번호>로 바꾼다.
+          const id = insertNew.run(...args(`${key}#legacy${r.id}`))
+            .lastInsertRowid as number;
+          db.prepare(`UPDATE outbox SET dedupe_key = ? WHERE id = ?`).run(
+            outboxKey.row(id),
+            id,
+          );
+          fallbackKeys++;
+        }
+        movedScheduled++;
+      }
+    }
+
+    const broken = db.pragma("foreign_key_check") as unknown[];
+    if (broken.length)
+      throw new Error(
+        `[db] outbox 이관 후 외래 키가 맞지 않는 행 ${broken.length}개 — 되돌린다`,
+      );
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  })();
+  db.pragma("legacy_alter_table = OFF");
+  console.log(
+    `[db] 스키마를 v16으로 옮겼다 (대기 답장·표시·약속 ${moved}건, 예약 문안 ${movedScheduled}건, row 키 ${fallbackKeys}건)`,
+  );
+};
+if (schemaVersion() < SCHEMA_VERSION) migrateToV16();
 
 // 문화 스크립트는 코드에 적힌 원본이 단일 소스이고 표는 그 사본이다. 그래서 기동할 때마다
 // 통째로 다시 넣는다 — 원본에서 지운 단계가 표에 남지 않고, 표를 손으로 고쳐도 다음 기동에

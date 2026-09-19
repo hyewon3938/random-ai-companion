@@ -9,6 +9,9 @@
 //
 // getKstNow()가 돌려주는 값은 UTC에 9시간을 더한 Date라, 경과 시간을 잴 때 쓰면 9시간이
 // 어긋난다. 시간 차 계산은 Date.now()로 한다.
+//
+// 아침·안부 문안을 언제까지 보내도 되는지(sendDeadline)도 여기 있다. 문안을 적어 두는 자리와
+// 꺼내 보내는 자리가 같은 마감을 써야 해서, 발송 틱 안에 있던 계산을 옮겨 왔다(이슈 #476).
 
 import {
   CONTACT_GAP_NOTICE_MS,
@@ -18,6 +21,7 @@ import {
   ENOUGH_SLEEP_HOURS,
   LATE_TALK_FROM,
   NIGHT_SLEEP_FROM,
+  SEND_GRACE_MIN,
   TIME_MARKER_GAP_MS,
 } from "./thresholds.js";
 
@@ -374,7 +378,7 @@ export const nightSleepOf = (
 /**
  * 지금 시각을 저장용 문자열("YYYY-MM-DD HH:MM:SS", KST)로 만든다.
  *
- * messages·llm_calls·pending_replies가 같은 모양으로 시각을 적는다. 파일마다 따로 만들어
+ * messages·llm_calls·outbox가 같은 모양으로 시각을 적는다. 파일마다 따로 만들어
  * 쓰던 것을 한 자리로 모았다 — 모양이 어긋나면 문자열 비교로 순서를 매기는 자리가 깨진다.
  */
 export const kstStamp = (): string =>
@@ -387,3 +391,31 @@ export const kstStampBefore = (ms: number): string =>
     .toISOString()
     .replace("T", " ")
     .slice(0, 19);
+
+const addMin = (hhmm: string, m: number): string => {
+  const [h, mm] = hhmm.split(":").map(Number);
+  const t = Math.min(23 * 60 + 59, (h ?? 0) * 60 + (mm ?? 0) + m);
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+};
+
+const hardCap = (windowStart: string): string =>
+  windowStart < "11:00" ? "11:00" : windowStart < "15:00" ? "14:00" : "22:00";
+
+/**
+ * 아침·안부 문안을 늦게라도 보낼 수 있는 마지막 시각("HH:MM").
+ *
+ * 네트워크 실패로 발송 창을 놓쳐도 그날 안에 늦게라도 보낸다. 다만 문안은 '아침'이 아니라
+ * 특정 순간에 맞춰 쓰였다 — 새벽 정리가 하루 각본에서 기상과 첫 일과를 찾아 "막 일어난 참" /
+ * "첫 일과를 막 시작할 무렵" / "하다가 한숨 돌린 참" 중 하나의 결로 쓰게 한다. 그래서 무한정
+ * 늦출 수 없고 두 겹으로 잡는다.
+ *   - 창 종료 +90분: 문안이 쓰인 순간에서 너무 멀어지지 않게. 06:15 기상 문안은 아무리 늦어도 08:40까지.
+ *   - 시간대별 절대 상한: 늦게 시작하는 하루(09:50 시작)의 문안이 점심까지 밀리지 않게.
+ * 둘 중 이른 쪽이 마감이다. 발송 틱은 6시부터 돌므로, 아주 이른 기상 문안(새벽 창)이 첫 틱
+ * 전에 만료되지 않게 06:30을 하한으로 둔다. 연락 행에 적는 만료 시각이 이 값이다.
+ */
+export const sendDeadline = (windowStart: string, windowEnd: string): string => {
+  const soft = addMin(windowEnd, SEND_GRACE_MIN);
+  const cap = hardCap(windowStart);
+  const d = soft < cap ? soft : cap;
+  return d < "06:30" ? "06:30" : d;
+};

@@ -483,13 +483,12 @@ plan_json 안 블록의 태그도 영어 식별자로 저장한다. 답장 여�
 
 ```mermaid
 erDiagram
-    characters ||--o{ pending_replies : "대기 중인 답장과 깨우기 표시"
-    characters ||--o{ scheduled_messages : "미리 만든 선톡"
+    characters ||--o{ outbox : "보낼 연락 한 건씩"
     characters ||--o{ send_failures : "전송 실패 기록"
     characters ||--o{ llm_calls : "모델 호출 기록"
     characters ||--o{ trace_events : "슬랙에 게시할 내용"
     characters ||--o{ call_feedback : "사람이 남긴 표시"
-    pending_replies }o..|| messages : "user_msg_at이 가리킴"
+    outbox }o..|| messages : "답장 행의 유저 메시지 시각이 가리킴"
     llm_calls }o..o{ prompt_blobs : "내용 해시가 가리킴"
     llm_calls ||--o{ call_feedback : "이 호출의 게시에 대한 표시"
     trace_events }o..o{ call_feedback : "게시 시각과 게시 키로 되짚음"
@@ -501,15 +500,12 @@ erDiagram
         INTEGER id PK
         TEXT chat_id
     }
-    pending_replies {
+    outbox {
         INTEGER id PK
         INTEGER character_id FK
         TEXT chat_id
-        TEXT kind "답장인가 깨우기 표시인가"
-    }
-    scheduled_messages {
-        INTEGER id PK
-        INTEGER character_id FK
+        TEXT kind "어떤 연락인가"
+        TEXT dedupe_key "같은 연락은 대기 행 하나"
     }
     recovery_marks {
         TEXT chat_id PK
@@ -560,56 +556,48 @@ erDiagram
 
 role의 `user`와 `assistant`는 모델 API가 대화 기록을 받을 때 쓰는 이름이다. 저장한 대화를 프롬프트에 넣을 때 이 형식 그대로 보내기 때문에 캐릭터가 한 말도 `assistant`로 적는다.
 
-**pending_replies** — 만들어 두고 정한 시각에 보낼 답장, 답장 불가 구간이 끝날 때 깨어나기 위한 표시, 그리고 답장에서 한 연락 약속. 봇이 다시 떠도 여기 남은 행을 보고 이어서 보낸다
+**outbox** — 캐릭터가 정한 시각에 보낼 연락 한 건을 한 행으로 적는 연락 예약 표. 만들어 둔 답장, 답장 불가 구간이 끝날 때 깨어나기 위한 표시, 답장에서 한 연락 약속, 새벽 정리가 만든 아침·안부 문안이 여기 들어간다. 봇이 다시 떠도 여기 남은 대기 행을 보고 이어서 보낸다. 설계 원본은 outgoing.md 「연락 예약 표」다
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
 | id | INTEGER | O | PK |
+| kind | TEXT | O | 연락 종류. 지금 행을 넣는 종류는 `reply` · `block_end` · `promise` · `morning` · `checkin` 5가지이고, 목록에는 나머지 선톡 종류도 들어 있다 |
 | chat_id | TEXT | O | |
 | character_id | INTEGER | O | FK characters.id |
-| user_msg_at | TEXT | O | 답할 유저 메시지의 시각 |
-| bubbles_json | TEXT | O | 보낼 말풍선들. 깨우기 표시는 문안이 없어 빈 목록 |
-| note_to_save | TEXT | | 발송 후 today_notes에 적을 한 줄 |
-| send_at | TEXT | O | 보낼 시각. 깨우기 표시는 구간이 끝나는 시각 |
-| kind | TEXT | O | 행의 종류 — `reply` · `recover` · `wake` · `return` · `promise` |
-| meta_json | TEXT | | 깨우기 표시와 약속 행일 때 그 구간의 활동과 시작 · 종료 시각. 약속 행에는 약속 문장도 있다 |
-| call_id | INTEGER | | 이 답장을 만든 모델 호출의 llm_calls 행. 발송과 폐기 결과를 그 호출의 슬랙 트레이스 스레드에 이을 때 쓴다 |
-| status | TEXT | O | `waiting` · `sent` · `superseded` · `failed` |
-| attempts | INTEGER | O | |
-| last_error | TEXT | | |
+| dedupe_key | TEXT | O | 같은 연락인지 가리는 키. 형식은 아래 |
+| send_at | TEXT | O | 보낼 시각. 구간 끝과 약속은 구간이 끝나는 시각, 아침·안부는 발송 창이 열리는 시각 |
+| expires_at | TEXT | | 이 시각을 넘기면 보내지 않는다. 아침·안부만 창 끝에 유예를 더해 적고 나머지 종류는 비워 둔다 |
+| payload_json | TEXT | O | 종류마다 다른 값. 아래 표 |
+| call_id | INTEGER | | 이 연락을 만든 모델 호출의 llm_calls 행. 약속 행은 약속을 말한 답장의 호출을 적는다. 발송과 폐기 결과를 그 호출의 슬랙 트레이스 스레드에 이을 때 쓴다 |
+| status | TEXT | O | 행이 어떻게 끝났는지 — `waiting` · `sent` · `partial` · `skipped` · `dropped` · `failed` |
+| reason | TEXT | | 보냄·부분 발송이 아닌 행이 그렇게 끝난 사유. 목록 22가지와 적는 경우는 outgoing.md 「발송 상태와 사유」 |
+| detail | TEXT | | 사유 목록에 들어가지 않는 설명. 발송 오류 본문, 선톡 잠금에 막힌 이유, 어느 조건에 걸렸는지 |
+| attempts | INTEGER | O | 발송 시도 횟수. 선톡 잠금에 막힌 것은 세지 않는다 |
 | created_at | TEXT | O | |
 | sent_at | TEXT | | |
 
-키·인덱스: PK `id`, 인덱스 `(status, send_at)`, 인덱스 `(chat_id, status)`
+키·인덱스: PK `id`, 고유 인덱스 `(chat_id, kind, dedupe_key)` 대기 행만, 인덱스 `(status, send_at)`, 인덱스 `(chat_id, status)`
 
-`wake` 행은 답장이 아니라 깨우기 표시다. 답장 불가 구간에 유저가 말을 걸면 몇 시간 뒤에 나갈 답장을 지금 만들지 않고 이 행만 걸어 두었다가, 구간이 끝나는 시각에 깨어나 그 사이 쌓인 메시지를 한 번에 읽고 답한다. 유저가 말을 더 보내면 만들어 둔 답장은 버리지만 이 행은 남겨 둔다. 구간이 끝날 때 몰아 읽는 것은 메시지가 몇 개든 같기 때문이다.
+| 종류 | 중복 방지 키 | payload_json |
+| --- | --- | --- |
+| `reply` 답장 | `답장:<묶음의 마지막 유저 메시지 시각>` | 유저 메시지 시각, 말풍선, 보낸 뒤 오늘 메모로 옮길 줄, 복구 답장인지, 대화 기록 행에 옮길 관계 값 |
+| `block_end` 구간 끝 | `구간끝:<블록 시작>` | 블록 시작 · 끝, 활동, 유저가 그 구간에 처음 말한 시각, 복귀 인사 문안을 만든 호출 번호 |
+| `promise` 약속 | `약속:<약속을 말한 답장의 호출 번호>` | 블록 시작 · 끝, 활동, 약속 문장, 그 답장이 답하던 유저 메시지 시각, 약속 연락 문안을 만든 호출 번호 |
+| `morning` 아침 · `checkin` 안부 | `아침:<날짜>` · `안부:<날짜>` | 날짜, 발송 창 시작 · 끝, 문안, 스키마 16판에서 옮겨 온 행의 옛 행 번호 |
 
-`return` 행은 자리 비움 틱이 긴 구간에 들어가며 거는 표시다. 유저 말이 없어도 구간이 끝나면 깨어나 복귀 인사를 보낼지 가린다. `promise` 행은 캐릭터가 답장에서 한 연락 약속이다. 답장이 통화 끝나고 다시 연락하겠다고 하면 코드가 그 약속 문장을 이 행에 적고, 시각은 모델이 정하지 않고 각본 블록이 끝나는 시각에서 고른다. 그 시각이 되면 모델을 다시 불러 그때의 대화 기록을 보고 말을 만들고, 그 사이 유저가 말을 보냈으면 그 답장이 약속을 지키는 자리가 된다. 이 행은 유저가 기다리는 답장이 아니라 답장 대기로 세지 않아 선톡을 막지 않고, 새 약속이 오면 앞 약속을 거둔다.
+키를 만들 값이 없는 행은 `row<행 번호>`를 키로 적는다. 구간 끝 행과 약속 행은 선톡 잠금에 막힌 동안 처음 막힌 시각도 payload_json에 적어 두고, 막힌 채로 30분이 지나면 `dropped`로 닫는다.
 
-**scheduled_messages** — 미리 만드는 선톡 둘(아침 · 안부)의 문안과 발송 창
+약속 다시 잡기와 구간 끝 다시 걸기는 자기 행과 같은 키로 새 행을 넣을 때가 있어서, 고유 인덱스는 대기 행에만 걸고 두 핸들러는 같은 트랜잭션 안에서 자기 행을 먼저 닫은 뒤 새 행을 넣는다. 끝난 행과 같은 연락을 다시 넣는 것은 인덱스가 막지 않아서, 하루 한 통인 아침·안부는 넣기 전에 그날 행이 있는지 저장 함수가 확인한다.
 
-| 컬럼 | 타입 | 필수 | 설명 |
-| --- | --- | --- | --- |
-| id | INTEGER | O | PK |
-| character_id | INTEGER | O | FK characters.id |
-| chat_id | TEXT | O | |
-| date | TEXT | O | |
-| window_start | TEXT | O | |
-| window_end | TEXT | O | |
-| text | TEXT | O | |
-| kind | TEXT | O | 선톡 종류 — `morning` · `checkin` |
-| status | TEXT | O | `pending` · `sent` · `skipped` |
-| skip_reason | TEXT | | 폐기 사유 |
-| attempts | INTEGER | O | |
-| last_error | TEXT | | |
-| created_at | TEXT | O | |
-| sent_at | TEXT | | |
+`block_end` 행은 답장이 아니라 구간이 끝나는 시각에 깨어나기 위한 표시다. 자리 비움 틱이 긴 구간에 들어가며 거는 행은 유저 첫 발화 시각이 비어 있어서, 구간이 끝나면 복귀 인사를 보낼지 가린다. 답장 불가 구간에 유저가 말을 걸면 몇 시간 뒤에 나갈 답장을 지금 만들지 않고 이 행에 첫 발화 시각을 적어 두었다가, 구간이 끝나는 시각에 깨어나 그 사이 쌓인 메시지를 한 번에 읽고 답한다. 유저가 말을 더 보내면 만들어 둔 답장은 버리지만 이 행은 남겨 둔다. 구간이 끝날 때 몰아 읽는 것은 메시지가 몇 개든 같기 때문이다. 선톡을 막는 답장 대기 판정은 대기 중인 답장 행과 첫 발화 시각이 있는 대기 중인 구간 끝 행만 센다.
 
-키·인덱스: PK `id`, 인덱스 `(status, date)`
+`promise` 행은 캐릭터가 답장에서 한 연락 약속이다. 답장이 통화 끝나고 다시 연락하겠다고 하면 코드가 그 약속 문장을 이 행에 적고, 시각은 모델이 정하지 않고 각본 블록이 끝나는 시각에서 고른다. 그 시각이 되면 모델을 다시 불러 그때의 대화 기록을 보고 말을 만들고, 그 사이 유저가 말을 보냈으면 그 답장이 약속을 지키는 자리가 된다. 이 행은 유저가 기다리는 답장이 아니라 답장 대기로 세지 않아 선톡을 막지 않고, 새 약속이 오면 앞 약속을 `dropped`로 닫는다.
 
-유저가 이틀째 답이 없어 아침 대신 점심에 보내는 날도 `morning` 행으로 저장하고 window_start·window_end만 점심 시간대로 잡는다. 보내는 문장과 준비 시점이 아침 선톡과 같아서 종류를 하나 더 만들면 저장값만 늘고 분기가 두 벌이 된다. 슬랙 기록에서는 llm_calls.purpose가 `lunch`로 갈라 준다.
+유저가 이틀째 답이 없어 아침 대신 점심에 보내는 날도 `morning` 행으로 저장하고 발송 창만 점심 시간대로 잡는다. 보내는 문장과 준비 시점이 아침 선톡과 같아서 종류를 하나 더 만들면 저장값만 늘고 분기가 두 벌이 된다. 슬랙 기록에서는 llm_calls.purpose가 `lunch`로 갈라 준다.
 
-**recovery_marks** — 대화방별로 답장을 마친 마지막 유저 메시지 시각. pending_replies 행이 생기기 전에 멈춘 경우를 부팅 때 잡아냄
+스키마 16판 전에는 이 행들이 `pending_replies`(답장 · 깨우기 · 복귀 표시 · 약속)와 `scheduled_messages`(아침 · 안부) 두 표에 나뉘어 있었다. 16판으로 옮길 때 두 표는 이름 뒤에 `_legacy`를 붙여 남기고 대기 행만 이 표로 옮겼다. 옛 행 번호가 트레이스 키와 발송 기록 meta_json의 `scheduled_id` · `promise_row`에 적혀 있어서, 분석 도구와 쓰기 점검 도구는 옛 표를 함께 읽는다. 봇 코드는 옛 표를 읽지도 쓰지도 않는다.
+
+**recovery_marks** — 대화방별로 답장을 마친 마지막 유저 메시지 시각. outbox 행이 생기기 전에 멈춘 경우를 부팅 때 잡아냄
 
 | 컬럼 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
@@ -761,8 +749,7 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | work_facts | 새벽 정리 | 프롬프트 조립(오늘 각본·진행 중인 일에 있는 작품만) |
 | culture_scripts | 기동할 때 코드가 통째로 다시 넣음(캐릭터별 쓰기 없음) | 월 리듬(이 달에 그 이벤트가 있을 때만) |
 | messages | 답장 파이프라인, 선톡 모듈 | 프롬프트 조립(최근 대화), 새벽 정리, 채점·분석 |
-| pending_replies | 답장 파이프라인(답장 · 깨우기 표시 · 연락 약속), 선톡 모듈(자리 비움 틱의 복귀 표시) | 답장 파이프라인(발송 틱·부팅 복구), 선톡 모듈(답장 대기 중이면 선톡 미발송) |
-| scheduled_messages | 새벽 정리 | 선톡 모듈 |
+| outbox | 답장 파이프라인(답장 · 구간 끝 표시 · 연락 약속), 선톡 모듈(자리 비움 틱의 구간 끝 표시), 새벽 정리(아침 · 안부 문안) | 답장 파이프라인(발송 틱 · 부팅 복구), 선톡 모듈(아침 · 안부 발송, 답장 대기 중이면 선톡 미발송) |
 | recovery_marks | 답장 파이프라인 | 답장 파이프라인(부팅 복구) |
 | send_failures | 선톡 모듈 | 운영 점검 |
 | llm_usage | llm 래퍼 | 운영 점검 |
@@ -800,10 +787,9 @@ purpose에는 CHECK를 걸지 않는다. 호출하는 자리가 하나 늘 때�
 | 각본 블록의 출처 | `schedule` 예정된 일 · `routine` 매주 루틴 |
 | arcs.period 기간 | `year` 올해 · `season` 계절 · `month` 달 · `week` 주 |
 | day_plans.made_by | `nightly` 새벽 정리 · `ondemand` 대화 중 만든 임시 각본 |
-| scheduled_messages.kind 선톡 종류 | `morning` 아침 선톡, 점심에 보내는 날도 이 값 · `checkin` 안부 선톡 |
-| scheduled_messages.status | `pending` 대기 · `sent` 발송 · `skipped` 폐기 |
-| pending_replies.status | `waiting` 대기 · `sent` 발송 · `superseded` 새 메시지로 폐기 · `failed` 실패 |
-| pending_replies.kind | `reply` 답장 · `recover` 복구 발송 · `wake` 구간 끝 깨우기 · `return` 구간 끝 복귀 확인 · `promise` 답장에서 한 연락 약속 |
+| outbox.kind 연락 종류 | `reply` 답장 · `block_end` 구간 끝 · `morning` 아침 선톡, 점심에 보내는 날도 이 값 · `checkin` 안부 선톡 · `promise` 답장에서 한 연락 약속. 나머지 선톡 종류(`intent` · `catchup` · `lunch` · `goodnight` · `mend` · `care` · `away` · `glance`)도 목록에 있다 |
+| outbox.status 발송 상태 | `waiting` 대기 · `sent` 보냄 · `partial` 부분 발송 · `skipped` 건너뜀 · `dropped` 폐기 · `failed` 실패 |
+| outbox.reason 사유 | 22가지. 저장 값과 적는 경우는 outgoing.md 「발송 상태와 사유」 |
 | characters.status | `active` 대화 중 · `ended` 이별 |
 | messages.role | `user` 유저 · `assistant` 캐릭터 |
 | trace_events.status | `pending` 대기 · `sent` 게시 · `failed` 실패 · `skipped` 건너뜀 |
