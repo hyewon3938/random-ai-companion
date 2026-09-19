@@ -205,11 +205,13 @@ const returnLine = (
     const reply = rows.find((r) => r.role === "user" && r.id > p.id);
     return reply !== undefined && within(p.sent_at, reply.sent_at);
   }).length;
+  // 창 길이는 반응 점수 표본과 같은 기준값에서 읽는다 — 기준값을 바꾸면 문구도 같이 바뀐다.
+  const turnLabel = `캐릭터 말 뒤 ${durationLabel(REACTION_REPLY_WINDOW_MS)} 안에 다시 말한 턴`;
   const base = baselineOf(userTurnsOf(rows));
   const turns =
     base.gapMedianMs === null
-      ? "캐릭터 말 뒤 6시간 안에 다시 말한 턴 없음"
-      : `캐릭터 말 뒤 6시간 안에 다시 말한 턴 ${base.turns}건, 간격 중앙값 ${durationLabel(base.gapMedianMs)}`;
+      ? `${turnLabel} 없음`
+      : `${turnLabel} ${base.turns}건, 간격 중앙값 ${durationLabel(base.gapMedianMs)}`;
   return `유저 반응: 말한 날 ${talked}/${days}일 · 선톡 ${proactive.length}통 중 답 ${answered}통 · ${turns}`;
 };
 
