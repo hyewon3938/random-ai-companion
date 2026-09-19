@@ -2,7 +2,7 @@
 
 ## 상태
 
-Accepted — 의도 선톡이 쓸 줄을 고르는 결정은 [ADR-0021](0021-intent-line-chosen-by-model.md)이 대체
+Accepted — 의도 선톡이 쓸 줄을 고르는 결정은 [ADR-0021](0021-intent-line-chosen-by-model.md)이, 어제 쓴 줄을 뒤로 보내는 순서와 줄별 여는 모양은 [ADR-0023](0023-proactive-opening-and-line-rotation.md)이 대체
 
 ## 맥락
 

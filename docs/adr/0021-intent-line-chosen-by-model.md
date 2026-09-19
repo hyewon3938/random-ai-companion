@@ -2,7 +2,7 @@
 
 ## 상태
 
-Accepted
+Accepted — 어제 쓴 줄을 뒤로 보내는 순서는 [ADR-0023](0023-proactive-opening-and-line-rotation.md)이 대체
 
 ## 맥락
 

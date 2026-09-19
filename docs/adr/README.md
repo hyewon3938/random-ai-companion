@@ -27,4 +27,5 @@
 | [0019](0019-subtle-waiting-and-no-hour-count.md) | 기다렸다는 말을 은근한 결로 좁히고 연락 텀에서 시간 숫자 빼기 | Accepted |
 | [0020](0020-proactive-no-ask-and-opening-rotation.md) | 선톡의 답 요구 금지를 규칙층에 두고 의도 선톡 여는 소재를 날마다 바꾸기 | Accepted |
 | [0021](0021-intent-line-chosen-by-model.md) | 의도 선톡이 쓸 줄을 문안 모델이 고르게 하기 | Accepted |
+| [0023](0023-proactive-opening-and-line-rotation.md) | 선톡이 말을 거는 방식 4가지를 돌려 쓰고 근황 선톡이 쓴 의도 줄을 기록하기 | Accepted |
 | [0028](0028-culture-stage-at-creation.md) | 캐릭터를 만든 뒤 호출 한 번으로 진행 중인 일의 당일과 단계 정하기 | Accepted |
