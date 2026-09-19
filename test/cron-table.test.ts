@@ -1,4 +1,4 @@
-// 봇 시작점(index.ts)의 크론표 — 틱 아홉 개의 표현식과 시간대 — 를 검사한다.
+// 봇 시작점(index.ts)의 크론표 — 틱 열 개의 표현식과 시간대 — 를 검사한다.
 //
 // index.ts는 읽는 순간 봇 폴링을 켜므로 모듈로 부르지 않고 파일을 글자로 읽는다. cron.schedule
 // 호출마다 첫 문자열 인자와 본문을 뽑아, 본문이 부르는 틱 함수 이름으로 어느 틱인지 찾고 표현식을
@@ -30,8 +30,8 @@ const exprOf = (handler: string): string => {
   return hit[0]?.expr ?? "";
 };
 
-test("크론 호출이 아홉 개이고 전부 Asia/Seoul 시간대가 붙는다", () => {
-  assert.equal(calls.length, 9);
+test("크론 호출이 열 개이고 전부 Asia/Seoul 시간대가 붙는다", () => {
+  assert.equal(calls.length, 10);
   for (const c of calls) assert.ok(c.expr, "표현식이 첫 인자여야 한다");
   assert.ok(calls.every((c) => c.seoul));
 });
@@ -70,6 +70,10 @@ test("슬랙 게시와 답장 트레이스는 1분마다 돈다", () => {
 
 test("피드백 수집은 10분마다 돈다", () => {
   assert.equal(exprOf("runFeedbackTick()"), "*/10 * * * *");
+});
+
+test("주간 관계 요약은 월요일 10~23시 매시 정각에 돈다", () => {
+  assert.equal(exprOf("postWeeklyRelationship()"), "0 10-23 * * 1");
 });
 
 test("관측 기록 정리는 새벽 정리 10분 뒤인 05:50에 돈다", () => {

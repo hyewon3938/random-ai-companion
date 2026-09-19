@@ -83,7 +83,7 @@
 - `src/context/input.ts` — 프롬프트 재료 읽기 — 조립에 필요한 것을 DB와 시계에서 한 번에 읽어 값 묶음으로 만든다.
 - `src/context/relationship.ts` — 「지금 관계」 채우기 — 단계와 처음, 오늘 쓴 플러팅, 오늘 말한 일정, 오늘의 관계 의도를 읽어 답장 프롬프트의 관계 절을 만든다.
 
-### 5. 실행과 발송 · 4,276줄
+### 5. 실행과 발송 · 4,294줄
 
 - `src/index.ts` — 봇 프로세스의 시작점.
 - `src/bot.ts` — 텔레그램과 주고받는 자리 — 받은 말을 모아 답장 한 통으로 내보낸다.
@@ -95,7 +95,7 @@
 - `src/dispatch.ts` — 아침·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 - `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
-### 6. 새벽 정리 · 3,714줄
+### 6. 새벽 정리 · 3,718줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 - `src/relationship-stage.ts` — 관계 단계 전이 — 어제까지의 값을 세어 문턱을 재고, 모델의 결정을 받아 단계·처음·의도를 저장한다.
@@ -105,7 +105,7 @@
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
-### 7. 관측과 운영 · 8,447줄
+### 7. 관측과 운영 · 8,801줄
 
 - `src/trace.ts` — 슬랙 트레이스 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
 - `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고와 틈새 한 줄, 연락 약속의 단계를 트레이스 표에 쌓는다.
@@ -113,6 +113,7 @@
 - `src/trace/diff.ts` — 슬랙 게시용 비교 — 두 글에서 달라진 자리만 표시하는 줄 단위·낱말 단위 비교.
 - `src/trace/format.ts` — 슬랙 게시 문안이 공통으로 쓰는 표기 도우미 — 이스케이프·날짜·자르기·인용·토큰 줄.
 - `src/trace/morning-plan.ts` — 아침 각본 게시 — 새벽 정리가 만든 오늘 각본을 아침에 슬랙 스레드로 올린다.
+- `src/trace/relationship-weekly.ts` — 주간 관계 요약 게시 — 지난주 월~일의 단계·처음·플러팅 반응·대화 계획과 유저 반응 값을 슬랙에 한 건 올린다.
 - `src/trace/reply-post.ts` — 답장 게시 준비 — 아직 안 올린 모델 호출을 번호 순서대로 트레이스 표(trace_events)에 쌓는다.
 - `src/trace/reply-render.ts` — 답장 게시 문안 그리기 — 호출 행과 판단 근거를 슬랙 본문 한 장으로 옮긴다.
 - `src/tools/analyze.ts` — 애착 신호 분석: messages 원시 로그에서 행동 신호를 날짜별로 집계한다 (README의 신호 표 대응).
@@ -132,6 +133,7 @@
 - `src/tools/gen-day-plan.ts` — 운영 도구: 활성 캐릭터의 오늘 하루 각본을 생성(없을 때)하고 출력한다.
 - `src/tools/gen-rhythm.ts` — 월 리듬(이벤트 + 매일 컨디션 시드) 생성·확인 도구.
 - `src/tools/measure-prompt.ts` — 운영 도구: 시스템 프롬프트 3층(불변/일간/실시간) 크기를 측정하고, --live를 주면 같은 프롬프트로 2회 실호출해 캐시 히트(cr>0)를 검증한다.
+- `src/tools/relationship-status.ts` — 관계 확인 도구 — 지금 캐릭터의 단계·다음 단계 조건·처음·반응 점수 위아래·오늘의 대화 계획을 한 화면에 찍는다.
 - `src/tools/render-db.ts` — 관리 대시보드를 파일 한 장으로 뽑는다.
 - `src/tools/retrace.ts` — 오늘 몫 트레이스를 지우고 다시 보낸다.
 - `src/tools/serve-db.ts` — 관리 대시보드를 요청마다 다시 그려 내보내는 읽기 전용 서버.
@@ -232,9 +234,9 @@ nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 app
 
 ### 7. 관측과 운영
 
-trace.ts는 트레이스 표 trace_events에 쌓고 1분 틱으로 트레이스 채널에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 16개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 87개, scripts 5개, 워크플로 2개, 커밋 훅이 여기다.
+trace.ts는 트레이스 표 trace_events에 쌓고 1분 틱으로 트레이스 채널에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을, trace/relationship-weekly.ts가 월요일마다 지난주 관계 요약을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 17개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 101개, scripts 5개, 워크플로 2개, 커밋 훅이 여기다.
 
-고칠 때 같이 보는 곳은 슬랙 채널의 글 형식과 호출부 전부다. 검사는 proactive-fail-trace·reply-render·morning-plan·feedback 4개고, trace는 테스트가 없다. 설계 원본은 ADR 0008·0009다.
+고칠 때 같이 보는 곳은 슬랙 채널의 글 형식과 호출부 전부다. 검사는 proactive-fail-trace·reply-render·morning-plan·feedback·relationship-weekly·relationship-status 6개고, trace는 테스트가 없다. 설계 원본은 ADR 0008·0009다.
 
 손볼 자리
 - backfill-attitude는 일회성이라 tools/archive/로 옮길지 그때 정한다.
@@ -267,18 +269,8 @@ trace.ts는 트레이스 표 trace_events에 쌓고 1분 틱으로 트레이스 
 - 손볼 자리는 착수할 때 이슈 번호를 달고 끝나면 여기서 지운다. 무엇을 왜 그렇게 했는지는 이슈와 PR 본문에 남긴다. 줄 번호는 적은 날짜 기준이라 착수할 때 다시 잰다.
 - 영역의 이름이나 경계를 바꾸는 판단은 ADR로 남긴다.
 
-## V3에서 바뀌는 것
+## V3 관계 코드가 놓인 자리
 
-V3(관계를 쌓는 캐릭터, 이슈 #326)의 새 파일과 고치는 파일이 들어갈 영역이다. 설계 원본은 relationship.md이고 흐름은 modules.md 「V3에서 바뀌는 흐름」에 있다. 파일을 실제로 만들 때 위 영역 표에 넣고 `node scripts/gen-modules.mjs`를 돌리며, 다 옮기면 이 절을 지운다.
-
-| 영역 | 새 파일 | 고치는 파일 |
-| --- | --- | --- |
-| 1. 기반과 저장 | | thresholds.ts에 자리 비움 하루 2 |
-| 2. 기억 | | |
-| 3. 캐릭터의 삶 | | |
-| 4. 대화 생성 | | proactive-policy.ts 근거 종류와 단계별 상한 |
-| 5. 실행과 발송 | glance.ts (틈새 한 줄, 이슈 #339로 먼저 만듦) | followup.ts 의도 선톡, presence.ts 복귀 문안 |
-| 6. 새벽 정리 | | |
-| 7. 관측과 운영 | tools/relationship-view.ts (단계·처음·점수 확인) | |
+V3(관계를 쌓는 캐릭터, 이슈 #326)의 파일은 위 영역 표에 다 들어갔다. 설계 원본은 relationship.md이고, 답장 · 선톡 · 새벽 정리 · 기록 경로에서 바뀐 흐름은 modules.md의 각 경로 본문에 들어갔다.
 
 db/relationship.ts는 저장 함수만 갖고 정책은 갖지 않는다. 단계를 줄이는 저장을 거부하는 검사는 origin=creation 행의 수정 거부와 같은 자리이므로 저장 함수 안에 둔다. 반응 점수의 계산은 2번 영역이 맡고, 6번의 새벽 정리가 그 함수를 불러 쓴다. 시도할 플러팅 추천 목록과 잘 통하는 플러팅 목록은 단계마다 열리는 플러팅의 표를 읽어야 해서 6번의 relationship-stage.ts에 두었다.

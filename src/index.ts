@@ -2,7 +2,7 @@
 //
 // 텔레그램 수신을 켜고, 정해진 간격으로 도는 틱을 크론에 건다 — 선톡 디스패처(3분),
 // 침묵 팔로업(15분), 자리 비움 예고(10분), 슬랙 게시(1분), 답장 트레이스(1분),
-// 피드백 수집(10분), 새벽 정리 폴백(05:40).
+// 피드백 수집(10분), 주간 관계 요약(월요일 10~23시 매시), 새벽 정리 폴백(05:40).
 //
 // 각 틱이 무엇을 하는지는 그 모듈이 갖는다. 여기는 언제 부르는지만 정한다.
 
@@ -29,6 +29,7 @@ import { resumePendingReplies } from "./pending.js";
 import { runTraceTick } from "./trace.js";
 import { enqueueReplyTraces } from "./trace/reply-post.js";
 import { enqueueMorningPlans } from "./trace/morning-plan.js";
+import { postWeeklyRelationship } from "./trace/relationship-weekly.js";
 import { runFeedbackTick } from "./feedback.js";
 
 // 이 프로세스는 실시간 대화(반응형)와 선톡 발송을 담당한다.
@@ -132,6 +133,23 @@ cron.schedule(
   "*/10 * * * *",
   () => {
     runFeedbackTick().catch((e) => logErr("[feedback] tick error:", e));
+  },
+  { timezone: "Asia/Seoul" },
+);
+
+// 주간 관계 요약: 월요일 10~23시 매시 정각, LLM 콜 없음. 지난주 월~일의 단계·처음·플러팅 반응·대화 계획과
+// 유저 반응 값을 트레이스 표에 쌓고, 슬랙으로는 위 1분 틱이 내보낸다. 일요일 몫 새벽 정리(05:00
+// 외부 스케줄러, 05:40 폴백)가 끝난 뒤에 돌고, 행이 한 번 쌓이면 같은 주 나머지 시각은 중복 키로 건너뛴다.
+// 매시 두드리는 것은 배포·재시작으로 한 시각을 놓쳐도 그날 안에 쌓으려는 것이다. 슬랙 게시가 실패해
+// failed가 된 주는 다시 쌓지 않는다.
+cron.schedule(
+  "0 10-23 * * 1",
+  () => {
+    try {
+      postWeeklyRelationship();
+    } catch (e) {
+      logErr("[weekly] 주간 관계 요약 준비 실패:", e);
+    }
   },
   { timezone: "Asia/Seoul" },
 );
