@@ -2,7 +2,7 @@
 
 ## 상태
 
-Accepted
+Accepted — 의도 선톡이 쓸 줄을 고르는 결정은 [ADR-0021](0021-intent-line-chosen-by-model.md)이 대체
 
 ## 맥락
 
