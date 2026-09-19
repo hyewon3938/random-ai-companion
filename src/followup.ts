@@ -7,9 +7,9 @@
 //   점심      — 무응답 이틀째 12:05~12:50에 1통. 그날은 아침 선톡과 이 한 통이 나가고 낮 근황은
 //               겹치지 않는다(이슈 #314).
 //   의도      — 오늘의 관계 의도 가운데 아직 안 쓴 줄로 먼저 거는 한 통. 남은 줄을 전부 넘기고
-//               지금 맞는 줄은 모델이 고른다. 어제 의도 선톡이 쓴 줄은 목록 뒤로 보낸다. 각본이
-//               답할 수 있는 블록이고 양쪽 마지막 말이 2시간 넘게 지난 09~23시에 나간다. 하루
-//               몇 통까지 쓸 수 있는지는 관계 단계가 정한다(설계 원본 §7).
+//               지금 맞는 줄은 모델이 고른다. 최근 14일 동안 선톡이 가장 오래전에 쓴 줄을 목록
+//               앞에 둔다. 각본이 답할 수 있는 블록이고 양쪽 마지막 말이 2시간 넘게 지난
+//               09~23시에 나간다. 하루 몇 통까지 쓸 수 있는지는 관계 단계가 정한다(설계 원본 §7).
 //   밤 인사   — 자정~새벽 5시에 유저가 잔다는 말 없이 1시간 넘게 조용하면 1회.
 //   달래기    — 관계 행의 상대 상태(user-state가 답장마다 판정)가 나 때문에 안 좋은데 그 뒤로
 //               답이 끊기면 30분 뒤 1통. 한 발현에 한 통이고 잠 블록에도 나간다. 어떤 상태를
@@ -37,6 +37,12 @@
 // (glance.ts의 judged). 모델 호출이 실패한 자리도 같은 방법으로 기억한다 — 안 기억하면 실패한
 // 호출을 15분마다 같은 자리에서 다시 부른다(이슈 #471). 점심은 창이 12:05~12:50뿐이라 접혀도
 // 하루 3번을 넘지 않아 그냥 둔다.
+//
+// 근황·의도 선톡은 말을 여는 방식 넷(뭐 하냐고 묻기·하다가 생각났다고 하기·내 일상 전하기·
+// 내 일상에서 나온 물음) 가운데 하나를 모델이 골라 답에 적고, 그 코드를 발송 기록의 opening에
+// 싣는다. 다음 선톡은 바로 앞 선톡이 쓴 방식을 빼고 받는다. 근황 선톡은 오늘의 의도 가운데 실제로
+// 쓴 줄도 답에 적어 발송 기록의 intent_lines에 싣는다 — 안 적으면 근황 선톡이 파고들 것으로 물은
+// 얘기를 몇 시간 뒤 의도 선톡이 같은 줄로 다시 묻는다(이슈 #475).
 
 import {
   getActiveCharacter,
@@ -57,14 +63,20 @@ import {
   budgetLabel,
   budgetedSinceLastUser,
   intentCandidates,
+  intentLineLastUse,
   lunchDueToday,
+  OPENING_METHODS,
+  OPENING_NAME,
+  openingLastUse,
+  openingOrder,
   proactiveAllowed,
   proactiveBudget,
   proactiveKindCountToday,
   proactiveSinceLastUser,
+  rotationSince,
   stateKindSentSince,
   usedIntentLines,
-  yesterdayIntentLines,
+  type OpeningMethod,
 } from "./proactive-policy.js";
 import {
   noOverlap,
@@ -113,6 +125,10 @@ import {
 // '오늘'의 시작 = 논리일(새벽 5시 컷오프). 달력일 기준 "오늘 05:00"으로 만들면 자정~새벽엔
 // 미래 시각이 되어 아래 가드들이 전부 죽는 버그가 있었다(밤 정리의 하루 정의와 통일).
 const dayStart = (): string => logicalDayStartTs();
+// 근황·의도 선톡에 넘길 여는 방식 — 바로 앞 선톡이 쓴 방식을 빼고, 최근 14일 동안 가장 오래전에
+// 쓴 것부터 적는다(이슈 #475).
+const openingsFor = (chatId: string, characterId: number): OpeningMethod[] =>
+  openingOrder(openingLastUse(chatId, characterId, rotationSince(dayStart())));
 // 경과 분: 저장된 ts는 KST 벽시계(+09:00으로 파싱하면 실제 epoch)이므로 실제 현재(Date.now)와 뺀다.
 // getKstNow()는 실제 시각+9시간이라 여기 쓰면 경과가 540분 부풀려져 침묵 조건을 늘 통과하는 버그가 났었다.
 const minutesBetween = (ts: string, nowMs: number): number =>
@@ -188,6 +204,23 @@ export const rememberFailure = (
 };
 
 /**
+ * 응답에 적힌 값 하나를 목록의 코드로 읽는다. 코드나 이름표를 그대로 적었으면 그 코드이고,
+ * 앞뒤에 말을 덧붙였으면 그 안에 든 것이 하나일 때만 그 코드다.
+ */
+const matchCode = <T extends string>(
+  raw: unknown,
+  codes: readonly T[],
+  name: (code: T) => string,
+): T | null => {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim();
+  const exact = codes.find((c) => c === v || name(c) === v);
+  if (exact) return exact;
+  const inside = codes.filter((c) => v.includes(c) || v.includes(name(c)));
+  return inside.length === 1 ? inside[0] : null;
+};
+
+/**
  * 의도 선톡 응답의 line을 후보 줄 코드로 읽는다. 코드나 이름표를 그대로 적었으면 그 줄이고,
  * 앞뒤에 말을 덧붙였으면 그 안에 든 후보가 하나일 때만 그 줄이다. 후보가 하나뿐이면 line을
  * 안 적었거나 잘못 적어도 그 줄이다.
@@ -195,28 +228,45 @@ export const rememberFailure = (
 export const pickedIntentLine = (
   raw: unknown,
   candidates: IntentLine[],
-): IntentLine | null => {
-  if (typeof raw === "string") {
-    const v = raw.trim();
-    const exact = candidates.find((l) => l === v || INTENT_LINE_NAME[l] === v);
-    if (exact) return exact;
-    const inside = candidates.filter(
-      (l) => v.includes(l) || v.includes(INTENT_LINE_NAME[l]),
-    );
-    if (inside.length === 1) return inside[0];
-  }
-  return candidates.length === 1 ? candidates[0] : null;
+): IntentLine | null =>
+  matchCode(raw, candidates, (l) => INTENT_LINE_NAME[l]) ??
+  (candidates.length === 1 ? candidates[0] : null);
+
+/**
+ * 응답의 opening을 여는 방식 코드로 읽는다. 넘긴 목록에서 뺀 방식(바로 앞 선톡이 쓴 것)을
+ * 적었어도 실제로 쓴 방식이라 그대로 읽는다. 못 읽으면 null이고, 그래도 문안은 보낸다 — 여는
+ * 방식은 다음 선톡의 순서에만 쓰는 값이다.
+ */
+export const pickedOpening = (raw: unknown): OpeningMethod | null =>
+  matchCode(raw, OPENING_METHODS, (m) => OPENING_NAME[m]);
+
+/**
+ * 근황 선톡 응답의 lines를 넘긴 줄 코드로 읽는다. 배열이면 칸마다 읽고, 문자열 하나로 왔으면
+ * 그 안에 든 줄을 전부 고른다. 넘기지 않은 줄은 버린다.
+ */
+export const pickedLines = (raw: unknown, offered: IntentLine[]): IntentLine[] => {
+  const hits = Array.isArray(raw)
+    ? raw.map((x) => matchCode(x, offered, (l) => INTENT_LINE_NAME[l]))
+    : typeof raw === "string"
+      ? offered.filter((l) => raw.includes(l) || raw.includes(INTENT_LINE_NAME[l]))
+      : [];
+  return offered.filter((l) => hits.includes(l));
 };
 
 /**
  * 의도 선톡의 read. 안 보낸다는 답이면 그 자리를 기억하고, 보낸다는 답이면 고른 줄 코드를
  * 발송 기록의 intent_line에 실어 돌려준다 — 오늘 쓴 줄은 이 값으로 센다(usedIntentLines).
  * 고른 줄을 후보에서 찾지 못하면 어느 줄을 썼는지 셀 수 없어서 보내지 않고, 안 보낸다는
- * 답처럼 그 자리를 기억한다.
+ * 답처럼 그 자리를 기억한다. 여는 방식을 읽었으면 opening에 함께 싣는다.
  */
 export const readIntentOnce =
   (chatId: string, spot: string, candidates: IntentLine[]) =>
-  (d: { send: boolean; line?: unknown; text?: string }): DraftRead | null => {
+  (d: {
+    send: boolean;
+    line?: unknown;
+    opening?: unknown;
+    text?: string;
+  }): DraftRead | null => {
     const text = readSendTextOnce(chatId, "intent", spot)(d);
     if (!text) return null;
     const line = pickedIntentLine(d.line, candidates);
@@ -227,7 +277,38 @@ export const readIntentOnce =
       );
       return null;
     }
-    return { text, meta: { intent_line: line } };
+    const opening = pickedOpening(d.opening);
+    return {
+      text,
+      meta: { intent_line: line, ...(opening ? { opening } : {}) },
+    };
+  };
+
+/**
+ * 근황 선톡의 read. 안 보낸다는 답이면 그 자리를 기억한다. 보낸다는 답이면 문안에 실제로 꺼낸
+ * 줄을 발송 기록의 intent_lines에, 여는 방식을 opening에 실어 돌려준다. intent_lines는 답장이
+ * 쓴 줄과 같은 칸이라 오늘 쓴 줄(usedIntentLines)로 함께 센다(이슈 #475). 두 값을 못 읽어도
+ * 문안은 보낸다 — 근황은 줄 없이도 나가는 한 통이다.
+ */
+export const readCatchupOnce =
+  (chatId: string, spot: string, offered: IntentLine[]) =>
+  (d: {
+    send: boolean;
+    lines?: unknown;
+    opening?: unknown;
+    text?: string;
+  }): DraftRead | null => {
+    const text = readSendTextOnce(chatId, "catchup", spot)(d);
+    if (!text) return null;
+    const lines = pickedLines(d.lines, offered);
+    const opening = pickedOpening(d.opening);
+    return {
+      text,
+      meta: {
+        ...(lines.length ? { intent_lines: lines } : {}),
+        ...(opening ? { opening } : {}),
+      },
+    };
   };
 
 // 근황 선톡의 침묵 조건 — 유저의 마지막 말도, 캐릭터의 마지막 말도 네 시간은 지났어야 한다.
@@ -323,53 +404,102 @@ export const lunchSituation = (): string =>
     `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
   ].join("\n");
 
+/** 선톡이 고를 수 있는 오늘의 의도 줄 하나 — 줄 코드와 그 줄의 내용. */
+export interface IntentCandidate {
+  line: IntentLine;
+  text: string;
+}
+
 /**
- * 근황 선톡의 상황 문단 — 지금 하는 일에서 상대가 전에 한 말이 떠올랐으면 그 말을 꺼낸다.
+ * 근황 선톡에 얹을 수 있는 오늘의 의도 줄 — 흘릴 내 얘기와 파고들 것 가운데 오늘 선톡이나 답장이
+ * 아직 안 쓴 줄. 흘릴 내 얘기는 1단계에서 의도 선톡이 되지 않고 이 한 통에 얹히는 줄이다.
+ */
+export const catchupLines = (
+  intent: RelationshipIntentRow | null,
+  used: IntentLine[],
+): IntentCandidate[] =>
+  (["share", "dig"] as const).flatMap((line): IntentCandidate[] => {
+    const text = intentLineText(intent, line);
+    return text && !used.includes(line) ? [{ line, text }] : [];
+  });
+
+// 여는 방식마다 문안 모델에게 건네는 설명. 이름표는 proactive-policy의 OPENING_NAME이다.
+const OPENING_HOW: Record<OpeningMethod, string> = {
+  ask: `상대가 지금 뭐 하는지 묻는다.`,
+  reminded: `위 [지금]에서 하던 일을 말하고, 그러다 상대 생각이 났다고 한다. 이 방식을 지금 써도 되는지는 [관계 단계]를 따른다.`,
+  my_day: `위 [지금]에서 네가 하는 일이나 오늘 네 하루의 장면 하나를 전한다. 막 시작하는 참이면 이제 그걸 하러 간다고 한다.`,
+  my_question: `네 하루에서 생긴 일 하나를 말하고, 거기서 떠오른 가벼운 물음을 상대에게 건넨다.`,
+};
+
+// 근황·의도 선톡이 함께 쓰는 여는 방식 문단. 넘긴 순서가 곧 고를 순서다(openingOrder).
+const openingBlock = (openings: OpeningMethod[]): string[] => [
+  `이 한 통은 아래 여는 방식 가운데 하나로 말을 건다. 지금 상황에 맞는 것 가운데 위에 먼저 적은 것을 고르고, 코드를 답에 적는다.`,
+  ...openings.map((m) => `- ${m}(${OPENING_NAME[m]}): ${OPENING_HOW[m]}`),
+  `- 어느 방식이든 상대가 한 말을 첫마디로 꺼내며 열지 않는다(네가 말한 그거, 했었잖아).`,
+  `- 위 [상대가 전에 한 말]이나 [방금까지 오간 말]의 상대 말을 생각났다며 꺼내는 건 위 [지금]에서 네가 하는 일 안에 그것이 실제로 있을 때만이다. 지금 하는 일과 이어지지 않는 말을 떠올린 척 끌어오지 않는다.`,
+];
+
+// 답 없이 남은 캐릭터의 앞선 말을 다루는 두 줄. 같은 물음을 되풀이하지 않되, 때가 정해진 일을
+// 앞두고 물은 것이면 그 때가 된 뒤 달라진 물음으로 한 번은 짧게 물을 수 있다(이슈 #475).
+const UNANSWERED_REPEAT = `- [방금까지 오간 말]의 끝에는 상대가 아직 답하지 않은 네 말이 있다. 그 말에 남긴 물음이나 부탁을 같은 모양으로 다시 하지 않고, 그 말과 같은 첫마디로 열지 않는다.`;
+const UNANSWERED_TIMELY = `- 다만 그 물음이 끼니나 일정처럼 때가 정해진 일을 앞두고 물은 것이고 지금 시각이 그 때가 됐으면, 그 사이 답이 달라졌을 지금의 물음으로 한 번 짧게 물어도 된다. 끼니 전에 뭐 먹을지 물었는데 지금 끼니때면 정했는지 묻는 식이다. 앞선 물음을 가리키지 않고, 네 앞선 말이 이미 그렇게 다시 물은 말이면 더 묻지 않는다.`;
+
+// 근황 선톡에 얹는 줄마다의 쓰임.
+const CATCHUP_LINE_USE: Partial<Record<IntentLine, string>> = {
+  share: `지금 장면에 얹을 자리가 있으면 흘린다.`,
+  dig: `지금 장면과 이어지면 그게 궁금하다는 걸 한 마디로 꺼내되, 물음으로 끝내지 않고 답을 안 해도 되는 말을 붙여 닫는다.`,
+};
+
+/**
+ * 근황 선톡의 상황 문단 — 네 시간 조용한 자리에 여는 방식 하나로 먼저 한 마디 건다.
  *
- * 예전에는 캐릭터가 지금 하는 일만 전하는 한 통이라, 매일 자기 하루를 보고하는 꼴이 됐다.
- * 먼저 거는 말의 사물은 상대 쪽에서 와야 해서 기본 모양을 뒤집었다(설계 원본 §4). 재료는 3층
- * 꼬리에 함께 들어간다 — 태그 없이 고른 상대 쪽 기억과 최근 대화 12줄이다(이슈 #343).
+ * 예전에는 캐릭터가 지금 하는 일만 전하는 한 통이라 매일 자기 하루를 보고하는 꼴이 됐고, 상대가
+ * 전에 한 말을 꺼내는 쪽으로 기본 모양을 뒤집었더니 이번에는 날마다 상대 말로 열었다(이슈 #343·
+ * #462). 그래서 여는 방식 넷을 넘기고 바로 앞 선톡이 쓴 방식은 빼서 돌려 쓰게 했다. 고른 방식은
+ * 답의 opening으로 받아 발송 기록에 적는다(이슈 #475).
  *
- * 오늘의 의도 가운데 흘릴 내 얘기와 파고들 것 두 줄이 여기로 온다. 흘릴 내 얘기는 1단계에서
- * 의도 선톡이 되지 않고 이 한 통에 얹히는 줄이다.
+ * 오늘의 의도 가운데 흘릴 내 얘기와 파고들 것은 아직 안 쓴 줄만 코드를 붙여 넘기고, 문안에 실제로
+ * 꺼낸 줄을 답의 lines로 받는다. 이 값이 발송 기록의 intent_lines에 적혀 의도 선톡이 같은 줄을
+ * 다시 쓰지 않는다. 안 적던 때는 근황 선톡이 파고들 것으로 물은 얘기를 두 시간 뒤 의도 선톡이 같은
+ * 줄로 다시 물었다(이슈 #475).
  *
  * 근황 선톡은 마지막 말이 캐릭터 차례일 때만 나가서 최근 대화 끝에는 답 없이 남은 캐릭터 말이
- * 늘 있다. 떠올릴 거리를 최근 대화 전체로 두었더니 앞선 선톡이 남긴 물음이나 말해 달라는 부탁을
- * 몇 시간 뒤 다시 꺼냈다. 그래서 떠올릴 거리는 상대가 한 말로 좁히고, 앞선 먼저 건 말이 상대
- * 말로 열었으면 이번에는 캐릭터의 장면으로 열게 했다. 파고들 것도 답해 달라는 물음으로 닫지
- * 않는다(이슈 #462).
+ * 늘 있다. 그 말에 남긴 물음은 같은 모양으로 다시 하지 않는다. 다만 저녁 전에 뭐 먹을지 물었는데
+ * 지금이 저녁때인 것처럼 때가 된 물음은 달라진 물음으로 한 번 짧게 물을 수 있다(이슈 #475).
  */
 export const catchupSituation = (
-  intent: RelationshipIntentRow | null,
-): string => {
-  const share = intentLineText(intent, "share");
-  const dig = intentLineText(intent, "dig");
-  return situationText(
+  lines: IntentCandidate[],
+  openings: OpeningMethod[],
+): string =>
+  situationText(
     [
       `[문안 — 지금 보낼 근황 한 통]`,
       `상대가 네 시간 넘게 조용하다. 재촉하지 않고 먼저 한 마디 건다 — 상대가 다시 말 걸 자리를 만들어 두는 것.`,
-      `- [방금까지 오간 말]의 끝에는 상대가 아직 답하지 않은 네 말이 있다. 그 말에 남긴 물음이나 부탁은 다시 꺼내지 않고, 그 말과 같은 얘기로 열지도 않는다.`,
-      `- 기본은 이거다. 위 [지금]에서 네가 하는 일이 [상대가 전에 한 말]이나 [방금까지 오간 말]의 상대 말 가운데 무엇을 떠올리게 하면, 그 말을 꺼낸다. 상대가 전에 했던 말이 지금 장면과 이어질 때 그렇게 연다.`,
-      `- 떠오르는 게 없으면 네가 하는 일이나 네 하루의 장면을 가볍게 한 마디 전한다. 막 시작하는 참이면 이제 그걸 하러 간다고 흘리는 결.`,
-      `- [방금까지 오간 말]에 있는 네 앞선 먼저 건 말이 상대가 전에 한 말을 꺼내며 열었으면, 이번에는 떠오르는 게 있어도 네 장면으로 연다.`,
-      share
-        ? `- 오늘 흘릴 내 얘기로 둔 건 이거다: ${share}. 지금 장면에 얹을 자리가 있으면 흘린다.`
-        : ``,
-      dig
-        ? `- 오늘 파고들 것으로 둔 건 이거다: ${dig}. 지금 장면과 이어지면 그게 궁금하다는 걸 한 마디로 꺼내되, 물음으로 끝내지 않고 답을 안 해도 되는 말을 붙여 닫는다.`
-        : ``,
+      UNANSWERED_REPEAT,
+      UNANSWERED_TIMELY,
+      ...openingBlock(openings),
+      ...(lines.length
+        ? [
+            `오늘 상대에게 하려던 것 가운데 이 한 통에 얹을 수 있는 줄이다. 줄마다 앞에 코드를 적었다.`,
+            ...lines.map((c) =>
+              `- ${c.line}(${INTENT_LINE_NAME[c.line]}): ${c.text}. ${CATCHUP_LINE_USE[c.line] ?? ""}`.trimEnd(),
+            ),
+            `- 줄에 언제부터 꺼낼지 적혀 있으면 그 전에는 그 줄을 쓰지 않는다. 얹을 자리가 없으면 줄은 쓰지 않아도 된다.`,
+          ]
+        : []),
       `- 재촉하지 않는다. 왜 답이 없냐고 묻거나 답을 요구하지 않고, 알려 달라·말해 달라는 부탁도 하지 않는다.`,
       `- 기다리고 있다는 티는 은근하게 한 마디까지다(오늘 몇 번 확인했다는 결). 몇 시간째인지 세지 않고, 답이 없는 걸 상대 탓으로 돌리지 않으며, 네 앞선 말에서 이미 기다렸다고 했으면 다시 하지 않는다.`,
       `- 지금 상황에서 이 말이 억지스러우면 send=false.`,
       `- 1~2개 말풍선(줄바꿈 구분).`,
     ],
-    `JSON으로만 답한다: {"send":true,"text":"..."} 또는 {"send":false}`,
+    lines.length
+      ? `JSON으로만 답한다: {"send":true,"opening":"고른 여는 방식의 코드","lines":["문안에 실제로 꺼낸 줄의 코드"],"text":"..."} 또는 {"send":false}. 꺼낸 줄이 없으면 lines는 빈 배열이다.`
+      : `JSON으로만 답한다: {"send":true,"opening":"고른 여는 방식의 코드","text":"..."} 또는 {"send":false}`,
   );
-};
 
 /**
- * 의도 선톡의 상황 문단 — 오늘의 의도 가운데 아직 안 쓴 줄을 전부 넣고, 지금 맞는 줄 하나를
- * 모델이 골라 그 줄 코드를 답에 적게 한다.
+ * 의도 선톡의 상황 문단 — 오늘의 의도 가운데 아직 안 쓴 줄을 전부 넣고, 지금 맞는 줄 하나와 여는
+ * 방식 하나를 모델이 골라 두 코드를 답에 적게 한다.
  *
  * 다른 선톡은 각본의 시각이 부르지만 이 한 통은 오늘 하려던 것이 부른다. 코드가 줄 하나만 골라
  * 넘기면 저녁 일정을 다룬 줄처럼 아직 때가 아닌 줄이 앞에 있는 동안 모델은 안 보낸다는 답만
@@ -382,26 +512,16 @@ export const catchupSituation = (
  * 쓸 장면이 적혀 있으면 그 장면일 때만 고르고, 새벽에 지난 대화로 적은 메모라는 것도 밝혀 전날 얘기를
  * 아까 한 얘기처럼 부르지 않게 한다(이슈 #438).
  *
- * 여는 모양은 줄마다 정한다. 흘릴 내 얘기와 시도할 플러팅은 캐릭터 쪽 얘기라 캐릭터의 장면으로
- * 열고, 파고들 것과 이어갈 자리는 상대 쪽 얘기지만 상대가 한 말을 첫마디로 꺼내며 열지 않는다.
- * 파고들 것이 날마다 먼저 나가고 매번 상대 말로 열어서 의도 선톡이 날마다 같은 모양이었다. 어느
- * 줄이든 알려 달라는 부탁을 하지 않고, 답 없이 남은 캐릭터의 앞선 말이 이미 꺼낸 얘기의 줄은
+ * 여는 모양은 줄마다 정하던 것을 여는 방식 넷으로 바꿨다. 줄마다 정해 두면 같은 줄이 이틀 연달아
+ * 나갈 때 같은 모양으로 열리고, 근황 선톡과도 모양이 겹쳤다. 이제 근황 선톡과 같은 여는 방식
+ * 목록에서 바로 앞 선톡이 쓴 방식을 빼고 고른다. 고른 줄의 얘기는 여는 말 뒤에 잇는다(이슈 #475).
+ * 어느 줄이든 알려 달라는 부탁을 하지 않고, 답 없이 남은 캐릭터의 앞선 말이 이미 꺼낸 얘기의 줄은
  * 고르지 않는다(이슈 #462).
  */
-const INTENT_OPENING: Record<IntentLine, string> = {
-  share: `- ${INTENT_LINE_NAME.share}를 고르면 네 쪽 얘기라 위 [지금]에서 네가 하는 일이나 네 하루의 장면 하나로 연다. 상대가 전에 한 말을 꺼내며 열지 않는다.`,
-  move: `- ${INTENT_LINE_NAME.move}을 고르면 네 쪽 마음이라 위 [지금]에서 네가 하는 일이나 네 하루의 장면 하나로 연다. 상대가 전에 한 말을 꺼내며 열지 않는다.`,
-  dig: `- ${INTENT_LINE_NAME.dig}을 고르면 상대 쪽 얘기지만 상대가 한 말을 첫마디로 꺼내며 열지 않는다(네가 말한 그거, 했었잖아). 네가 궁금해진 마음이나 지금 장면으로 열고 그 얘기로 넘어간다.`,
-  thread: `- ${INTENT_LINE_NAME.thread}를 고르면 상대 쪽 얘기지만 상대가 한 말을 첫마디로 꺼내며 열지 않는다(네가 말한 그거, 했었잖아). 네가 궁금해진 마음이나 지금 장면으로 열고 그 얘기로 넘어간다.`,
-};
-
-/** 의도 선톡이 고를 수 있는 줄 하나 — 줄 코드와 그 줄의 내용. */
-export interface IntentCandidate {
-  line: IntentLine;
-  text: string;
-}
-
-export const intentSituation = (candidates: IntentCandidate[]): string =>
+export const intentSituation = (
+  candidates: IntentCandidate[],
+  openings: OpeningMethod[],
+): string =>
   situationText(
     [
       `[문안 — 지금 보낼 한 통]`,
@@ -413,17 +533,18 @@ export const intentSituation = (candidates: IntentCandidate[]): string =>
       `- 위 줄은 새벽에 지난 대화를 읽고 적어 둔 메모다. [방금까지 오간 말]에 없는 얘기를 아까·방금 한 얘기라고 부르지 않는다.`,
       `- 줄에 언제부터 꺼낼지 적혀 있으면 그 전에는 그 줄을 고르지 않는다.`,
       `- 줄에 어떤 장면에서 쓸지 적혀 있으면 지금이 그 장면일 때만 그 줄을 고른다.`,
-      `- 위 [상대가 전에 한 말]이나 [방금까지 오간 말]을 생각났다며 꺼내는 건 위 [지금]에서 네가 하는 일 안에 그것이 실제로 있을 때만이다. 지금 하는 일과 이어지지 않는 말을 떠올린 척 끌어오지 않는다.`,
-      `- [방금까지 오간 말]의 끝에는 상대가 아직 답하지 않은 네 말이 있다. 그 말이 이미 꺼낸 얘기의 줄은 고르지 않는다. 그 말에 남긴 물음이나 부탁은 다시 꺼내지 않고, 그 말과 같은 첫마디로 열지 않는다.`,
       `- 지금 맞는 줄이 여럿이면 위에 먼저 적은 줄을 고른다.`,
-      ...candidates.map((c) => INTENT_OPENING[c.line]),
+      `${UNANSWERED_REPEAT} 그 말이 이미 꺼낸 얘기의 줄은 고르지 않는다.`,
+      UNANSWERED_TIMELY,
+      ...openingBlock(openings),
+      `- 고른 줄의 얘기는 여는 말 뒤에 잇는다.`,
       `- 네 하루를 보고하듯 늘어놓지 않는다. 장면으로 열어도 한 장면이면 된다.`,
       `- 고른 줄을 그대로 읊지 않는다. 무슨 말을 걸지 네가 정해 둔 메모지, 상대에게 알릴 내용이 아니다.`,
       `- 답을 재촉하지 않는다. 왜 조용하냐고 묻지 않고, 알려 달라·말해 달라는 부탁을 하지 않는다. 물음을 넣었으면 그 뒤에 답을 안 해도 되는 말을 붙여 닫는다.`,
       `- 지금 맞는 줄이 없거나 어느 줄로 걸어도 억지스러우면 send=false.`,
       `- 1~2개 말풍선(줄바꿈 구분).`,
     ],
-    `JSON으로만 답한다: {"send":true,"line":"고른 줄의 코드","text":"..."} 또는 {"send":false}`,
+    `JSON으로만 답한다: {"send":true,"line":"고른 줄의 코드","opening":"고른 여는 방식의 코드","text":"..."} 또는 {"send":false}`,
   );
 
 // 틱 재진입 방지 — LLM 호출·발송으로 한 틱이 길어져 다음 크론과 겹치면 이중 발송이 된다.
@@ -595,13 +716,14 @@ const followupTickBody = async (): Promise<void> => {
       !isWaiting(c.chat_id) &&
       !hasPendingSendOn(c.id, today)
     ) {
-      // 오늘 아직 안 쓴 줄을 전부 넘기고 지금 맞는 줄은 모델이 고른다(이슈 #471). 어제 의도
-      // 선톡이 쓴 줄은 목록 뒤로 보낸다 — 순서대로만 고르면 날마다 같은 줄로 열린다(이슈 #462).
+      // 오늘 아직 안 쓴 줄을 전부 넘기고 지금 맞는 줄은 모델이 고른다(이슈 #471). 최근 14일
+      // 동안 선톡이 가장 오래전에 쓴 줄을 앞에 둔다 — 어제 쓴 줄만 뒤로 보내면 두 줄이 번갈아
+      // 나가고 나머지는 차례가 잘 오지 않는다(이슈 #462·#475).
       const candidates = intentCandidates(
         intent,
         budget.stage,
         usedIntentLines(c.chat_id, c.id, dayStart()),
-        yesterdayIntentLines(c.chat_id, c.id, dayStart()),
+        intentLineLastUse(c.chat_id, c.id, rotationSince(dayStart())),
       ).flatMap((line): IntentCandidate[] => {
         const text = intentLineText(intent, line);
         return text ? [{ line, text }] : [];
@@ -624,10 +746,11 @@ const followupTickBody = async (): Promise<void> => {
           chatId: c.chat_id,
           kind: "intent",
           lastSentAt: last.sent_at,
-          situation: intentSituation(candidates),
+          situation: intentSituation(candidates, openingsFor(c.chat_id, c.id)),
           maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
-          // 모델이 고른 줄은 발송 기록의 intent_line에 실린다(usedIntentLines가 센다). 나간 로그
-          // 끝에도 intent_line=…으로 붙는다.
+          // 모델이 고른 줄은 발송 기록의 intent_line에, 여는 방식은 opening에 실린다
+          // (usedIntentLines·openingLastUse가 센다). 나간 로그 끝에도 intent_line=…·opening=…으로
+          // 붙는다.
           read: readIntentOnce(c.chat_id, intentSpot, lines),
           label: "[followup] 의도",
           sentLog: `[followup] intent to ${c.chat_id} · ${budgetLabel(budget)}`,
@@ -662,14 +785,24 @@ const followupTickBody = async (): Promise<void> => {
     const catchupSpot = declineSpot(block.start, last.sent_at);
     if (declinedHere(c.chat_id, "catchup", catchupSpot)) continue;
 
+    // 오늘의 의도 가운데 아직 안 쓴 흘릴 내 얘기·파고들 것을 얹는다. 문안에 실제로 꺼낸 줄은
+    // 발송 기록의 intent_lines에 실려 뒤이은 의도 선톡이 같은 줄을 다시 쓰지 않는다(이슈 #475).
+    const lines = catchupLines(
+      intent,
+      usedIntentLines(c.chat_id, c.id, dayStart()),
+    );
     const result = await sendProactiveDraft({
       characterId: c.id,
       chatId: c.chat_id,
       kind: "catchup",
       lastSentAt: last.sent_at,
-      situation: catchupSituation(intent),
+      situation: catchupSituation(lines, openingsFor(c.chat_id, c.id)),
       maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
-      read: readSendTextOnce(c.chat_id, "catchup", catchupSpot),
+      read: readCatchupOnce(
+        c.chat_id,
+        catchupSpot,
+        lines.map((x) => x.line),
+      ),
       label: "[followup]",
       sentLog: `[followup] sent to ${c.chat_id} @ ${block.activity}`,
     });
