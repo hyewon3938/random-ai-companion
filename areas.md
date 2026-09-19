@@ -105,7 +105,7 @@
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
-### 7. 관측과 운영 · 8,538줄
+### 7. 관측과 운영 · 8,792줄
 
 - `src/trace.ts` — 슬랙 트레이스 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
 - `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고와 틈새 한 줄, 연락 약속의 단계를 트레이스 표에 쌓는다.
@@ -113,6 +113,7 @@
 - `src/trace/diff.ts` — 슬랙 게시용 비교 — 두 글에서 달라진 자리만 표시하는 줄 단위·낱말 단위 비교.
 - `src/trace/format.ts` — 슬랙 게시 문안이 공통으로 쓰는 표기 도우미 — 이스케이프·날짜·자르기·인용·토큰 줄.
 - `src/trace/morning-plan.ts` — 아침 각본 게시 — 새벽 정리가 만든 오늘 각본을 아침에 슬랙 스레드로 올린다.
+- `src/trace/relationship-weekly.ts` — 주간 관계 요약 게시 — 지난주 월~일의 단계·처음·플러팅 반응·대화 계획과 유저 반응 값을 슬랙에 한 건 올린다.
 - `src/trace/reply-post.ts` — 답장 게시 준비 — 아직 안 올린 모델 호출을 번호 순서대로 트레이스 표(trace_events)에 쌓는다.
 - `src/trace/reply-render.ts` — 답장 게시 문안 그리기 — 호출 행과 판단 근거를 슬랙 본문 한 장으로 옮긴다.
 - `src/tools/analyze.ts` — 애착 신호 분석: messages 원시 로그에서 행동 신호를 날짜별로 집계한다 (README의 신호 표 대응).
