@@ -10,8 +10,9 @@
 // (proactiveBudget·budgetAllows). 합계에 안 들어가는 종류는 상대가 이미 말을 걸었거나
 // 캐릭터가 자리를 비우는 상황에 붙는 한 마디라 새로 거는 연락과 성격이 다르다.
 //
-// 의도 선톡이 오늘의 의도 가운데 어느 줄을 쓸지도 여기서 고른다(pickIntentLine). 오늘 이미
-// 쓴 줄은 빼고, 어제 의도 선톡이 쓴 줄은 뒤로 보내 여는 모양이 날마다 같지 않게 한다.
+// 의도 선톡이 오늘의 의도 가운데 어느 줄을 쓸 수 있는지도 여기서 정한다(intentCandidates).
+// 오늘 이미 쓴 줄은 빼고, 어제 의도 선톡이 쓴 줄은 뒤로 보내 여는 모양이 날마다 같지 않게 한다.
+// 남은 줄 가운데 지금 맞는 줄은 문안을 만드는 모델이 고른다(이슈 #471).
 //
 // 유저 메시지가 오면 즉시 평상으로 돌아온다.
 //
@@ -211,6 +212,11 @@ export interface HeldDraft {
   madeAt: number;
   /** 문안을 만든 호출 번호. 다시 보낸 한 통의 발송 게시도 이 호출을 가리키게 들고 있는다. */
   callId?: number;
+  /**
+   * 문안을 읽을 때 정한 발송 기록 값. 의도 선톡이 고른 줄 코드(intent_line)처럼 모델 응답에서
+   * 나온 값이라, 다시 보낼 때도 같이 적도록 문안과 함께 들고 있는다(이슈 #471).
+   */
+  meta?: Record<string, unknown>;
 }
 
 // 들고 있는 시간의 상한. 팔로업 틱이 15분이라 한 번, 자리 비움 틱이 10분이라 두 번까지
@@ -513,8 +519,9 @@ export const basisLineFromMeta = (
 // 시도할 플러팅은 아직 먼저 걸 자리가 아니다. 2단계부터 네 줄 전부 열린다.
 //
 // 순서만 따르면 파고들 것이 날마다 먼저 나가서 의도 선톡이 매일 상대가 전에 한 말로 열렸다.
-// 그래서 어제 의도 선톡이 쓴 줄은 오늘 쓸 다른 줄이 없을 때만 고른다(이슈 #462). 새벽 정리가
-// 어제 쓴 플러팅을 뒤로 보내는 것(moveCandidates)과 같은 방식이다.
+// 그래서 어제 의도 선톡이 쓴 줄은 목록 뒤로 보낸다(이슈 #462). 새벽 정리가 어제 쓴 플러팅을
+// 뒤로 보내는 것(moveCandidates)과 같은 방식이다. 목록의 순서는 지금 맞는 줄이 여럿일 때
+// 모델이 앞의 줄을 고르게 하는 데만 쓴다.
 export const STAGE_INTENT_LINES: Record<RelationshipStage, IntentLine[]> = {
   1: ["dig", "thread"],
   2: ["dig", "share", "move", "thread"],
@@ -604,16 +611,18 @@ export interface IntentLineSource {
 }
 
 /**
- * 오늘의 의도 행에서 문안에 넣을 줄 하나. 값이 있고 아직 안 쓴 줄 가운데 어제 의도 선톡이
- * 안 쓴 앞선 것이고, 그런 줄이 없으면 어제 쓴 줄 가운데 앞선 것이다.
+ * 오늘의 의도 행에서 의도 선톡이 쓸 수 있는 줄 목록. 값이 있고 아직 안 쓴 줄을 단계 순서대로
+ * 담되, 어제 의도 선톡이 쓴 줄은 뒤로 보낸다. 어느 줄을 쓸지는 문안을 만드는 모델이 지금
+ * 상황을 보고 고른다 — 코드가 한 줄만 넘기면 저녁 일정을 다룬 줄처럼 아직 때가 아닌 줄이 앞에
+ * 있는 동안 지금 맞는 뒷줄이 차례를 받지 못한다(이슈 #471).
  */
-export const pickIntentLine = (
+export const intentCandidates = (
   intent: IntentLineSource | null,
   stage: RelationshipStage,
   used: IntentLine[],
   yesterday: IntentLine[] = [],
-): IntentLine | null => {
-  if (!intent) return null;
+): IntentLine[] => {
+  if (!intent) return [];
   // 고백 차례는 플러팅 코드 없이 자리만 적힌 날이라 move_note만 있어도 시도할 플러팅 줄이 산다.
   const filled: Record<IntentLine, boolean> = {
     dig: !!intent.dig,
@@ -624,5 +633,8 @@ export const pickIntentLine = (
   const open = STAGE_INTENT_LINES[stage].filter(
     (line) => filled[line] && !used.includes(line),
   );
-  return open.find((line) => !yesterday.includes(line)) ?? open[0] ?? null;
+  return [
+    ...open.filter((line) => !yesterday.includes(line)),
+    ...open.filter((line) => yesterday.includes(line)),
+  ];
 };

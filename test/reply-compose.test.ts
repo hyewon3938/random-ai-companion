@@ -3,6 +3,9 @@
 // 모델을 부르지 않는다 — 정해 둔 답을 돌려주는 함수를 ask 자리에, 정해 둔 판정을 돌려주는
 // 함수를 judge 자리에 끼운다. 검색 태그는 태그 이름이 하나도 없으면 호출 없이 비어 있는 결과를
 // 돌려주고, 평가용 캐릭터는 태그가 없다.
+//
+// 답장을 받아 오는 자리(askReplyVia)는 모델 호출 대신 멈춘 이유를 정해 둔 응답을 넣고, 첫 답이
+// 출력 상한에 닿아 못 읽혔을 때만 다시 부를 때 생각 과정을 끄는지 본다(이슈 #471).
 
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -10,7 +13,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
-process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), "reply-compose-")), "t.db");
+process.env.DB_PATH = join(
+  mkdtempSync(join(tmpdir(), "reply-compose-")),
+  "t.db",
+);
 process.env.TELEGRAM_BOT_TOKEN ??= "test-token";
 process.env.ANTHROPIC_API_KEY ??= "test-key";
 
@@ -24,18 +30,19 @@ const {
   logMessage,
   recordLlmCall,
 } = await import("../src/db.js");
-const { createFixtureCharacter } = await import("../src/eval/fixture-character.js");
-const { composeReply, holdSituation, pendingUserTurn } = await import(
-  "../src/reply-compose.js"
-);
+const { createFixtureCharacter } =
+  await import("../src/eval/fixture-character.js");
+const { askReplyVia, composeReply, holdSituation, pendingUserTurn } =
+  await import("../src/reply-compose.js");
 const { askReply } = await import("../src/reply-ask.js");
 const { userStateLabel } = await import("../src/user-state.js");
-const { kstLogicalDate, kstStamp, kstStampBefore, logicalDateOf } = await import(
-  "../src/kst.js"
-);
+const { kstLogicalDate, kstStamp, kstStampBefore, logicalDateOf } =
+  await import("../src/kst.js");
 type ReplyAsker = import("../src/reply-compose.js").ReplyAsker;
 type SystemBlock = import("../src/llm.js").SystemBlock;
 type ChatTurn = import("../src/llm.js").ChatTurn;
+type ChatOptions = import("../src/llm.js").ChatOptions;
+type ChatStop = import("../src/llm.js").ChatStop;
 type UserStateVerdict = import("../src/user-state.js").UserStateVerdict;
 
 const CHAT = "chat-compose";
@@ -57,19 +64,29 @@ const canned = (
         callId: meta.callId ?? null,
       };
     });
-  }) as ReplyAsker & { calls: number; system: SystemBlock[]; turns: ChatTurn[] };
+  }) as ReplyAsker & {
+    calls: number;
+    system: SystemBlock[];
+    turns: ChatTurn[];
+  };
   asker.calls = 0;
   asker.system = [];
   asker.turns = [];
   return asker;
 };
 
-const reply = (bubbles: string[], extra: Record<string, unknown> = {}): string =>
-  JSON.stringify({ reply: bubbles, ...extra });
+const reply = (
+  bubbles: string[],
+  extra: Record<string, unknown> = {},
+): string => JSON.stringify({ reply: bubbles, ...extra });
 
 /** 상대 상태를 그대로 두는 judge — 모델을 부르지 않는다. */
 const noJudge = async (): Promise<UserStateVerdict> => ({
-  changed: false, state: null, failed: false, callId: null, prev: null,
+  changed: false,
+  state: null,
+  failed: false,
+  callId: null,
+  prev: null,
 });
 
 const clearMessages = (): void => {
@@ -86,10 +103,28 @@ after(() => {
 describe("pendingUserTurn", () => {
   it("마지막 캐릭터 말 뒤에 온 유저 메시지를 한 덩어리로 묶는다", () => {
     clearMessages();
-    logMessage(CHAT, characterId, "user", "저녁 먹었어?", "2026-09-06 19:00:00");
-    logMessage(CHAT, characterId, "assistant", "응 방금", "2026-09-06 19:01:00");
+    logMessage(
+      CHAT,
+      characterId,
+      "user",
+      "저녁 먹었어?",
+      "2026-09-06 19:00:00",
+    );
+    logMessage(
+      CHAT,
+      characterId,
+      "assistant",
+      "응 방금",
+      "2026-09-06 19:01:00",
+    );
     logMessage(CHAT, characterId, "user", "뭐 먹었어", "2026-09-06 19:02:00");
-    logMessage(CHAT, characterId, "user", "나도 배고픈데", "2026-09-06 19:02:30");
+    logMessage(
+      CHAT,
+      characterId,
+      "user",
+      "나도 배고픈데",
+      "2026-09-06 19:02:30",
+    );
     assert.deepEqual(pendingUserTurn(CHAT, characterId), {
       at: "2026-09-06 19:02:30",
       firstAt: "2026-09-06 19:02:00",
@@ -106,20 +141,83 @@ describe("pendingUserTurn", () => {
   });
 });
 
+describe("askReplyVia", () => {
+  /** 정해 둔 응답을 차례로 주고, 몇 번째 호출에 어떤 선택지를 받았는지 남긴다. */
+  const stops = (...answers: ChatStop[]) => {
+    const opts: (ChatOptions | undefined)[] = [];
+    const ask = askReplyVia(async (_system, _turns, _meta, o) => {
+      opts.push(o);
+      return (
+        answers[opts.length - 1] ?? {
+          text: "",
+          stopReason: "end_turn",
+          thought: false,
+        }
+      );
+    });
+    return { ask, opts };
+  };
+  const ok = reply(["응 나 지금 퇴근해"]);
+
+  it("첫 답이 생각 과정에 출력 상한을 써서 비었으면 다시 부를 때 생각 과정을 끈다", async () => {
+    const f = stops(
+      { text: "", stopReason: "max_tokens", thought: true },
+      { text: ok, stopReason: "end_turn", thought: true },
+    );
+    const draft = await f.ask([], [], { purpose: "reply" });
+    assert.deepEqual(f.opts, [undefined, { think: false }]);
+    assert.deepEqual(draft.bubbles, ["응 나 지금 퇴근해"]);
+  });
+
+  it("생각 블록 없이 상한에 닿았으면 다시 부를 때 생각 과정을 그대로 둔다", async () => {
+    const f = stops(
+      { text: "", stopReason: "max_tokens", thought: false },
+      { text: ok, stopReason: "end_turn", thought: false },
+    );
+    await f.ask([], [], { purpose: "reply" });
+    assert.deepEqual(f.opts, [undefined, undefined]);
+  });
+
+  it("형식만 깨졌으면 다시 부를 때 생각 과정을 그대로 둔다", async () => {
+    const f = stops(
+      { text: "응 나 지금 퇴근해", stopReason: "end_turn", thought: true },
+      { text: ok, stopReason: "end_turn", thought: true },
+    );
+    await f.ask([], [], { purpose: "reply" });
+    assert.deepEqual(f.opts, [undefined, undefined]);
+  });
+
+  it("상한에 닿았어도 읽히면 다시 부르지 않는다", async () => {
+    const f = stops({ text: ok, stopReason: "max_tokens", thought: true });
+    await f.ask([], [], { purpose: "reply" });
+    assert.deepEqual(f.opts, [undefined]);
+  });
+});
+
 describe("composeReply", () => {
   it("상황 문단을 프롬프트 끝에 넣고 유저 발화를 기록 마지막에 두고 말풍선을 돌려준다", async () => {
     clearMessages();
-    logMessage(CHAT, characterId, "user", "오늘 뭐 했어", "2026-09-06 19:00:00");
+    logMessage(
+      CHAT,
+      characterId,
+      "user",
+      "오늘 뭐 했어",
+      "2026-09-06 19:00:00",
+    );
     const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
-    const ask = canned([reply(["집에 있었어", "너는?"], { note: ["상대가 하루를 물었다"] })]);
+    const ask = canned([
+      reply(["집에 있었어", "너는?"], { note: ["상대가 하루를 물었다"] }),
+    ]);
     const out = await composeReply({
       judge: noJudge,
       characterId,
       chatId: CHAT,
       turn,
       situation: "[검사용 상황 문단] 방금 돌아왔다.",
-      context: { gathered: { activity: "저녁", blockStart: "18:00", waitedMs: 1 } },
+      context: {
+        gathered: { activity: "저녁", blockStart: "18:00", waitedMs: 1 },
+      },
       logTag: "[test]",
       ask,
     });
@@ -139,7 +237,9 @@ describe("composeReply", () => {
     const text = holdSituation("헬스장 운동");
     assert.ok(text.startsWith("[상대가 붙잡는 중]"));
     assert.ok(text.includes('너는 지금 "헬스장 운동" 중이라'));
-    assert.ok(text.includes("짧게 답하고 하던 일로 돌아갈지는 대화를 보고 정한다"));
+    assert.ok(
+      text.includes("짧게 답하고 하던 일로 돌아갈지는 대화를 보고 정한다"),
+    );
     assert.ok(text.includes("남기로 하면 stay 칸을 true로 준다"));
     // 판정이 정한 결정처럼 쓰지 않는다
     assert.ok(!text.includes("취소하고 남기로 했다"));
@@ -147,20 +247,36 @@ describe("composeReply", () => {
 
   it("markFrom을 주면 그 시각 이후 첫 메시지에 시간 표시가 붙는다", async () => {
     clearMessages();
-    logMessage(CHAT, characterId, "assistant", "잠깐 씻고 올게", "2026-09-06 21:00:00");
+    logMessage(
+      CHAT,
+      characterId,
+      "assistant",
+      "잠깐 씻고 올게",
+      "2026-09-06 21:00:00",
+    );
     logMessage(CHAT, characterId, "user", "응 다녀와", "2026-09-06 21:10:00");
     const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const plain = canned([reply(["나 왔어"])]);
     await composeReply({
       judge: noJudge,
-      characterId, chatId: CHAT, turn, context: {}, logTag: "[test]", ask: plain,
+      characterId,
+      chatId: CHAT,
+      turn,
+      context: {},
+      logTag: "[test]",
+      ask: plain,
     });
     const marked = canned([reply(["나 왔어"])]);
     await composeReply({
       judge: noJudge,
-      characterId, chatId: CHAT, turn, markFrom: "2026-09-06 21:05:00",
-      context: {}, logTag: "[test]", ask: marked,
+      characterId,
+      chatId: CHAT,
+      turn,
+      markFrom: "2026-09-06 21:05:00",
+      context: {},
+      logTag: "[test]",
+      ask: marked,
     });
     const plainLast = plain.turns[plain.turns.length - 1]?.content ?? "";
     const markedLast = marked.turns[marked.turns.length - 1]?.content ?? "";
@@ -177,7 +293,12 @@ describe("composeReply", () => {
     const ask = canned([reply([]), reply([])]);
     const out = await composeReply({
       judge: noJudge,
-      characterId, chatId: CHAT, turn, context: {}, logTag: "[test]", ask,
+      characterId,
+      chatId: CHAT,
+      turn,
+      context: {},
+      logTag: "[test]",
+      ask,
     });
     assert.equal(out, null);
     assert.equal(ask.calls, 2);
@@ -193,7 +314,12 @@ describe("composeReply", () => {
     });
     const out = await composeReply({
       judge: noJudge,
-      characterId, chatId: CHAT, turn, context: {}, logTag: "[test]", ask,
+      characterId,
+      chatId: CHAT,
+      turn,
+      context: {},
+      logTag: "[test]",
+      ask,
     });
     assert.equal(out, null);
   });
@@ -201,20 +327,34 @@ describe("composeReply", () => {
   it("호출 번호가 있으면 근거를 호출 기록에 붙이고 attach로 덧붙일 수 있다", async () => {
     clearMessages();
     logMessage(CHAT, characterId, "user", "잘 잤어?", "2026-09-06 08:00:00");
-    logMessage(CHAT, characterId, "user", "나 오늘 쉬는 날", "2026-09-06 08:00:10");
+    logMessage(
+      CHAT,
+      characterId,
+      "user",
+      "나 오늘 쉬는 날",
+      "2026-09-06 08:00:10",
+    );
     const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const ask = canned([reply(["응 푹 잤어", "좋겠다"])], (meta) => {
       meta.callId = recordLlmCall({
-        purpose: "reply", model: "test", characterId, chatId: CHAT,
-        system: [], turns: "", latencyMs: 1,
+        purpose: "reply",
+        model: "test",
+        characterId,
+        chatId: CHAT,
+        system: [],
+        turns: "",
+        latencyMs: 1,
       });
     });
     const out = await composeReply({
       judge: noJudge,
-      characterId, chatId: CHAT, turn,
+      characterId,
+      chatId: CHAT,
+      turn,
       context: { timing: { waitMs: 3000, path: "table" } },
-      logTag: "[test]", ask,
+      logTag: "[test]",
+      ask,
     });
     assert.ok(out);
     assert.ok(out.callId);
@@ -235,12 +375,22 @@ describe("composeReply", () => {
   });
   it("상대 상태 판정이 바뀌면 저장하고 그 줄을 캐시 밖 블록에 넣고 관계 변경으로 남긴다", async () => {
     clearMessages();
-    logMessage(CHAT, characterId, "user", "왜 연락 안 했어", "2026-09-06 21:30:00");
+    logMessage(
+      CHAT,
+      characterId,
+      "user",
+      "왜 연락 안 했어",
+      "2026-09-06 21:30:00",
+    );
     const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const record = (meta: { callId?: number }): void => {
       meta.callId = recordLlmCall({
-        purpose: "reply", model: "test", system: [], turns: "", latencyMs: 1,
+        purpose: "reply",
+        model: "test",
+        system: [],
+        turns: "",
+        latencyMs: 1,
       });
     };
     const ask = canned([reply(["미안 진짜"])], record);
@@ -257,7 +407,13 @@ describe("composeReply", () => {
       prev: null,
     });
     const out = await composeReply({
-      judge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]", ask,
+      judge,
+      characterId,
+      chatId: CHAT,
+      turn,
+      context: {},
+      logTag: "[test]",
+      ask,
     });
     assert.ok(out);
     const row = db
@@ -287,17 +443,32 @@ describe("composeReply", () => {
     assert.ok(all.includes("[상대의 지금 상태 — 답장마다 판정해 둔 것]"));
     assert.ok(all.includes(label));
     // 상태 줄은 캐시하지 않는 마지막 블록에만 있어야 한다
-    const cached = ask.system.filter((b) => b.cache).map((b) => b.text).join("\n");
+    const cached = ask.system
+      .filter((b) => b.cache)
+      .map((b) => b.text)
+      .join("\n");
     assert.ok(!cached.includes("[상대의 지금 상태 — 답장마다 판정해 둔 것]"));
     assert.ok(out.callId);
     out.attach({});
     const ctx = JSON.parse(
-      (db.prepare(`SELECT context_json FROM llm_calls WHERE id = ?`).get(out.callId) as {
-        context_json: string;
-      }).context_json,
+      (
+        db
+          .prepare(`SELECT context_json FROM llm_calls WHERE id = ?`)
+          .get(out.callId) as {
+          context_json: string;
+        }
+      ).context_json,
     ) as Record<string, unknown>;
-    assert.deepEqual(ctx.relUpdate, [{ field: "상대 상태", from: null, to: label }]);
-    assert.deepEqual(ctx.userState, { changed: true, failed: false, callId: null, label, prev: null });
+    assert.deepEqual(ctx.relUpdate, [
+      { field: "상대 상태", from: null, to: label },
+    ]);
+    assert.deepEqual(ctx.userState, {
+      changed: true,
+      failed: false,
+      callId: null,
+      label,
+      prev: null,
+    });
 
     // 같은 값이 다시 오면 저장도 관계 변경 기록도 없다
     clearMessages();
@@ -305,19 +476,34 @@ describe("composeReply", () => {
     const turn2 = pendingUserTurn(CHAT, characterId);
     assert.ok(turn2);
     const out2 = await composeReply({
-      judge, characterId, chatId: CHAT, turn: turn2, context: {}, logTag: "[test]",
+      judge,
+      characterId,
+      chatId: CHAT,
+      turn: turn2,
+      context: {},
+      logTag: "[test]",
       ask: canned([reply(["…"])], record),
     });
     assert.ok(out2);
     assert.ok(out2.callId);
     out2.attach({});
     const ctx2 = JSON.parse(
-      (db.prepare(`SELECT context_json FROM llm_calls WHERE id = ?`).get(out2.callId) as {
-        context_json: string;
-      }).context_json,
+      (
+        db
+          .prepare(`SELECT context_json FROM llm_calls WHERE id = ?`)
+          .get(out2.callId) as {
+          context_json: string;
+        }
+      ).context_json,
     ) as Record<string, unknown>;
     assert.equal(ctx2.relUpdate, undefined);
-    assert.deepEqual(ctx2.userState, { changed: true, failed: false, callId: null, label, prev: null });
+    assert.deepEqual(ctx2.userState, {
+      changed: true,
+      failed: false,
+      callId: null,
+      label,
+      prev: null,
+    });
     db.prepare(
       `UPDATE relationships SET user_state = NULL, user_state_cause = NULL,
          user_state_tone = NULL, user_state_since = NULL WHERE character_id = ?`,
@@ -328,23 +514,44 @@ describe("composeReply", () => {
     clearMessages();
     const today = kstLogicalDate();
     const scheduleId = addSchedule(
-      characterId, "char", today, "19:00", "저녁에 헬스", kstStamp(), "rhythm",
+      characterId,
+      "char",
+      today,
+      "19:00",
+      "저녁에 헬스",
+      kstStamp(),
+      "rhythm",
     );
     logMessage(CHAT, characterId, "user", "오늘 뭐 해?", kstStamp());
     const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const judge = async (): Promise<UserStateVerdict> => ({
-      changed: false, state: null, failed: false, callId: null, prev: null,
+      changed: false,
+      state: null,
+      failed: false,
+      callId: null,
+      prev: null,
       signals: {
-        openedSelf: false, askedAboutChar: true, saidAffection: false,
-        prevMove: "nickname", moveReaction: "accepted",
+        openedSelf: false,
+        askedAboutChar: true,
+        saidAffection: false,
+        prevMove: "nickname",
+        moveReaction: "accepted",
       },
     });
     const out = await composeReply({
-      judge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]",
+      judge,
+      characterId,
+      chatId: CHAT,
+      turn,
+      context: {},
+      logTag: "[test]",
       ask: canned([
         reply(["저녁에 헬스 가", "너는?"], {
-          move: "nickname", first: "first_laugh", first_by: "user", told_plan: true,
+          move: "nickname",
+          first: "first_laugh",
+          first_by: "user",
+          told_plan: true,
         }),
       ]),
     });
@@ -363,11 +570,20 @@ describe("composeReply", () => {
     assert.equal(known.user_knows, "known");
     assert.equal(getActiveSchedulesOn(characterId, "char", today).length, 1);
     // 열림 — 이 턴의 1행
-    const sigs = getRelationshipSignals(characterId, "2000-01-01", "2100-01-01");
+    const sigs = getRelationshipSignals(
+      characterId,
+      "2000-01-01",
+      "2100-01-01",
+    );
     assert.equal(sigs.length, 1);
     assert.deepEqual(
-      [sigs[0]!.opened_self, sigs[0]!.asked_about_char, sigs[0]!.said_affection,
-        sigs[0]!.prev_move, sigs[0]!.move_reaction],
+      [
+        sigs[0]!.opened_self,
+        sigs[0]!.asked_about_char,
+        sigs[0]!.said_affection,
+        sigs[0]!.prev_move,
+        sigs[0]!.move_reaction,
+      ],
       [0, 1, 0, "nickname", "accepted"],
     );
 
@@ -377,7 +593,12 @@ describe("composeReply", () => {
     const turn2 = pendingUserTurn(CHAT, characterId);
     assert.ok(turn2);
     const out2 = await composeReply({
-      judge: noJudge, characterId, chatId: CHAT, turn: turn2, context: {}, logTag: "[test]",
+      judge: noJudge,
+      characterId,
+      chatId: CHAT,
+      turn: turn2,
+      context: {},
+      logTag: "[test]",
       ask: canned([reply(["웃었네"], { first: "first_laugh" })]),
     });
     assert.ok(out2);
@@ -388,7 +609,9 @@ describe("composeReply", () => {
       1,
     );
     db.prepare(`DELETE FROM firsts WHERE character_id = ?`).run(characterId);
-    db.prepare(`DELETE FROM relationship_signals WHERE character_id = ?`).run(characterId);
+    db.prepare(`DELETE FROM relationship_signals WHERE character_id = ?`).run(
+      characterId,
+    );
     db.prepare(`DELETE FROM schedules WHERE id = ?`).run(scheduleId);
   });
 
@@ -396,32 +619,65 @@ describe("composeReply", () => {
     clearMessages();
     const today = kstLogicalDate();
     const ids = [
-      addSchedule(characterId, "char", today, "12:00", "점심 약속", kstStamp(), "rhythm"),
-      addSchedule(characterId, "char", today, "19:00", "저녁에 헬스", kstStamp(), "rhythm"),
+      addSchedule(
+        characterId,
+        "char",
+        today,
+        "12:00",
+        "점심 약속",
+        kstStamp(),
+        "rhythm",
+      ),
+      addSchedule(
+        characterId,
+        "char",
+        today,
+        "19:00",
+        "저녁에 헬스",
+        kstStamp(),
+        "rhythm",
+      ),
     ];
     logMessage(CHAT, characterId, "user", "오늘 뭐 해?", kstStamp());
     const turn = pendingUserTurn(CHAT, characterId);
     assert.ok(turn);
     const out = await composeReply({
-      judge: noJudge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]",
+      judge: noJudge,
+      characterId,
+      chatId: CHAT,
+      turn,
+      context: {},
+      logTag: "[test]",
       ask: canned([reply(["저녁에 헬스 가"], { told_plan: true })]),
     });
     assert.ok(out);
     assert.deepEqual(out.replyMeta, { told_plan: true });
     const knows = db
-      .prepare(`SELECT user_knows FROM schedules WHERE id IN (?, ?) ORDER BY id`)
+      .prepare(
+        `SELECT user_knows FROM schedules WHERE id IN (?, ?) ORDER BY id`,
+      )
       .all(...ids) as { user_knows: string }[];
-    assert.deepEqual(knows.map((k) => k.user_knows), ["unknown", "unknown"]);
+    assert.deepEqual(
+      knows.map((k) => k.user_knows),
+      ["unknown", "unknown"],
+    );
     db.prepare(`DELETE FROM schedules WHERE id IN (?, ?)`).run(...ids);
   });
 
   it("열림 신호 — 폐기된 답장의 행은 다시 만든 답장의 행으로 바뀌고, 나간 답장 뒤의 턴은 새 행이다", async () => {
     clearMessages();
     const judge = async (): Promise<UserStateVerdict> => ({
-      changed: false, state: null, failed: false, callId: null, prev: null,
+      changed: false,
+      state: null,
+      failed: false,
+      callId: null,
+      prev: null,
       signals: {
-        openedSelf: true, askedAboutChar: false, saidAffection: false,
-        prevMove: null, moveReaction: "none",
+        openedSelf: true,
+        askedAboutChar: false,
+        saidAffection: false,
+        prevMove: null,
+        moveReaction: "none",
       },
     });
     const count = (): number =>
@@ -430,13 +686,24 @@ describe("composeReply", () => {
       const turn = pendingUserTurn(CHAT, characterId);
       assert.ok(turn);
       const out = await composeReply({
-        judge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]",
+        judge,
+        characterId,
+        chatId: CHAT,
+        turn,
+        context: {},
+        logTag: "[test]",
         ask: canned([reply([text])]),
       });
       assert.ok(out);
     };
     // 앞서 나간 답장은 1분 전, 유저 말이 온 뒤 답장을 만든다
-    logMessage(CHAT, characterId, "assistant", "먼저 보낸 말", kstStampBefore(60_000));
+    logMessage(
+      CHAT,
+      characterId,
+      "assistant",
+      "먼저 보낸 말",
+      kstStampBefore(60_000),
+    );
     logMessage(CHAT, characterId, "user", "나 오늘 좀 힘들었어", kstStamp());
     await compose("힘들었구나");
     assert.equal(count(), 1);
@@ -449,7 +716,9 @@ describe("composeReply", () => {
     logMessage(CHAT, characterId, "user", "회사에서", kstStamp());
     await compose("아이고");
     assert.equal(count(), 2);
-    db.prepare(`DELETE FROM relationship_signals WHERE character_id = ?`).run(characterId);
+    db.prepare(`DELETE FROM relationship_signals WHERE character_id = ?`).run(
+      characterId,
+    );
   });
 
   // 오늘 의도로 둔 것을 이번 답장이 썼는지가 남아야, 몇 시간 뒤 선톡이 같은 물음을 다시
@@ -460,7 +729,11 @@ describe("composeReply", () => {
     saveRelationshipIntent(
       characterId,
       today,
-      { dig: "왜 그 팀을 그만뒀는지", move: "nickname", leadTone: "tease_sincere" },
+      {
+        dig: "왜 그 팀을 그만뒀는지",
+        move: "nickname",
+        leadTone: "tease_sincere",
+      },
       kstStamp(),
     );
     logMessage(CHAT, characterId, "user", "요즘 어때?", kstStamp());
@@ -468,11 +741,20 @@ describe("composeReply", () => {
     assert.ok(turn);
     const record = (meta: { callId?: number }): void => {
       meta.callId = recordLlmCall({
-        purpose: "reply", model: "test", system: [], turns: "", latencyMs: 1,
+        purpose: "reply",
+        model: "test",
+        system: [],
+        turns: "",
+        latencyMs: 1,
       });
     };
     const out = await composeReply({
-      judge: noJudge, characterId, chatId: CHAT, turn, context: {}, logTag: "[test]",
+      judge: noJudge,
+      characterId,
+      chatId: CHAT,
+      turn,
+      context: {},
+      logTag: "[test]",
       ask: canned(
         [
           reply(["그 팀이랑은 좀 괜찮아졌어?", "나는 금요일에 워크샵 가"], {
@@ -487,14 +769,20 @@ describe("composeReply", () => {
     assert.deepEqual(out.replyMeta, { intent_lines: ["dig", "thread"] });
     out.attach({});
     const ctx = JSON.parse(
-      (db.prepare(`SELECT context_json FROM llm_calls WHERE id = ?`).get(out.callId) as {
-        context_json: string;
-      }).context_json,
+      (
+        db
+          .prepare(`SELECT context_json FROM llm_calls WHERE id = ?`)
+          .get(out.callId) as {
+          context_json: string;
+        }
+      ).context_json,
     ) as Record<string, unknown>;
     const rel = ctx.relationship as Record<string, unknown>;
     assert.equal(rel.todayMove, "별명 부르기. 앞세울 결은 장난 속에 진심");
     assert.deepEqual(rel.intentLines, ["dig", "thread"]);
     assert.deepEqual(ctx.planRef, ["9/18 팀 워크샵"]);
-    db.prepare(`DELETE FROM relationship_intents WHERE character_id = ?`).run(characterId);
+    db.prepare(`DELETE FROM relationship_intents WHERE character_id = ?`).run(
+      characterId,
+    );
   });
 });

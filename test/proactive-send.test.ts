@@ -3,6 +3,8 @@
 // 모델과 텔레그램은 부르지 않는다 — 정해 둔 응답을 주는 ask와 보낸 글을 적기만 하는 send를
 // 끼운다. 잠금·보관 문안·발송 직전 재확인·실패 보관이 followup·presence에서 하던 대로 도는지 본다.
 // 문안을 만든 호출 번호가 발송 기록에 실리는지, 보관했다 다시 보낸 문안도 처음 번호를 싣는지도 본다.
+// 모델 호출이 실패하면 보관 없이 "failed"를 주는지, read가 준 발송 기록 값이 보관했다 다시 보낸
+// 문안에도 실리고 같은 이름이면 호출 번호에 밀리는지, 나간 로그 끝에 붙는지 함께 본다(이슈 #471).
 
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -48,7 +50,7 @@ interface Sent {
 /** 정해 둔 응답을 주는 모델과, 보낸 글을 적는(또는 실패하는) 발송. */
 const fake = (
   answer: unknown,
-  opts: { fail?: boolean; callId?: number } = {},
+  opts: { fail?: boolean; askFail?: boolean; callId?: number } = {},
 ) => {
   const sent: Sent[] = [];
   let asks = 0;
@@ -63,6 +65,7 @@ const fake = (
       asks += 1;
       // 실제 모델 호출은 호출 행을 남기고 그 번호를 meta에 적는다.
       if (meta && opts.callId) meta.callId = opts.callId;
+      if (opts.askFail) throw new Error("model timeout");
       return answer;
     }) as Deps["ask"],
     send: (async (_chat, _cid, text, kind, extra) => {
@@ -196,6 +199,100 @@ test("보관했다 다시 보내는 문안은 처음 만든 호출 번호를 싣
   assert.equal(up.asks(), 0);
   assert.deepEqual(up.sent, [
     { text: "오늘 좀 지쳐 보이더라", kind: "care", extra: { call_id: 42 } },
+  ]);
+});
+
+test("모델 호출이 실패하면 보관하지 않고 failed를 준다", async () => {
+  const down = fake({ text: "안 쓰여야 한다" }, { askFail: true });
+  const r1 = await sendProactiveDraft(
+    spec({ kind: "lunch", read: readText }),
+    down.deps,
+  );
+  assert.equal(r1, "failed");
+  assert.equal(down.sent.length, 0);
+
+  // 보관한 문안이 없으니 다음 호출은 모델을 다시 부른다.
+  const up = fake({ text: "점심 먹었어?" });
+  const r2 = await sendProactiveDraft(
+    spec({ kind: "lunch", read: readText }),
+    up.deps,
+  );
+  assert.equal(r2, "sent");
+  assert.equal(up.asks(), 1);
+});
+
+test("read가 준 발송 기록 값을 호출 번호와 함께 싣는다", async () => {
+  const f = fake(
+    { send: true, line: "dig", text: "그 팀 얘기 궁금해졌어" },
+    { callId: 51 },
+  );
+  const r = await sendProactiveDraft(
+    spec({
+      kind: "intent",
+      read: (d: { text: string }) => ({
+        text: d.text,
+        meta: { intent_line: "dig" },
+      }),
+    }),
+    f.deps,
+  );
+  assert.equal(r, "sent");
+  assert.deepEqual(f.sent, [
+    {
+      text: "그 팀 얘기 궁금해졌어",
+      kind: "intent",
+      extra: { call_id: 51, intent_line: "dig" },
+    },
+  ]);
+});
+
+test("read가 같은 이름으로 준 값은 호출 번호가 덮어쓰고, 준 값은 나간 로그 끝에 붙는다", async (t) => {
+  const logs: string[] = [];
+  t.mock.method(console, "log", (line: string) => {
+    logs.push(line);
+  });
+  const f = fake({ text: "그 얘기 더 해줘" }, { callId: 53 });
+  const r = await sendProactiveDraft(
+    spec({
+      kind: "intent",
+      sentLog: "[test] intent",
+      read: (d: { text: string }) => ({
+        text: d.text,
+        meta: { call_id: 999, intent_line: "dig" },
+      }),
+    }),
+    f.deps,
+  );
+  assert.equal(r, "sent");
+  assert.deepEqual(f.sent[0]?.extra, { call_id: 53, intent_line: "dig" });
+  assert.ok(logs.includes("[test] intent · call_id=53 intent_line=dig"));
+});
+
+test("보관했다 다시 보내는 문안도 read가 준 발송 기록 값을 싣는다", async () => {
+  const read = (d: { text: string }) => ({
+    text: d.text,
+    meta: { intent_line: "thread" },
+  });
+  const down = fake(
+    { text: "발표 준비는 좀 됐어?" },
+    { fail: true, callId: 52 },
+  );
+  const r1 = await sendProactiveDraft(
+    spec({ kind: "intent", read }),
+    down.deps,
+  );
+  assert.equal(r1, "held");
+
+  const up = fake({ text: "이 글은 안 쓰여야 한다" });
+  const r2 = await sendProactiveDraft(spec({ kind: "intent", read }), up.deps);
+  assert.equal(r2, "sent");
+  assert.equal(up.asks(), 0);
+  assert.deepEqual(up.sent, [
+    {
+      text: "발표 준비는 좀 됐어?",
+      kind: "intent",
+      extra: { call_id: 52, intent_line: "thread" },
+    },
   ]);
 });
 

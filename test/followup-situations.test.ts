@@ -8,6 +8,8 @@
 //
 // 오늘의 관계 의도를 받는 셋(굿나잇·근황·의도)은 그 줄이 문단에 실제로 들어가는지, 의도 행이
 // 없는 날에도 문단이 제 모양을 지키는지 함께 본다(설계 원본 §4).
+// 의도 문단은 남은 줄을 전부 받아 모델이 고르게 하므로, 줄마다 코드가 붙는지와 고른 줄 코드를 받는
+// 형식인지도 본다(이슈 #471).
 //
 // followup.ts가 DB와 봇 모듈을 함께 읽으므로 DB는 임시 파일로 새로 만들고 토큰은 가짜다.
 import assert from "node:assert/strict";
@@ -148,22 +150,46 @@ test("의도 행이 빈 날에도 근황·굿나잇 문단은 제 형식을 지�
   assert.doesNotMatch(goodnight.replace(/\n\n[^\n]*$/, ""), /\n\n/);
 });
 
-test("의도 문단은 고른 줄의 이름과 내용을 적고 그대로 읊지 말라고 한다", () => {
-  const out = intentSituation("dig", "왜 그 팀을 그만뒀는지");
+const PICK_LINE =
+  /JSON으로만 답한다: \{"send":true,"line":"고른 줄의 코드","text":"\.\.\."\} 또는 \{"send":false\}$/;
+
+test("의도 문단은 남은 줄을 코드와 함께 전부 적고 고른 줄 코드를 받는다", () => {
+  const out = intentSituation([
+    { line: "share", text: "요즘 새벽에 러닝 나가는 얘기" },
+    { line: "dig", text: "왜 그 팀을 그만뒀는지" },
+  ]);
   assert.match(out, /^\[문안 — 지금 보낼 한 통\]/);
-  assert.match(out, /파고들 것: 왜 그 팀을 그만뒀는지/);
+  assert.match(out, /- share\(흘릴 내 얘기\): 요즘 새벽에 러닝 나가는 얘기/);
+  assert.match(out, /- dig\(파고들 것\): 왜 그 팀을 그만뒀는지/);
+  // 적은 순서가 곧 동률일 때 고를 순서라 목록 순서를 지킨다.
+  assert.ok(out.indexOf("- share(") < out.indexOf("- dig("));
   assert.match(out, /두 시간 넘게 말이 없다/);
+  assert.match(out, /지금 상황에 맞는 줄 하나를 골라/);
+  assert.match(out, /지금 맞는 줄이 여럿이면 위에 먼저 적은 줄을 고른다/);
   assert.match(out, /그대로 읊지 않는다/);
   assert.match(out, /\[상대가 전에 한 말\]/);
-  assert.match(out, SEND_OR_FOLD);
+  assert.match(out, /지금 맞는 줄이 없거나 어느 줄로 걸어도 억지스러우면 send=false/);
+  assert.match(out, PICK_LINE);
 });
 
-test("의도 문단은 지금 하는 일과 이어질 때만 옛말을 꺼내게 하고 메모가 새벽에 적힌 것을 밝힌다", () => {
-  const out = intentSituation("move", "기억해서 챙기기 카페 앞을 지날 때");
+test("의도 문단은 후보로 넘긴 줄의 여는 방식만 적는다", () => {
+  const out = intentSituation([{ line: "thread", text: "다음 주 발표 준비" }]);
+  assert.match(out, /이어갈 자리를 고르면/);
+  assert.doesNotMatch(out, /흘릴 내 얘기를 고르면/);
+  assert.doesNotMatch(out, /시도할 플러팅을 고르면/);
+  assert.doesNotMatch(out, /파고들 것을 고르면/);
+});
+
+test("의도 문단은 줄에 적힌 시점과 장면 전에는 그 줄을 고르지 않게 하고 메모가 새벽에 적힌 것을 밝힌다", () => {
+  const out = intentSituation([
+    { line: "move", text: "기억해서 챙기기 카페 앞을 지날 때" },
+    { line: "thread", text: "오후 네 시 모임 어땠는지 저녁부터" },
+  ]);
   assert.match(out, /새벽에 지난 대화를 읽고 적어 둔 메모다/);
   assert.match(out, /아까·방금 한 얘기라고 부르지 않는다/);
   assert.match(out, /네가 하는 일 안에 그것이 실제로 있을 때만이다/);
-  assert.match(out, /지금이 그 장면일 때만 쓴다\. 아니면 send=false/);
+  assert.match(out, /언제부터 꺼낼지 적혀 있으면 그 전에는 그 줄을 고르지 않는다/);
+  assert.match(out, /지금이 그 장면일 때만 그 줄을 고른다/);
   assert.doesNotMatch(out, /떠올라서 먼저 거는/);
 });
 
@@ -174,7 +200,7 @@ test("여섯 문단은 서로 다르고 같은 인자에 같은 값을 돌려준
     careSituation(32),
     lunchSituation(),
     catchupSituation(null),
-    intentSituation("thread", "다음 주 발표 준비"),
+    intentSituation([{ line: "thread", text: "다음 주 발표 준비" }]),
   ];
   assert.equal(new Set(all).size, 6);
   assert.equal(goodnightSituation(null), all[0]);

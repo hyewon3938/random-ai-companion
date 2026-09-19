@@ -6,6 +6,9 @@
 //   2. 앞 틱에서 못 나간 같은 종류의 문안이 있으면 모델을 부르지 않고 그것부터 쓴다.
 //   3. 없으면 대화와 같은 3층 프롬프트에 상황 문단을 얹어 모델을 부르고, 부른 쪽이 준 read로
 //      응답을 문안으로 읽는다. read가 null을 주면 보내지 않는다(접은 사유는 read 안에서 남긴다).
+//      read는 문안과 함께 발송 기록에 적을 값을 줄 수 있다 — 의도 선톡이 고른 줄 코드처럼 응답을
+//      읽어야 정해지는 값이다. 모델 호출이 실패하면 보관할 문안이 없으므로 "failed"를 돌려주고,
+//      그 자리를 다시 물을지는 부른 쪽이 정한다(이슈 #471).
 //      선톡에는 검색어로 쓸 상대 발화가 없어서, 꼬리에 최근 대화와 함께 태그 없이 고른 상대 쪽
 //      기억을 넣는다 — 먼저 거는 말의 사물이 상대가 전에 한 말에서 나오게 하는 재료다(#343).
 //   4. 모델을 기다리는 사이 마지막 메시지가 바뀌었으면 접는다 — 유저가 답했거나 다른 경로가
@@ -50,18 +53,18 @@ export interface ProactiveDraftSpec<T> {
   kind: HeldDraftKind;
   /** 자리 비움 예고만 채운다 — 보관 문안은 같은 블록(시작 시각)에서만 다시 쓴다. */
   block?: string;
-  /**
-   * 발송 기록의 meta_json에 함께 적을 값 — 의도 선톡의 줄 코드(intent_line)처럼 나중에 세야
-   * 하는 것을 넣는다. block은 여기 넣지 않는다(위 칸이 보관함과 함께 쓴다).
-   */
-  extraMeta?: Record<string, unknown>;
   /** 발송 직전에 대조할 마지막 메시지 시각. 문안을 만드는 사이 바뀌었으면 접는다. */
   lastSentAt: string;
   /** 3층 프롬프트에 얹을 상황 문단. */
   situation: string;
   maxTokens: number;
-  /** 모델 응답을 문안으로 읽는다. null이면 보내지 않는다 — 접은 사유는 여기서 남긴다. */
-  read: (draft: T, meta: CallMeta) => string | null;
+  /**
+   * 모델 응답을 문안으로 읽는다. null이면 보내지 않는다 — 접은 사유는 여기서 남긴다. 발송 기록의
+   * meta_json에 함께 적을 값이 응답에서 나오면 `{ text, meta }`로 준다. 의도 선톡의 줄 코드
+   * (intent_line)처럼 나중에 세야 하는 값이다. 나간 뒤 로그 줄 끝에도 `키=값`으로 붙는다.
+   * block·call_id는 여기 넣지 않는다 — 같은 이름으로 넣어도 위 칸과 호출 번호가 덮어쓴다.
+   */
+  read: (draft: T, meta: CallMeta) => string | DraftRead | null;
   /** 로그 접두어. 실패 로그는 이 뒤에 "전송 실패:"가 붙는다. */
   label: string;
   /** 나간 뒤 남길 로그 한 줄. */
@@ -75,12 +78,19 @@ export interface ProactiveDraftSpec<T> {
   context?: Partial<CallContext>;
 }
 
+/** read가 문안과 함께 발송 기록에 적을 값을 줄 때의 모양. */
+export interface DraftRead {
+  text: string;
+  meta?: Record<string, unknown>;
+}
+
 export type ProactiveDraftResult =
   | "busy" // 다른 틱·답장이 진행 중
   | "sent"
   | "skipped" // read가 문안을 안 줬다
   | "moved" // 만드는 사이 대화가 움직였다
-  | "held"; // 발송에 실패해 문안을 보관했다
+  | "held" // 발송에 실패해 문안을 보관했다
+  | "failed"; // 문안을 만들기 전에 실패했다(모델 호출 실패). 보관한 문안이 없다
 
 /** 모델 호출과 발송. 검사에서 바꿔 끼우는 자리라 기본값은 실제 함수다. */
 export interface ProactiveDraftDeps {
@@ -116,7 +126,10 @@ export const sendProactiveDraft = async <T>(
       );
       if (spec.context && meta.callId)
         setCallContext(meta.callId, spec.context);
-      const text = spec.read(draft, meta);
+      const read = spec.read(draft, meta);
+      if (!read) return "skipped";
+      const { text, meta: readMeta } =
+        typeof read === "string" ? { text: read, meta: undefined } : read;
       if (!text) return "skipped";
       outgoing = {
         kind,
@@ -124,6 +137,7 @@ export const sendProactiveDraft = async <T>(
         ...(spec.block !== undefined ? { block: spec.block } : {}),
         madeAt: Date.now(),
         ...(meta.callId ? { callId: meta.callId } : {}),
+        ...(readMeta ? { meta: readMeta } : {}),
       };
     }
     // 발송 직전 재확인 — 모델을 기다리는 사이 유저가 답했거나 다른 경로가 뭔가 보냈으면
@@ -133,11 +147,12 @@ export const sendProactiveDraft = async <T>(
       return "moved";
     }
     // 문안 호출 번호를 발송 기록에 함께 적는다. 발송 게시가 이 번호를 키로 삼아, 발송 게시에
-    // 남긴 피드백도 어느 호출의 문안이었는지 되짚는다(이슈 #451).
-    const sendMeta = {
+    // 남긴 피드백도 어느 호출의 문안이었는지 되짚는다(이슈 #451). read가 준 값을 먼저 펴서
+    // 같은 이름이 와도 block·call_id가 이긴다.
+    const sendMeta: Record<string, unknown> = {
+      ...outgoing.meta,
       ...(spec.block !== undefined ? { block: spec.block } : {}),
       ...(outgoing.callId ? { call_id: outgoing.callId } : {}),
-      ...spec.extraMeta,
     };
     await deps.send(
       chatId,
@@ -146,12 +161,18 @@ export const sendProactiveDraft = async <T>(
       kind,
       Object.keys(sendMeta).length ? sendMeta : undefined,
     );
+    // read가 준 값(의도 선톡이 고른 줄 등)은 부른 쪽이 로그 문구를 정할 때 모르므로 여기서
+    // 붙인다. 실제로 발송 기록에 실린 값을 적는다.
+    const readLog = Object.keys(outgoing.meta ?? {})
+      .map((k) => `${k}=${String(sendMeta[k])}`)
+      .join(" ");
     outgoing = null; // 나갔으니 들고 있지 않는다
-    console.log(spec.sentLog);
+    console.log(readLog ? `${spec.sentLog} · ${readLog}` : spec.sentLog);
     return "sent";
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    logErr(`${spec.label} 전송 실패:`, e);
+    // 문안이 없으면 만들기 전에 실패한 것이다(모델 호출 실패). 보관할 것이 없다.
+    logErr(`${spec.label} ${outgoing ? "전송" : "문안 호출"} 실패:`, e);
     recordSendFailure(chatId, characterId, kind, msg);
     traceProactiveFail({
       characterId,
@@ -160,9 +181,10 @@ export const sendProactiveDraft = async <T>(
       // 보관함에서 꺼낸 문안이면 이번 틱은 모델을 부르지 않았다. 문안이 들고 온 번호를 쓴다.
       callId: meta.callId ?? outgoing?.callId,
     });
+    if (!outgoing) return "failed";
     // 한 통도 못 나갔으면 문안을 들고 있는다 — 다음 틱이 같은 자리면 그대로 다시 보낸다.
     // (일부라도 나가면 sendProactive가 던지지 않으므로 여기 오지 않는다.)
-    if (outgoing) holdFailedDraft(chatId, outgoing);
+    holdFailedDraft(chatId, outgoing);
     return "held";
   } finally {
     releaseProactive(chatId);

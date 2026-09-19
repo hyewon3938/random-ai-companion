@@ -1,8 +1,8 @@
 // 선톡 예산과 근거 줄(proactive-policy.ts)의 검사.
 //
 // 단계별 상한 표는 설계 원본 §7이 원본이라 값을 그대로 적어 두고 어긋나면 깨지게 한다.
-// 예산 판정은 오늘 나간 선톡을 세는 자리라 임시 DB에 메시지를 심어 값을 본다. 근거 줄과 줄
-// 고르기는 순수 함수라 값만 넣는다.
+// 예산 판정은 오늘 나간 선톡을 세는 자리라 임시 DB에 메시지를 심어 값을 본다. 근거 줄과 의도
+// 후보 목록은 순수 함수라 값만 넣는다.
 
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -21,8 +21,8 @@ const {
   basisLineFromMeta,
   budgetAllows,
   budgetLabel,
+  intentCandidates,
   onDailyBudget,
-  pickIntentLine,
   proactiveBudget,
   usedIntentLines,
   yesterdayIntentLines,
@@ -158,7 +158,7 @@ test("발송 기록으로 만드는 근거 줄은 선톡이 아닌 종류에 nul
   assert.equal(basisLineFromMeta("catchup", { block: 12 }), "일정(근황 선톡)");
 });
 
-test("의도 줄은 단계가 여는 줄 가운데 값이 있고 아직 안 쓴 앞선 것을 고른다", () => {
+test("의도 후보는 단계가 여는 줄 가운데 값이 있고 오늘 아직 안 쓴 줄 전부다", () => {
   const intent = {
     dig: "왜 그 팀을 그만뒀는지",
     share: "요즘 새벽에 러닝 나가는 얘기",
@@ -166,30 +166,32 @@ test("의도 줄은 단계가 여는 줄 가운데 값이 있고 아직 안 쓴 
     thread: "다음 주 발표 준비",
   };
   // 1단계는 파고들 것과 이어갈 자리 둘만 의도 선톡이 된다.
-  assert.equal(pickIntentLine(intent, 1, []), "dig");
-  assert.equal(pickIntentLine(intent, 1, ["dig"]), "thread");
-  assert.equal(pickIntentLine(intent, 1, ["dig", "thread"]), null);
+  assert.deepEqual(intentCandidates(intent, 1, []), ["dig", "thread"]);
+  assert.deepEqual(intentCandidates(intent, 1, ["dig"]), ["thread"]);
+  assert.deepEqual(intentCandidates(intent, 1, ["dig", "thread"]), []);
   // 2단계부터 네 줄 전부 열린다.
-  assert.equal(pickIntentLine(intent, 2, ["dig"]), "share");
-  // 값이 빈 줄은 건너뛴다. 고백 차례는 플러팅 없이 자리만 적혀도 시도할 플러팅 줄이 산다.
-  assert.equal(pickIntentLine({ thread: "다음 주 발표 준비" }, 2, []), "thread");
-  assert.equal(pickIntentLine({ move_note: "저녁에 마음 확인" }, 2, []), "move");
-  assert.equal(pickIntentLine(null, 2, []), null);
+  assert.deepEqual(intentCandidates(intent, 2, []), ["dig", "share", "move", "thread"]);
+  assert.deepEqual(intentCandidates(intent, 2, ["dig"]), ["share", "move", "thread"]);
+  // 값이 빈 줄은 빠진다. 고백 차례는 플러팅 없이 자리만 적혀도 시도할 플러팅 줄이 산다.
+  assert.deepEqual(intentCandidates({ thread: "다음 주 발표 준비" }, 2, []), ["thread"]);
+  assert.deepEqual(intentCandidates({ move_note: "저녁에 마음 확인" }, 2, []), ["move"]);
+  assert.deepEqual(intentCandidates(null, 2, []), []);
 });
 
-test("어제 의도 선톡이 쓴 줄은 다른 줄이 없을 때만 고른다", () => {
+test("어제 의도 선톡이 쓴 줄은 후보 목록 뒤로 간다", () => {
   const intent = {
     dig: "왜 그 팀을 그만뒀는지",
     share: "요즘 새벽에 러닝 나가는 얘기",
     move: "같이 볼 것 하나 고르기",
     thread: "다음 주 발표 준비",
   };
-  // 어제 파고들 것으로 열었으면 오늘은 그다음 줄부터 본다.
-  assert.equal(pickIntentLine(intent, 2, [], ["dig"]), "share");
-  assert.equal(pickIntentLine(intent, 1, [], ["dig"]), "thread");
-  // 남은 줄이 전부 어제 쓴 줄이면 그 가운데 앞선 것을 고른다.
-  assert.equal(pickIntentLine(intent, 1, [], ["dig", "thread"]), "dig");
-  assert.equal(pickIntentLine(intent, 1, ["thread"], ["dig"]), "dig");
+  // 어제 파고들 것으로 열었으면 오늘은 그 줄을 맨 뒤에 둔다. 모델은 지금 맞는 줄이 여럿일 때
+  // 앞선 줄을 고른다.
+  assert.deepEqual(intentCandidates(intent, 2, [], ["dig"]), ["share", "move", "thread", "dig"]);
+  assert.deepEqual(intentCandidates(intent, 1, [], ["dig"]), ["thread", "dig"]);
+  // 남은 줄이 전부 어제 쓴 줄이면 원래 순서를 지킨다.
+  assert.deepEqual(intentCandidates(intent, 1, [], ["dig", "thread"]), ["dig", "thread"]);
+  assert.deepEqual(intentCandidates(intent, 1, ["thread"], ["dig"]), ["dig"]);
   // 오늘 이미 쓴 줄은 어제 줄 여부와 상관없이 빠진다.
-  assert.equal(pickIntentLine(intent, 1, ["dig", "thread"], []), null);
+  assert.deepEqual(intentCandidates(intent, 1, ["dig", "thread"], []), []);
 });

@@ -21,7 +21,11 @@ import { noOverlap, sendProactiveDraft } from "./proactive-send.js";
 import { traceGlanceSkip } from "./reply-trace.js";
 import { type DayPlan, type PlanBlock, blockCategory, isAwayUnavail } from "./day-plan.js";
 import { toMin } from "./context/day-progress.js";
-import { GLANCE_AFTER_USER_MIN, GLANCE_MIN_LEFT_MIN } from "./thresholds.js";
+import {
+  GLANCE_AFTER_USER_MIN,
+  GLANCE_MIN_LEFT_MIN,
+  PROACTIVE_DRAFT_MAX_TOKENS,
+} from "./thresholds.js";
 import { clockLabel, kstLogicalClock, kstLogicalDate, logicalDayStartTs } from "./kst.js";
 
 const ageMin = (ts: string): number =>
@@ -94,7 +98,7 @@ const glanceTickBody = async (): Promise<void> => {
       block,
       lastSentAt: askedAt,
       situation: glanceSituation(target),
-      maxTokens: 300,
+      maxTokens: PROACTIVE_DRAFT_MAX_TOKENS,
       read: (draft, meta) => {
         if (draft.send && draft.text) return draft.text;
         judged.set(c.chat_id, askedAt);

@@ -8,7 +8,9 @@
 //   왔는지도 같은 행에 적는다 — 로그에만 두면 배포 한 번에 지워져 며칠치를 못 본다.
 // - 응답 토큰과 캐시 적중(cw/cr)을 로그에 남긴다.
 //
-// JSON을 받아야 하는 자리는 chatJson을 쓴다.
+// JSON을 받아야 하는 자리는 chatJson을 쓴다. 읽지 못한 JSON은 한 번 더 부르는데, 생각 과정이
+// 출력 상한을 써서 멈춘 경우면 생각 과정을 끄고 부른다(이슈 #471). 답장처럼 멈춘 이유를 부른
+// 쪽이 직접 봐야 하는 자리는 chatWithStop을 쓴다.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "node:crypto";
@@ -52,9 +54,25 @@ export interface ChatOptions {
    * 생각 과정을 쓸 것인가. sonnet은 이 값을 넘기지 않으면 상황에 따라 생각을 켜고 그 몫이
    * 출력 토큰으로 나가서, 상한이 낮은 호출은 상한을 생각에 다 쓰고 답이 통째로 빌 수 있다.
    * 붙잡기 판정(16토큰)·태그 고르기(128토큰)처럼 한 줄만 받는 호출에서 false로 끈다.
+   * 생각 과정이 상한을 써서 답을 읽지 못한 호출을 다시 부를 때도 끈다(chatJson, 답장 재요청).
    */
   think?: boolean;
 }
+
+/** 응답 본문과 모델이 멈춘 이유. 상한에 닿아 멈췄으면 stopReason이 "max_tokens"다. */
+export interface ChatStop {
+  text: string;
+  stopReason: string | null;
+  /** 응답에 생각 블록이 있었는지. 상한에 닿은 몫이 생각 과정 때문인지 가르는 데 쓴다. */
+  thought: boolean;
+}
+
+/**
+ * 생각 과정이 출력 상한을 써서 멈춘 응답인지. 이런 응답만 생각을 끄고 다시 부른다 — 생각 블록
+ * 없이 상한에 닿았으면 생각을 꺼도 같은 요청이라 같은 길이에서 또 잘린다.
+ */
+export const cutByThinking = (s: ChatStop): boolean =>
+  s.stopReason === "max_tokens" && s.thought;
 
 // 지금 도는 코드가 어느 판인지. 컨테이너에는 .git이 없고 src만 들어오므로(Dockerfile),
 // 커밋 해시 대신 src 파일 내용으로 만든 지문을 적는다. 배포 전후를 가르는 데 쓴다.
@@ -92,14 +110,15 @@ export const blockTypes = (blocks: Anthropic.ContentBlock[]): string => {
   return [...count].map(([type, n]) => `${type}:${n}`).join(",") || "none";
 };
 
-export const chat = async (
+// 모델을 한 번 부르고 본문과 멈춘 이유를 함께 돌려준다. 멈춘 이유는 호출 행에도 적힌다.
+export const chatWithStop = async (
   system: string | SystemBlock[],
   turns: ChatTurn[],
   maxTokens = 1024,
   model = config.model,
   meta?: CallMeta,
   opts?: ChatOptions,
-): Promise<string> => {
+): Promise<ChatStop> => {
   // TTL 1시간: 대화는 답장 텀이 10~30분씩 벌어지는 게 보통이라 5분 캐시는 그 사이 증발한다.
   // 1시간 쓰기는 2배지만 저녁 대화 내내 읽기(0.1배)로 회수 — 3회 이상 재사용이면 이득.
   const sys =
@@ -208,10 +227,66 @@ export const chat = async (
       output: u.output_tokens,
     },
   });
-  return out;
+  return {
+    text: out,
+    stopReason: response.stop_reason ?? null,
+    thought: response.content.some(
+      (b) => b.type === "thinking" || b.type === "redacted_thinking",
+    ),
+  };
 };
 
-// JSON 응답 강제 + 파싱 실패 시 1회 재시도.
+// 본문만 필요한 자리. 인자는 chatWithStop과 같다.
+export const chat = async (
+  system: string | SystemBlock[],
+  turns: ChatTurn[],
+  maxTokens = 1024,
+  model = config.model,
+  meta?: CallMeta,
+  opts?: ChatOptions,
+): Promise<string> =>
+  (await chatWithStop(system, turns, maxTokens, model, meta, opts)).text;
+
+/** JSON을 달라는 요청 끝에 붙이는 문구. */
+export const JSON_ASK = "\n\n반드시 JSON 하나만 출력해. 다른 텍스트 금지.";
+/** 첫 응답이 형식 때문에 읽히지 않았을 때 다시 부르며 붙이는 문구. */
+export const JSON_RETRY_ASK =
+  "\n\n직전 출력이 JSON 파싱에 실패했어. 코드펜스·설명 없이 순수 JSON 객체 하나만 다시 출력해.";
+
+/** JSON 요청을 한 번 보내는 자리. extra는 요청 끝에 붙일 문구다. */
+export type JsonAskOnce = (
+  extra: string,
+  attempt: number,
+  opts?: ChatOptions,
+) => Promise<ChatStop>;
+
+export const parseJson = <T>(raw: string): T => {
+  const stripped = raw
+    .replace(/^```(?:json)?\s*/m, "")
+    .replace(/```\s*$/m, "")
+    .trim();
+  return JSON.parse(stripped) as T;
+};
+
+// JSON을 받고, 읽지 못하면 한 번 더 부른다. 모델을 부르는 일은 넘겨받아서 모델 없이도
+// 어느 문구와 선택지로 다시 불렀는지 검사할 수 있다(test/llm-json-retry.test.ts).
+// 생각 블록이 있고 상한에 닿아 멈춘 응답은 생각 과정이 상한을 거의 다 써서 JSON이 비었거나
+// 중간에 잘린 경우라, 형식을 다시 일러도 같은 상한에서 또 잘린다. 그때는 같은 요청을 생각
+// 과정만 끄고 다시 보낸다. 생각 블록 없이 상한에 닿았거나 형식이 틀린 응답은 형식을 다시
+// 일러 부른다. 상한에 닿았어도 JSON을 읽었으면 그대로 쓴다.
+export const askJson = async <T>(once: JsonAskOnce): Promise<T> => {
+  const first = await once(JSON_ASK, 1);
+  try {
+    return parseJson<T>(first.text);
+  } catch {
+    const second = cutByThinking(first)
+      ? await once(JSON_ASK, 2, { think: false })
+      : await once(JSON_RETRY_ASK, 2);
+    return parseJson<T>(second.text);
+  }
+};
+
+// JSON 응답 강제 + 읽기 실패 시 1회 재시도(askJson).
 // system은 chat과 같은 형태를 받는다 — SystemBlock[]로 주면 캐시 경계가 대화 경로와 같이 걸려,
 // 선톡 문안처럼 3층 프롬프트를 그대로 쓰는 호출이 캐시를 공유한다.
 export const chatJson = async <T>(
@@ -220,38 +295,19 @@ export const chatJson = async <T>(
   maxTokens = 2048,
   model = config.model,
   meta?: CallMeta,
-): Promise<T> => {
+): Promise<T> =>
   // 재요청은 호출 원본에 별개의 행으로 남는다(attempt=2) — 무엇을 다시 물었는지가 보여야
   // JSON이 깨진 자리를 찾을 수 있다. 부른 쪽이 들고 있는 meta에는 마지막 행 번호를 돌려준다.
-  const ask = async (extra: string, attempt: number): Promise<string> => {
+  askJson<T>(async (extra, attempt, opts) => {
     const sub = meta ? { ...meta, attempt } : undefined;
-    const out = await chat(
+    const out = await chatWithStop(
       system,
       [{ role: "user", content: userPrompt + extra }],
       maxTokens,
       model,
       sub,
+      opts,
     );
     if (meta && sub) meta.callId = sub.callId;
     return out;
-  };
-
-  const parse = (raw: string): T => {
-    const stripped = raw
-      .replace(/^```(?:json)?\s*/m, "")
-      .replace(/```\s*$/m, "")
-      .trim();
-    return JSON.parse(stripped) as T;
-  };
-
-  const first = await ask("\n\n반드시 JSON 하나만 출력해. 다른 텍스트 금지.", 1);
-  try {
-    return parse(first);
-  } catch {
-    const second = await ask(
-      "\n\n직전 출력이 JSON 파싱에 실패했어. 코드펜스·설명 없이 순수 JSON 객체 하나만 다시 출력해.",
-      2,
-    );
-    return parse(second);
-  }
-};
+  });
