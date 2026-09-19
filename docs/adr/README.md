@@ -28,4 +28,5 @@
 | [0020](0020-proactive-no-ask-and-opening-rotation.md) | 선톡의 답 요구 금지를 규칙층에 두고 의도 선톡 여는 소재를 날마다 바꾸기 | Accepted |
 | [0021](0021-intent-line-chosen-by-model.md) | 의도 선톡이 쓸 줄을 문안 모델이 고르게 하기 | Accepted |
 | [0023](0023-proactive-opening-and-line-rotation.md) | 선톡이 말을 거는 방식 4가지를 돌려 쓰고 근황 선톡이 쓴 의도 줄을 기록하기 | Accepted |
+| [0024](0024-character-mind-judged-with-user-state.md) | 캐릭터의 마음을 상대 상태 판정 호출에서 함께 판정해 관계 표에 하루 동안 저장하기 | Proposed |
 | [0028](0028-culture-stage-at-creation.md) | 캐릭터를 만든 뒤 호출 한 번으로 진행 중인 일의 당일과 단계 정하기 | Accepted |
