@@ -12,8 +12,9 @@
 // 축의금 시세, 명절 승차권 대기열처럼 한국에서 자란 사람은 아는데 모델이 그 자리에서 안 꺼내는
 // 것들이다. 절차만 적으면 순서는 맞고 결은 어긋난 하루가 나온다.
 //
-// 표에 값을 넣고 빼는 함수가 없어 표 묶음 파일이 아니다 — 원본과 그 원본만 보는 찾기 함수뿐이라
-// 아무것도 import하지 않는다.
+// 표에 값을 넣고 빼는 함수가 없어 표 묶음 파일이 아니다 — 원본과, 그 원본만 보고 답하는 함수
+// (이름 찾기, 단계 표기, 남은 날 수로 단계 번호 세기)뿐이라 아무것도 import하지 않는다. 단계 번호를
+// 세는 함수는 캐릭터 생성이 진행 중인 일의 지금 단계를 정할 때 쓴다(이슈 #474).
 
 /** 지금 있는 국적은 하나뿐이다. 부르는 쪽이 국적을 안 적으면 이 값으로 본다. */
 export const DEFAULT_LOCALE = "KR";
@@ -598,4 +599,46 @@ export const findCultureEvents = (text: string): string[] => {
       found.push(a.event);
   }
   return found;
+};
+
+/** 단계의 때를 D-숫자·당일·D+숫자로 적는다. 월 리듬과 캐릭터 생성이 같은 표기를 쓴다. */
+export const dayMark = (daysBefore: number): string =>
+  daysBefore === 0
+    ? "당일"
+    : daysBefore > 0
+      ? `D-${daysBefore}`
+      : `D+${-daysBefore}`;
+
+/**
+ * 당일까지 남은 날 수로 지금 몇 번째 단계인지 센다. 때가 온 단계의 수가 곧 단계 번호라, 0이면
+ * 첫 단계도 오기 전이고 단계 수와 같으면 마지막 단계까지 왔다. 같은 날 오는 단계가 둘이면 둘 다
+ * 센다. daysBefore는 단계 순서대로 받는다 — 원본의 단계는 뒤로 갈수록 당일에 가까워진다.
+ */
+export const stepNoAt = (
+  daysBefore: readonly number[],
+  daysUntil: number,
+): number => daysBefore.filter((d) => d >= daysUntil).length;
+
+/** 지금 그 단계에 와 있으려면 당일까지 남은 날 수가 들어야 하는 범위. 양 끝을 포함한다. */
+export interface StepWindow {
+  stepNo: number;
+  minDays: number;
+  maxDays: number;
+}
+
+/**
+ * 단계마다 지금 그 단계에 와 있을 수 있는 남은 날 수의 범위. 그 단계의 때는 왔고 다음 단계의 때는
+ * 아직 안 온 범위라 [다음 단계 + 1, 이 단계]다.
+ *
+ * 마지막 단계는 넣지 않는다. 마지막 단계까지 온 일은 곧 끝나서 새 캐릭터의 진행 중인 일로 두기엔
+ * 늦다. 다음 단계와 같은 날 오는 단계도 범위가 비어 빠진다 — 그날은 stepNoAt이 다음 단계로 센다.
+ */
+export const stepWindows = (daysBefore: readonly number[]): StepWindow[] => {
+  const out: StepWindow[] = [];
+  for (let i = 0; i < daysBefore.length - 1; i++) {
+    const maxDays = daysBefore[i];
+    const minDays = daysBefore[i + 1] + 1;
+    if (minDays <= maxDays) out.push({ stepNo: i + 1, minDays, maxDays });
+  }
+  return out;
 };

@@ -6,6 +6,9 @@
 //                      원하는 방식·결점)과 서술형 셋(성격·출발 설정에 덧붙일 것·바라는 모습).
 //   generateGenesis  — 첫 호출. 정체성·주변 인물·진행 중인 일·관계 첫 값·첫 인사를 한 번에
 //                      짓고, genesisProblem으로 검증해 어긋나면 한 번 다시 부른다.
+//   stageCultureOngoing — 진행 중인 일 가운데 문화 스크립트에 이름이 걸린 일이 있으면 호출을
+//                      하나 더 내서, 그 일이 있는 날과 지금 단계를 정하고 문장에 날짜를 넣는다.
+//                      날짜 후보는 코드가 센다. 어긋나면 첫 호출의 문장을 그대로 둔다(이슈 #474).
 //   persistGenesis   — 트랜잭션 하나로 genesis_json{v:3}·creation 기억 행·관계 첫 값을 쓴다.
 //                      원하는 방식과 결점은 모델이 아니라 코드가 relationship.md §2의 문안으로
 //                      정체성 행 둘(태도/원하는 방식·태도/결점)을 만든다.
@@ -19,13 +22,24 @@
 
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
-import { getKstNow, kstDateString } from "./kst.js";
+import {
+  getKstNow,
+  holidaysInMonth,
+  kstDateString,
+  kstLogicalDate,
+  shiftDate,
+} from "./kst.js";
 import {
   db,
+  dayMark,
+  findCultureEvents,
+  getCultureEvent,
   getStage,
   insertCharacter,
   getUserProfileFull,
   saveRelationshipFirstValues,
+  stepWindows,
+  type StepWindow,
   type UserProfileFull,
 } from "./db.js";
 import {
@@ -131,7 +145,8 @@ export const createCharacter = async (
 // 랜덤 매칭 대신 유저가 선택지 다섯(성별·나이대·말투·원하는 방식·결점)과 서술형 셋(성격·
 // 출발 설정에 덧붙일 것·바라는 모습)으로 캐릭터를 만든다. 호출은 두 번 — 첫 호출이
 // 정체성·주변 인물·진행 중인 일·관계 첫 값을 한 번에 만들고, 두 번째는 아크 코드(arcs.ts의
-// ensureArcs)가 삶의 흐름을 쓴다.
+// ensureArcs)가 삶의 흐름을 쓴다. 진행 중인 일에 결혼·이사 같은 일이 걸리면 그 사이에 단계를
+// 정하는 호출이 하나 더 나간다(stageCultureOngoing).
 // 유저가 적은 입력과 만들어진 결과는 characters.genesis_json에 원본 그대로 보관한다.
 // 대화와 새벽 정리는 이 원본을 읽지 않는다 — 실제 읽는 자리는 기억 행(memory_items
 // origin=creation)과 relationships의 관계 컬럼이다.
@@ -391,6 +406,26 @@ export interface GenesisOngoingRow {
   value: string;
   endCondition: string;
   tags?: string[];
+  /** 문화 스크립트에 걸린 일이면 생성 때 정한 자리. 첫 호출은 채우지 않고
+   * stageCultureOngoing이 붙인다. */
+  script?: GenesisCultureStage;
+}
+
+/**
+ * 진행 중인 일이 문화 스크립트의 어디쯤에 와 있는지. genesis_json에만 남는다 — 대화와 월 리듬은
+ * 이 값을 읽지 않고, 같은 내용을 적은 value 문장을 기억 행에서 읽는다(이슈 #474).
+ */
+export interface GenesisCultureStage {
+  event: string;
+  role: string;
+  /** 그 일이 있는 날. 단계의 D-숫자는 이 날에서 센다. */
+  eventDate: string;
+  /** 지금 와 있는 단계. 원본의 단계 순서로 1부터 센다. */
+  stepNo: number;
+  /** 첫 단계의 날 — 이 일이 시작된 날로 본다. */
+  startedOn: string;
+  /** 첫 호출이 적은 문장. value는 날짜를 넣은 새 문장으로 바뀌어서, 원래 문장은 여기 남긴다. */
+  firstValue: string;
 }
 
 /** 관계 항목 중 생성이 채우는 다섯. 말투 값은 유저 선택지에서, 단계는 코드가 1로 정하고,
@@ -598,8 +633,400 @@ export const genesisProblem = (out: GenesisOutput): string | null => {
   return null;
 };
 
+// ── 진행 중인 일의 문화 스크립트 단계 — 이슈 #474 ──────────────────────────────
+// 첫 호출이 "이사 준비 중"이라고만 적으면 월 리듬은 이사 절차를 펼치지 않는다. 그 일이 있는
+// 날이 재료에 없어서 D-숫자를 셀 기준이 없다. 그래서 첫 호출이 끝난 뒤, 진행 중인 일 가운데
+// 문화 스크립트에 이름이 걸린 일만 골라 한 번 더 묻는다. 날짜 계산은 코드가 끝낸다 — 단계마다
+// "지금 이 단계라면 그 일이 있는 날일 수 있는 날짜"를 후보로 뽑아 주고, 모델은 역할·단계·후보
+// 가운데 날짜 하나와 그 날짜를 적은 새 문장을 고른다. 새 문장이 기억 행의 값이 되어 첫 달 월
+// 리듬이 그 날짜에서 거꾸로 세어 절차를 펼친다. 걸린 일이 없으면 부르지 않고, 두 번 다 어긋나면
+// 첫 호출의 문장을 그대로 둔다 — 날짜를 못 정해도 캐릭터는 만들어져야 한다.
+
+/** 달력이 날짜를 정하는 이벤트. 월 리듬이 그 달 공휴일로 절차를 펼치니(이슈 #415) 여기서 정하지 않는다. */
+const CALENDAR_EVENTS = new Set(["명절"]);
+
+const WEEKDAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"];
+
+const weekdayOf = (date: string): number =>
+  new Date(`${date}T00:00:00Z`).getUTCDay();
+
+/** 2026-10-24(토) 꼴. */
+const dateWithDay = (date: string): string =>
+  `${date}(${WEEKDAY_NAMES[weekdayOf(date)]})`;
+
+const isHoliday = (date: string): boolean =>
+  holidaysInMonth(date.slice(0, 7)).some((h) => h.date === date);
+
+/**
+ * 당일까지 남은 날 수가 [minDays, maxDays]에 드는 날 가운데 그 일이 있는 날의 후보를 고른다.
+ * 토요일·일요일·평일에서 하나씩, 범위 한가운데에 가까운 날로. 결혼식·이사는 주말이고 첫 출근과
+ * 검진은 평일이라, 요일 갈래가 다 있어야 모델이 그 일에 맞는 날을 고를 수 있다. 공휴일은 뺀다.
+ * 오늘도 뺀다 — 만든 날이 곧 그 일의 당일이면 첫 인사부터 그 일에 묻힌다.
+ */
+export const eventDateCandidates = (
+  today: string,
+  minDays: number,
+  maxDays: number,
+): string[] => {
+  const mid = (minDays + maxDays) / 2;
+  const days: number[] = [];
+  for (let d = minDays; d <= maxDays; d++) if (d !== 0) days.push(d);
+  days.sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid) || b - a);
+  const kinds = [
+    (w: number) => w === 6,
+    (w: number) => w === 0,
+    (w: number) => w >= 1 && w <= 5,
+  ];
+  const picked = new Set<string>();
+  for (const kind of kinds)
+    for (const d of days) {
+      const date = shiftDate(today, d);
+      if (kind(weekdayOf(date)) && !isHoliday(date)) {
+        picked.add(date);
+        break;
+      }
+    }
+  return [...picked].sort();
+};
+
+/** 단계 하나에서 고를 수 있는 것 — 지금 이 단계라면 그 일이 있는 날일 수 있는 날짜들. */
+export interface StageChoice extends StepWindow {
+  dates: string[];
+}
+
+export interface CultureRole {
+  role: string;
+  steps: { stepNo: number; daysBefore: number; step: string }[];
+  /** 후보 날짜가 하나라도 있는 단계만. 마지막 단계는 없다(stepWindows). */
+  choices: StageChoice[];
+}
+
+/** 단계를 정할 진행 중인 일 하나와 거기 걸린 이벤트. */
+export interface CultureTarget {
+  /** 진행 중인 일 목록에서 몇 번째인지. 1부터 센다. */
+  no: number;
+  events: { event: string; roles: CultureRole[] }[];
+}
+
+/** 월 리듬이 진행 중인 일을 읽는 꼴(life-plan.ts ongoingLines)과 같게 적어, 같은 이름이 걸리게 한다. */
+const ongoingLine = (o: GenesisOngoingRow): string =>
+  `${o.area} · ${o.subject}: ${o.value}`;
+
+const cultureRoles = (event: string, today: string): CultureRole[] => {
+  const byRole = new Map<string, CultureRole["steps"]>();
+  for (const r of getCultureEvent(event)) {
+    const steps = byRole.get(r.role) ?? [];
+    steps.push({ stepNo: r.step_no, daysBefore: r.days_before, step: r.step });
+    byRole.set(r.role, steps);
+  }
+  const roles: CultureRole[] = [];
+  for (const [role, steps] of byRole) {
+    steps.sort((a, b) => a.stepNo - b.stepNo);
+    const choices = stepWindows(steps.map((s) => s.daysBefore))
+      .map((w) => ({
+        ...w,
+        stepNo: steps[w.stepNo - 1].stepNo,
+        dates: eventDateCandidates(today, w.minDays, w.maxDays),
+      }))
+      .filter((c) => c.dates.length);
+    if (choices.length) roles.push({ role, steps, choices });
+  }
+  return roles;
+};
+
+/** 진행 중인 일 가운데 문화 스크립트에 이름이 걸린 일과, 거기서 고를 수 있는 단계·날짜. */
+export const cultureTargets = (
+  ongoing: readonly GenesisOngoingRow[],
+  today: string,
+): CultureTarget[] => {
+  const targets: CultureTarget[] = [];
+  ongoing.forEach((o, i) => {
+    const events = findCultureEvents(ongoingLine(o))
+      .filter((event) => !CALENDAR_EVENTS.has(event))
+      .map((event) => ({ event, roles: cultureRoles(event, today) }))
+      .filter((e) => e.roles.length);
+    if (events.length) targets.push({ no: i + 1, events });
+  });
+  return targets;
+};
+
+const STAGE_SYSTEM = `너는 방금 만든 인물의 진행 중인 일에 날짜를 붙이는 작가다. 한국에서 그 일이 실제로 지나가는 절차를 보고, 이 사람이 지금 몇 번째 단계에 와 있는지와 그 일이 있는 날을 정한다. 날짜 계산은 코드가 끝냈으니 날짜는 주어진 후보에서만 고른다.`;
+
+/** 역할을 고르는 데 필요한 정체성만 싣는다 — 누구와 살고 무슨 일을 하는지. */
+const STAGE_IDENTITY_KEYS = new Set([
+  "기본/이름",
+  "기본/생년월일",
+  "가족/구성",
+  "직업/소속",
+  "직업/직무",
+  "주거/지역",
+  "주거/형태",
+  "연애/현재",
+]);
+
+/** 새 문장에 두지 않는 말. 이 문장은 몇 주 뒤에도 그대로 읽혀서, 오늘을 기준으로 한 말은 곧 틀린다. */
+const RELATIVE_TIME_WORDS = [
+  "어제",
+  "내일",
+  "모레",
+  "지난주",
+  "지난 주",
+  "이번 주",
+  "이번주",
+  "다음 주",
+  "다음주",
+  "지난달",
+  "지난 달",
+  "이번 달",
+  "이번달",
+  "다음 달",
+  "다음달",
+  "작년",
+  "올해",
+  "내년",
+];
+
+const roleBlock = (event: string, r: CultureRole): string =>
+  [
+    `### ${event} — ${r.role}`,
+    ...r.steps.map((s) => `${s.stepNo}단계 ${dayMark(s.daysBefore)}: ${s.step}`),
+    "지금 이 단계라면 그 일이 있는 날의 후보:",
+    ...r.choices.map(
+      (c) => `- ${c.stepNo}단계: ${c.dates.map(dateWithDay).join(" ")}`,
+    ),
+  ].join("\n");
+
+const cultureStagePrompt = (
+  out: GenesisOutput,
+  targets: readonly CultureTarget[],
+  today: string,
+): string => {
+  const who = out.identity
+    .filter((r) => STAGE_IDENTITY_KEYS.has(`${r.area}/${r.subject}`))
+    .map((r) => `- ${r.area}/${r.subject}: ${r.value}`);
+  const cast = out.cast.map(
+    (c) => `- ${c.name} (${c.area}, ${c.relation}): ${c.value}`,
+  );
+  const ongoing = out.ongoing.map(
+    (o, i) => `${i + 1}. ${ongoingLine(o)} (끝나는 조건: ${o.endCondition})`,
+  );
+  const blocks = targets.map((t) =>
+    [
+      `## ${t.no}번 — ${t.events.map((e) => e.event).join("·")}`,
+      ...t.events.flatMap((e) => e.roles.map((r) => roleBlock(e.event, r))),
+    ].join("\n\n"),
+  );
+  const nos = targets.map((t) => t.no).join("·");
+  return `오늘은 ${dateWithDay(today)}이다. 아래 인물의 진행 중인 일 가운데 한국의 절차가 있는 일(${nos}번)에, 그 일이 있는 날과 지금 와 있는 단계를 정해줘.
+
+[인물]
+${who.join("\n") || "(없음)"}
+
+[주변 인물]
+${cast.join("\n") || "(없음)"}
+
+[진행 중인 일 — 번호는 아래 items의 no에 그대로 적는다]
+${ongoing.join("\n")}
+
+[정할 일과 그 절차]
+D-숫자는 그 일이 있는 날에서 거꾸로 센 날, 당일은 그날, D+숫자는 그 뒤다. 후보 날짜는 코드가 오늘에서 세어 둔 것이다.
+
+${blocks.join("\n\n")}
+
+[정하는 방법]
+- 한 번호에 이벤트가 여럿 걸렸으면 그 일에 맞는 하나만 고른다. 역할은 그 일의 문장과 주변 인물을 보고 이 인물이 선 자리로 고른다 — 형제의 결혼이면 형제자매, 친구의 결혼이면 친구.
+- 단계는 그 일의 문장이 적은 지금 상태에 가장 가까운 것을 고른다. 이미 한 일로 적힌 단계는 지나간 단계다.
+- 날짜는 고른 단계의 후보 가운데 하나만 쓰고, 후보 밖의 날을 만들지 않는다. 요일은 그 일에 맞게 고른다 — 결혼식·이사·집들이는 주말, 첫 출근·건강검진은 평일처럼.
+- 그 일을 하기로 하고 첫 단계라도 밟고 있으면 날을 정한다. 아직 날을 못 박지 않은 사람이면 고른 날이 그 사람이 목표로 둔 날이 된다.
+- 이름만 겹치고 그 일이 아니거나(이사회·결혼기념일 같은), 마음만 있고 첫 단계도 시작하지 않았거나, 후보 날짜가 그 일의 철과 안 맞으면 event를 null로 둔다.
+- value는 그 일의 새 문장이다. 2~3문장의 평서문("~다")으로, 그 일이 있는 날을 "10월 24일"처럼 월·일로 적고(올해가 아니면 "2027년 8월 14일"처럼 해까지), 이미 끝낸 것, 지금 하는 것, 다음 한 걸음을 적는다.
+- value에 단계 번호나 D-숫자를 적지 않는다. ${RELATIVE_TIME_WORDS.filter((w) => !w.includes(" ")).join("·")}처럼 오늘을 기준으로 한 말도 쓰지 않는다 — 이 문장은 몇 주 뒤에도 그대로 읽힌다.
+- 원래 문장의 사실(장소·사람·까닭)은 그대로 두고, 그 일을 부르던 말(이사·결혼식 같은)을 빼지 않는다.
+
+[출력 JSON]
+{"items":[{"no":${targets[0].no},"event":"이벤트 이름","role":"역할","stepNo":1,"eventDate":"YYYY-MM-DD","value":""}]}
+정할 일(${nos}번)마다 한 줄씩. 절차에 안 맞는 일은 {"no":${targets[0].no},"event":null}처럼 번호와 null만 적는다.`;
+};
+
+/** 모델이 돌려주는 모양. 숫자 칸은 문자열로 올 수도 있어 읽을 때 숫자로 바꾼다. */
+export interface CultureStageAnswer {
+  items: {
+    no: number;
+    event: string | null;
+    role?: string;
+    stepNo?: number;
+    eventDate?: string;
+    value?: string;
+  }[];
+}
+
+/** 진행 중인 일 하나에 붙일 것 — 새 문장과 genesis_json에 남길 자리. */
+export interface CultureStagePick {
+  no: number;
+  value: string;
+  script: GenesisCultureStage;
+}
+
+const stageValueProblem = (
+  value: string,
+  row: GenesisOngoingRow,
+  event: string,
+  eventDate: string,
+  today: string,
+): string | null => {
+  if (!value) return "비었다";
+  const [y, m, d] = eventDate.split("-").map(Number);
+  if (!new RegExp(`(?<!\\d)${m}월\\s*${d}일`).test(value))
+    return `그 일이 있는 날을 "${m}월 ${d}일"로 적어야 한다`;
+  if (eventDate.slice(0, 4) !== today.slice(0, 4) && !value.includes(`${y}년`))
+    return `올해가 아닌 날이라 "${y}년 ${m}월 ${d}일"처럼 해까지 적어야 한다`;
+  if (/D[-+]\d|\d+\s*단계/.test(value))
+    return "단계 번호나 D-숫자는 적지 않는다";
+  const relative = RELATIVE_TIME_WORDS.find((w) => value.includes(w));
+  if (relative)
+    return `"${relative}"처럼 오늘을 기준으로 한 말은 쓰지 않는다 — 날짜로 적는다`;
+  if (!findCultureEvents(ongoingLine({ ...row, value })).includes(event))
+    return `"${event}"라는 말이 키나 문장에 남아 있어야 한다`;
+  return null;
+};
+
+/**
+ * 모델의 답을 후보와 맞춰 읽는다. 정할 일마다 한 줄씩 있어야 하고, 고른 이벤트·역할·단계·날짜가
+ * 전부 후보 안에 있어야 하며, 새 문장이 그 날짜와 이벤트 이름을 담아야 한다. 하나라도 어긋나면
+ * 무엇이 어긋났는지를, 맞으면 붙일 것을 돌려준다. event가 null인 줄은 붙이지 않는다.
+ */
+export const readCultureStage = (
+  answer: CultureStageAnswer,
+  targets: readonly CultureTarget[],
+  ongoing: readonly GenesisOngoingRow[],
+  today: string,
+): { problem: string } | { picks: CultureStagePick[] } => {
+  if (!answer || !Array.isArray(answer.items))
+    return { problem: "items 목록이 있어야 한다" };
+  const nos = targets.map((t) => t.no).join("·");
+  const seen = new Set<number>();
+  const picks: CultureStagePick[] = [];
+  for (const item of answer.items) {
+    if (!item || typeof item !== "object")
+      return { problem: "items의 줄마다 no와 event를 담은 객체여야 한다" };
+    const no = Number(item.no);
+    const target = targets.find((t) => t.no === no);
+    if (!target)
+      return { problem: `${item.no}번은 정할 일이 아니다 — ${nos}번만 적는다` };
+    if (seen.has(no)) return { problem: `${no}번이 두 번 나왔다` };
+    seen.add(no);
+    if (item.event === null) continue;
+    const ev = target.events.find((e) => e.event === item.event);
+    if (!ev)
+      return {
+        problem: `${no}번의 event는 ${target.events.map((e) => e.event).join("·")} 가운데 하나이거나 null이다`,
+      };
+    const role = ev.roles.find((r) => r.role === item.role);
+    if (!role)
+      return {
+        problem: `${no}번 ${ev.event}의 role은 ${ev.roles.map((r) => r.role).join("·")} 가운데 하나다`,
+      };
+    const stepNo = Number(item.stepNo);
+    const choice = role.choices.find((c) => c.stepNo === stepNo);
+    if (!choice)
+      return {
+        problem: `${no}번 ${ev.event}(${role.role})에서 고를 수 있는 단계는 ${role.choices.map((c) => c.stepNo).join("·")}단계다`,
+      };
+    const eventDate = item.eventDate ?? "";
+    if (!choice.dates.includes(eventDate))
+      return {
+        problem: `${no}번 ${stepNo}단계의 eventDate는 후보 ${choice.dates.join("·")} 가운데 하나다`,
+      };
+    const value = typeof item.value === "string" ? item.value.trim() : "";
+    const bad = stageValueProblem(
+      value,
+      ongoing[no - 1],
+      ev.event,
+      eventDate,
+      today,
+    );
+    if (bad) return { problem: `${no}번 value: ${bad}` };
+    picks.push({
+      no,
+      value,
+      script: {
+        event: ev.event,
+        role: role.role,
+        eventDate,
+        stepNo,
+        startedOn: shiftDate(eventDate, -role.steps[0].daysBefore),
+        firstValue: ongoing[no - 1].value,
+      },
+    });
+  }
+  const missing = targets.filter((t) => !seen.has(t.no));
+  if (missing.length)
+    return {
+      problem: `빠진 번호: ${missing.map((t) => t.no).join("·")} — 정할 일마다 한 줄씩, 안 맞으면 event를 null로 적는다`,
+    };
+  return { picks };
+};
+
+/**
+ * 진행 중인 일 가운데 문화 스크립트에 걸린 일의 당일과 지금 단계를 정해 그 일의 문장을 고친다.
+ * 걸린 일이 없으면 부르지 않고 그대로 돌려준다. 어긋나면 한 번 다시 묻고, 그래도 어긋나거나
+ * 호출이 실패하면 첫 호출의 문장을 그대로 둔다. ask는 시험에서 모델 대신 넣는 자리다.
+ */
+export const stageCultureOngoing = async (
+  out: GenesisOutput,
+  today: string,
+  chatId?: string,
+  ask: typeof chatJson = chatJson,
+): Promise<GenesisOutput> => {
+  const targets = cultureTargets(out.ongoing, today);
+  if (!targets.length) return out;
+  let problem: string | null = null;
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const retryNote = problem
+        ? `\n\n[직전 시도에서 거부된 문제 — 이번에는 고칠 것]\n${problem}`
+        : "";
+      const answer = await ask<CultureStageAnswer>(
+        STAGE_SYSTEM,
+        cultureStagePrompt(out, targets, today) + retryNote,
+        2000,
+        config.modelDeep,
+        { purpose: "genesis", chatId },
+      );
+      const read = readCultureStage(answer, targets, out.ongoing, today);
+      if ("picks" in read)
+        return {
+          ...out,
+          ongoing: out.ongoing.map((o, i) => {
+            const pick = read.picks.find((p) => p.no === i + 1);
+            return pick ? { ...o, value: pick.value, script: pick.script } : o;
+          }),
+        };
+      problem = read.problem;
+    }
+  } catch (err) {
+    problem = err instanceof Error ? err.message : String(err);
+  }
+  console.warn(
+    `[character] 진행 중인 일의 단계를 정하지 못해 첫 호출의 문장을 둔다: ${problem}`,
+  );
+  return out;
+};
+
+/** 프롬프트 최종 문안을 보는 자리 — 도구와 시험용. 모델은 부르지 않는다. */
+export const cultureStagePromptText = (
+  out: GenesisOutput,
+  today: string,
+): { system: string; user: string } | null => {
+  const targets = cultureTargets(out.ongoing, today);
+  return targets.length
+    ? { system: STAGE_SYSTEM, user: cultureStagePrompt(out, targets, today) }
+    : null;
+};
+
 /** 첫 번째 호출 — 정체성·주변 인물·진행 중인 일·관계 첫 값을 한 번에 만든다.
- * 출력이 칸 목록과 어긋나면 문제를 알려주고 한 번 다시 시도한다. */
+ * 출력이 칸 목록과 어긋나면 문제를 알려주고 한 번 다시 시도한다. 통과하면 진행 중인 일의
+ * 문화 스크립트 단계를 정한다(stageCultureOngoing — 걸린 일이 있을 때만 호출이 하나 더 나간다). */
 export const generateGenesis = async (
   input: CharacterInput,
   profile: UserProfileFull,
@@ -618,7 +1045,7 @@ export const generateGenesis = async (
       { purpose: "genesis", chatId },
     );
     problem = genesisProblem(out);
-    if (!problem) return out;
+    if (!problem) return stageCultureOngoing(out, kstLogicalDate(), chatId);
   }
   throw new Error(`생성 결과가 칸 목록과 맞지 않는다: ${problem}`);
 };
@@ -738,7 +1165,8 @@ export const arcMaterial = (out: GenesisOutput): string =>
     `- ${out.relationship.stage} / ${out.relationship.history}`,
   ].join("\n");
 
-/** 생성 게시 — 캐릭터 번호, 이름, 원하는 방식의 결, 결점, 시작 단계(relationship.md §9). */
+/** 생성 게시 — 캐릭터 번호, 이름, 원하는 방식의 결, 결점, 시작 단계(relationship.md §9),
+ * 단계를 정한 진행 중인 일이 있으면 그 이벤트·역할·단계·당일. */
 const traceCharacterStart = (
   id: number,
   input: CharacterInput,
@@ -761,6 +1189,13 @@ const traceCharacterStart = (
       stage
         ? `시작 단계: ${stage.stage_no}단계 ${RELATIONSHIP_STAGE_NAME[stage.stage_no]} (${stage.stage_since}부터)`
         : "",
+      ...out.ongoing.flatMap((o) =>
+        o.script
+          ? [
+              `문화 스크립트: ${o.area}/${o.subject} — ${o.script.event}(${o.script.role}) ${o.script.stepNo}단계 · 당일 ${o.script.eventDate}`,
+            ]
+          : [],
+      ),
     ]
       .filter(Boolean)
       .join("\n"),

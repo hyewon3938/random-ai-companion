@@ -23,6 +23,7 @@ import { chatJson } from "./llm.js";
 import { config } from "./config.js";
 import {
   addSchedule,
+  dayMark,
   findCultureEvents,
   getArcs,
   getCultureEvent,
@@ -80,13 +81,6 @@ const daysLeftInMonth = (today: string): number => {
   const [y, m, d] = today.split("-").map(Number);
   return new Date(Date.UTC(y, m, 0)).getUTCDate() - d;
 };
-
-const dayMark = (daysBefore: number): string =>
-  daysBefore === 0
-    ? "당일"
-    : daysBefore > 0
-      ? `D-${daysBefore}`
-      : `D+${-daysBefore}`;
 
 /**
  * 이 달 재료에 이름이 걸린 이벤트의 절차만 문안으로 만든다. 하나도 안 걸리면 빈 문자열이라
