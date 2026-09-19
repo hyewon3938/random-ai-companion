@@ -6,6 +6,8 @@
 
 import { db } from "./connection.js";
 import type {
+  MindKind,
+  MindLevel,
   RelationshipStage,
   SpeechLevel,
   UserStateCause,
@@ -131,6 +133,15 @@ export interface RelationshipRow {
   user_state_tone: UserStateTone | null;
   /** 그 상태가 시작된 시각(KST 타임스탬프). */
   user_state_since: string | null;
+  /**
+   * 캐릭터의 오늘 생긴 마음 — 같은 판정 호출이 정한 값 중 마지막으로 바뀐 것. 새벽 정리가
+   * 비운다. DB에 값 제약이 없어 목록 밖 값이 있을 수 있으므로 읽는 쪽이 isMindKind로 가른다.
+   */
+  mind_kind: string | null;
+  mind_level: number | null;
+  mind_reason: string | null;
+  /** 그 마음이 생긴 시각(KST 타임스탬프). 세기만 바뀌면 그대로다. */
+  mind_since: string | null;
   met_at: string | null;
   updated_at: string | null;
 }
@@ -143,6 +154,7 @@ export const getRelationship = (
       `SELECT stage, speech_level, speech_note, address_terms,
               rapport, cautions, history, feelings,
               user_state, user_state_cause, user_state_tone, user_state_since,
+              mind_kind, mind_level, mind_reason, mind_since,
               met_at, updated_at
          FROM relationships WHERE character_id = ?`,
     )
@@ -201,6 +213,30 @@ export const setUserState = (
     s?.cause ?? null,
     s?.tone ?? null,
     s?.since ?? null,
+    characterId,
+  );
+};
+
+/** 캐릭터의 오늘 생긴 마음 한 건 — 무엇인지, 얼마나 큰지, 상대의 어떤 말 때문인지, 언제부터인지. */
+export interface MindValue {
+  kind: MindKind;
+  level: MindLevel;
+  reason: string;
+  since: string;
+}
+
+/** 캐릭터의 마음 칸 넷을 한 번에 쓴다. null이면 비운다. setUserState처럼 관계의 updated_at은
+ * 건드리지 않는다. */
+export const setMind = (characterId: number, m: MindValue | null): void => {
+  db.prepare(
+    `UPDATE relationships SET mind_kind = ?, mind_level = ?, mind_reason = ?,
+       mind_since = ?
+     WHERE character_id = ?`,
+  ).run(
+    m?.kind ?? null,
+    m?.level ?? null,
+    m?.reason ?? null,
+    m?.since ?? null,
     characterId,
   );
 };

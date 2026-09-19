@@ -141,7 +141,7 @@ seed.close();
 const { db } = await import("../src/db.js");
 
 test("v14 DB가 지금 스키마 버전까지 올라간다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 15);
+  assert.equal(db.pragma("user_version", { simple: true }), 16);
 });
 
 test("call_feedback에 이모지·게시 키·부모 글 칸이 붙는다", () => {

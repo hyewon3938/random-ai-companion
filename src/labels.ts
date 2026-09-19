@@ -184,6 +184,29 @@ export const FLAW_NAME: Record<Flaw, string> = {
   clumsy: "표현이 서툶",
 };
 
+/**
+ * 캐릭터의 오늘 생긴 마음 — 상대 때문에 하루 안에서 생겼다가 풀리는 마음(relationship.md 15절).
+ * 언짢음은 화남과 기분 나쁨을 하나로 묶은 값이다. 평소 상태는 값이 없는 것으로 둔다.
+ * DB에는 값 제약이 없어서, 코드가 이 닫힌 목록으로 검사한다.
+ */
+export type MindKind = "flutter" | "hurt" | "jealous" | "upset";
+
+export const MIND_NAME: Record<MindKind, string> = {
+  flutter: "설렘",
+  hurt: "서운함",
+  jealous: "질투",
+  upset: "언짢음",
+};
+
+export const isMindKind = (v: unknown): v is MindKind =>
+  typeof v === "string" && Object.hasOwn(MIND_NAME, v);
+
+/** 마음의 세기 — 1 살짝, 2 분명히, 3 크게. */
+export type MindLevel = 1 | 2 | 3;
+
+export const isMindLevel = (v: unknown): v is MindLevel =>
+  v === 1 || v === 2 || v === 3;
+
 /** 플러팅 — 캐릭터가 유저를 설레게 하려고 쓰는 행동. 반응 점수가 이 코드 단위로 쌓인다. */
 export type Move =
   | "remember"

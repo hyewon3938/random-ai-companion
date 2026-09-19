@@ -70,6 +70,10 @@ const TABLES: Record<string, string> = {
   user_state_cause TEXT CHECK (user_state_cause IN ('char','other')),
   user_state_tone TEXT CHECK (user_state_tone IN ('good','neutral','bad')),
   user_state_since TEXT,
+  mind_kind TEXT,
+  mind_level INTEGER,
+  mind_reason TEXT,
+  mind_since TEXT,
   updated_at TEXT`,
 
   // 관계에서 한 번만 일어나는 일. 캐릭터마다 종류당 한 행이고, 답장 경로가 미확정으로 넣으면
@@ -492,7 +496,7 @@ const createSchema = (): void => {
   for (const sql of INDEXES) db.exec(sql);
 };
 
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 16;
 
 const schemaVersion = (): number =>
   db.pragma("user_version", { simple: true }) as number;
@@ -1112,7 +1116,35 @@ if (schemaVersion() < 11) migrateToV11();
 if (schemaVersion() < 12) migrateToV12();
 if (schemaVersion() < 13) migrateToV13();
 if (schemaVersion() < 14) migrateToV14();
-if (schemaVersion() < SCHEMA_VERSION) migrateToV15();
+// v16: 관계에 캐릭터의 오늘 생긴 마음 칸 넷을 더한다(#473).
+//
+// 상대 상태를 판정하는 호출이 캐릭터 쪽 마음(설렘·서운함·질투·언짢음)과 세기도 함께 판정하고,
+// 바뀐 것만 여기에 적는다. 상대 상태 칸(v8)처럼 하루짜리 값이라 새벽 정리가 비운다. 종류와
+// 세기에는 값 제약을 걸지 않는다 — 목록과 범위는 labels.ts가 갖고 코드가 검사하므로, 마음이나
+// 세기 단계를 바꿔도 스키마는 그대로다. 빈 칸을 붙이는 것뿐이라 ALTER로 붙인다(v8과 같은 꼴).
+const migrateToV16 = (): void => {
+  const cols = db.prepare(`PRAGMA table_info(relationships)`).all() as {
+    name: string;
+  }[];
+  const add: [string, string][] = [
+    ["mind_kind", "mind_kind TEXT"],
+    ["mind_level", "mind_level INTEGER"],
+    ["mind_reason", "mind_reason TEXT"],
+    ["mind_since", "mind_since TEXT"],
+  ];
+
+  db.transaction(() => {
+    for (const [column, ddl] of add)
+      if (!cols.some((c) => c.name === column))
+        db.exec(`ALTER TABLE relationships ADD COLUMN ${ddl}`);
+    db.pragma(`user_version = 16`);
+  })();
+
+  console.log(`[db] 스키마를 v16으로 옮겼다`);
+};
+
+if (schemaVersion() < 15) migrateToV15();
+if (schemaVersion() < SCHEMA_VERSION) migrateToV16();
 
 // pending_replies에 kind='wake'와 meta_json을 더한다. CHECK를 바꾸려면 테이블을 다시 만들어야
 // 한다. 버전 번호 대신 테이블 모양을 보고 판단한다 — 같은 시기의 다른 마이그레이션과 번호를
