@@ -81,7 +81,8 @@ const fixtures: {
   { name: "이유 아닌 자리의 편하게는 안 잡는다", raw: '{"reply":["글쎄","그냥 편하게 하는 말 말고","너랑 얘기하면 나도 모르게 이런저런 생각이 자꾸 나","그냥 너라서 그런 것 같아"]}', noLaugh: false, whyLike: true, want: [] },
   { name: "편한 것보다는이라고 부정하면 안 잡는다", raw: '{"reply":["음","그냥 너랑 얘기하면 편한 것보다는 자꾸 하고 싶은 얘기가 생겨서 그런 것 같아"]}', noLaugh: false, whyLike: true, want: [] },
   { name: "묻지 않은 자리에서는 안 잡는다", raw: '{"reply":["나는 네 얘기 들어주는 거 좋아"]}', noLaugh: false, want: [] },
-  { name: "말머리 오", raw: '{"reply":["오 진짜?"]}', noLaugh: false, want: ["말머리 오"] },
+  // 첫 말풍선의 말머리 오는 보내기 전에 코드가 지워서 평가에 안 걸린다(이슈 #469)
+  { name: "첫 말풍선의 말머리 오", raw: '{"reply":["오 진짜?"]}', noLaugh: false, want: [] },
   { name: "물결·웃음이 붙은 말머리 오", raw: '{"reply":["오~ 좋다","오ㅋㅋㅋ 그거 봤어?"]}', noLaugh: false, want: ["말머리 오"] },
   { name: "가운데 말풍선의 말머리 오", raw: '{"reply":["그랬구나","오 그거 재밌겠다","언제 가는데?"]}', noLaugh: false, want: ["말머리 오"] },
   { name: "오로 시작하는 낱말은 안 걸린다", raw: '{"reply":["오늘 좀 늦게 끝났어","오랜만에 걸어서 왔거든","너는 뭐 했어?"]}', noLaugh: false, want: [] },

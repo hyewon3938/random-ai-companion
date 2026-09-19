@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  dropLeadOh,
   EMPTY_SIGNALS,
   mergeSignals,
   parseReplyOutput,
@@ -95,11 +96,11 @@ test("잘린 답에서도 의도 줄과 앞일 근거는 건진다", () => {
 
 test("객체 밖으로 흘린 신호도 주워 온다", () => {
   const got = parseReplyOutput(
-    '{"reply":["오 축하해"]}\nnote: 상대가 자격증에 붙었다',
+    '{"reply":["축하해"]}\nnote: 상대가 자격증에 붙었다',
   );
   // 주웠다는 것을 이름에 남긴다 — 형식 설명을 고쳐도 계속 새는지 보려는 것이다
   assert.equal(got.parse, "stray");
-  assert.deepEqual(got.bubbles, ["오 축하해"]);
+  assert.deepEqual(got.bubbles, ["축하해"]);
   assert.deepEqual(got.signals.note, ["상대가 자격증에 붙었다"]);
 });
 
@@ -278,4 +279,52 @@ test("잘린 답에서도 온전히 닫힌 칸은 왔다고 적고 줄글은 아
   assert.equal(cut.signals.move, "laugh");
 
   assert.deepEqual(parseReplyOutput("그냥 줄글로 답함").slots, []);
+});
+
+// 첫 말풍선 맨 앞의 오는 코드가 지운다(이슈 #469). 규칙층에서 여러 번 막았는데도 다시 나왔고
+// 거의 전부 첫 말풍선이었다. 오늘·오랜만·오케이처럼 낱말의 첫 글자인 오는 건드리지 않는다.
+test("첫 말풍선 맨 앞의 오를 지운다", () => {
+  assert.deepEqual(dropLeadOh(["오 진짜?", "언제 붙었어?"]), [
+    "진짜?",
+    "언제 붙었어?",
+  ]);
+  assert.deepEqual(dropLeadOh(["오오, 좋다"]), ["좋다"]);
+  assert.deepEqual(dropLeadOh(["오~ 그거 재밌겠다"]), ["그거 재밌겠다"]);
+  assert.deepEqual(dropLeadOh(["오ㅋㅋㅋ 그거 봤어?"]), ["ㅋㅋㅋ 그거 봤어?"]);
+});
+
+test("오만 있던 말풍선은 빼고 다음 말풍선을 다시 본다", () => {
+  assert.deepEqual(dropLeadOh(["오", "진짜?"]), ["진짜?"]);
+  assert.deepEqual(dropLeadOh(["오!", "오 대박"]), ["대박"]);
+  assert.deepEqual(dropLeadOh(["오..."]), []);
+});
+
+test("오로 시작하는 낱말과 둘째 말풍선의 오는 그대로 둔다", () => {
+  assert.deepEqual(dropLeadOh(["오늘 좀 늦게 끝났어"]), [
+    "오늘 좀 늦게 끝났어",
+  ]);
+  assert.deepEqual(dropLeadOh(["오랜만이다"]), ["오랜만이다"]);
+  assert.deepEqual(dropLeadOh(["오케이 알겠어"]), ["오케이 알겠어"]);
+  assert.deepEqual(dropLeadOh(["그랬구나", "오 그거 재밌겠다"]), [
+    "그랬구나",
+    "오 그거 재밌겠다",
+  ]);
+});
+
+test("세 길 모두 첫 말풍선의 오를 지운다", () => {
+  assert.deepEqual(
+    parseReplyOutput('{"reply":["오 축하해","진짜 잘됐다"]}').bubbles,
+    ["축하해", "진짜 잘됐다"],
+  );
+  const cut = parseReplyOutput(
+    '{"reply":["오 축하해","진짜 잘됐다"],"note":["상대가',
+  );
+  assert.equal(cut.parse, "salvage");
+  assert.deepEqual(cut.bubbles, ["축하해", "진짜 잘됐다"]);
+  assert.deepEqual(parseReplyOutput("오 진짜?\n언제 붙었어?").bubbles, [
+    "진짜?",
+    "언제 붙었어?",
+  ]);
+  // 오 하나만 보낸 답은 보낼 말이 없는 답이다
+  assert.equal(parseReplyOutput('{"reply":["오"]}').parse, "empty");
 });
