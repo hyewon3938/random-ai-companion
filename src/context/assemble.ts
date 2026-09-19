@@ -8,8 +8,9 @@
 //   일간층   — 관계 8컬럼 서술, 주변 인물, 진행 중인 일, 아크, 일정, 최근 일기, 오늘 각본
 //   실시간   — 검색해 꺼낸 기억, 선톡이 태그 없이 고른 상대 쪽 기억, 주제로 찾은 지난 일기와
 //              일정, 제목이 나온 작품의 사실 카드, 오늘 메모, 지금 관계(며칠째·처음·오늘 쓴
-//              플러팅·오늘의 의도), 직전 대화 시점, 오늘 안의 연락 텀, 지금 시각, 말투,
-//              상황 문단, 답장 객체 설명
+//              플러팅·오늘의 의도), 상대의 지금 상태, 캐릭터의 오늘 생긴 마음과 오늘 기분
+//              ([네 마음]), 직전 대화 시점, 오늘 안의 연락 텀, 지금 시각, 말투, 상황 문단,
+//              답장 객체 설명
 //
 // 말투는 저장값(relationships.speech_level)을 먼저 보고, 없을 때만 최근 발화 판정값을 쓴다.
 // 판정만으로 정하면 존댓말로 되돌아간다.
@@ -64,6 +65,7 @@ import {
 import { RELATIONSHIP_FRAME, STAGE_BLOCKS } from "../prompts/relationship.js";
 import { heldNowLine, toMin, wokeNowLine } from "./day-progress.js";
 import type { BuildOptions, ContextInput } from "./input.js";
+import { mindSection } from "./mind.js";
 import { relationshipNowSection } from "./relationship.js";
 
 // 하루 각본 주입(일간층) — 하루 동안 같은 것만 남긴다. 지나온 오늘·지금 몇 분째 같은
@@ -359,6 +361,15 @@ export const assembleSystemBlocks = (
         `- 이 상태가 풀렸다는 말이 아래 대화에 없으면 아직 그렇다고 보고 답한다. 네가 사과했다고 풀린 것이 아니다. 나 때문에 안 좋은 상태면 웃어넘기지 않는다. 상대의 다른 일 때문이면 그 일을 잊지 않고 있되, 상대가 한 말을 그대로 옮기거나 말만 바꿔 되돌려주는 것으로 그 마음을 보이지 않는다. 한 가지만 받고 나머지는 네 말로 이어간다.`,
       ].join("\n")
     : "";
+  // 캐릭터의 오늘 생긴 마음과 오늘 기분 — 마음은 상대 상태와 같은 판정 호출이 정하는 값이라 바로
+  // 뒤에 둔다. 드러내는 정도 줄이 상대 상태의 결을 보고 고르기 때문이기도 하다(#473).
+  const mindBlock = mindSection({
+    rel: input.rel,
+    stage: input.relationship.stage,
+    mood: input.mood,
+    stamp: input.stamp,
+    logicalToday: input.logicalToday,
+  });
   // 직전에 대화한 날 — 실시간 꼬리에 둔다(매일 바뀌는 값이라 캐시 경계 앞에 두면 캐시를 깬다).
   const lastTalkSection = input.lastTalk
     ? `[직전 대화]\n마지막으로 대화한 날은 ${input.lastTalk}다. 그 뒤로는 오늘 다시 연락이 닿았다.`
@@ -375,6 +386,7 @@ export const assembleSystemBlocks = (
     todaySection,
     relationshipNowSection(input.relationship),
     userStateSection,
+    mindBlock,
     lastTalkSection,
     contactGapSection(input.contactGap),
     nowSection(input),

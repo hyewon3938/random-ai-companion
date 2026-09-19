@@ -26,7 +26,7 @@
 
 > 이 색인은 `node scripts/gen-modules.mjs`가 위 영역 표와 각 파일 맨 위 주석의 첫 줄에서 만든다. 손으로 고치지 않는다. 줄 수는 영역에 든 파일의 합이다.
 
-### 1. 기반과 저장 · 6,724줄
+### 1. 기반과 저장 · 6,820줄
 
 - `src/config.ts` — 환경변수를 한 번 읽어 두는 자리.
 - `src/kst.ts` — 시각을 다루는 자리 — 한국 시간, 논리일 경계, 공휴일 달력.
@@ -63,7 +63,7 @@
 - `src/day-plan.ts` — 하루 각본 — 캐릭터가 그날 무엇을 하는지 블록으로 만든다.
 - `src/schedule-dedupe.ts` — 같은 일정인지 가리는 자리 — 공백·기호를 지운 내용으로 견준다.
 
-### 4. 대화 생성 · 5,059줄
+### 4. 대화 생성 · 5,461줄
 
 - `src/context.ts` — 프롬프트를 조립하는 자리 — 읽기와 조립을 잇는 앞문.
 - `src/prompts/reply.ts` — 답장 프롬프트의 고정 문안 — 캐릭터를 가리지 않고 매번 같은 글자가 들어가는 층이다.
@@ -81,6 +81,7 @@
 - `src/context/assemble.ts` — 프롬프트 조립 — 읽어 둔 값 묶음을 안정도 순 3층의 시스템 블록으로 만든다.
 - `src/context/day-progress.ts` — 각본 위의 지금 — 지금 시각이 각본의 어느 블록인지, 지나온 블록, 빈자리를 메우는 잠.
 - `src/context/input.ts` — 프롬프트 재료 읽기 — 조립에 필요한 것을 DB와 시계에서 한 번에 읽어 값 묶음으로 만든다.
+- `src/context/mind.ts` — 「네 마음」 채우기 — 저장된 오늘 생긴 마음과 오늘 기분을 읽어, 드러내는 정도 한 줄을 골라 실시간 꼬리의 블록을 만든다.
 - `src/context/relationship.ts` — 「지금 관계」 채우기 — 단계와 처음, 오늘 쓴 플러팅, 오늘 말한 일정, 오늘의 관계 의도를 읽어 답장 프롬프트의 관계 절을 만든다.
 
 ### 5. 실행과 발송 · 4,294줄
@@ -95,7 +96,7 @@
 - `src/dispatch.ts` — 아침·안부 선톡을 창 안에 내보내는 자리(3분 틱).
 - `src/proactive-send.ts` — 선톡 한 통을 만들어 보내는 공통 자리 — 잠금·보관 문안·발송 직전 재확인·실패 보관을 한 벌로 둔다.
 
-### 6. 새벽 정리 · 3,718줄
+### 6. 새벽 정리 · 3,729줄
 
 - `src/nightly.ts` — 새벽 정리 — 하루를 닫고 다음 날에 필요한 것을 만든다.
 - `src/relationship-stage.ts` — 관계 단계 전이 — 어제까지의 값을 세어 문턱을 재고, 모델의 결정을 받아 단계·처음·의도를 저장한다.
@@ -105,7 +106,7 @@
 - `src/tools/nightly-write.ts` — 새벽 정리 적용 도구: stdin으로 받은 생성 결과(JSON)를 DB에 반영한다.
 - `src/tools/run-nightly.ts` — 운영 도구: 활성 캐릭터 전체에 밤 정리를 수동 실행한다 (누락분 소급 생성용).
 
-### 7. 관측과 운영 · 8,801줄
+### 7. 관측과 운영 · 8,826줄
 
 - `src/trace.ts` — 슬랙 트레이스 — 보여줄 내용을 trace_events 행으로 쌓고 1분 틱이 슬랙으로 내보낸다.
 - `src/reply-trace.ts` — 답장 후기록 — 발송·폐기 결과, 선톡 발송, 접은 자리 비움 예고와 틈새 한 줄, 연락 약속의 단계를 트레이스 표에 쌓는다.
@@ -200,11 +201,11 @@ character.ts는 캐릭터를 두 번 호출로 만들고, arcs.ts는 삶의 큰 
 
 ### 4. 대화 생성
 
-context.ts는 앞문이다. context/input.ts가 DB에서 값을 읽어 한 묶음으로 넘기면 context/assemble.ts가 안정도 순 3층을 쌓고, 각본 위의 지금(지나온 블록·지금 블록·빈자리의 잠)은 context/day-progress.ts가 DB 없이 계산한다. prompts/reply.ts가 캐릭터가 내보내는 모든 글의 규칙층 단일 소스고, 어느 층에 어느 순서로 넣을지는 assemble.ts가 정한다. turns.ts는 대화 기록을 턴으로 옮기고, reply-signal.ts는 답장 객체의 형식과 파서를 한 파일에 갖는다. reply-ask.ts는 한 통을 받아 오고 relationship-update.ts는 그 신호를 관계 컬럼에 반영한다. reply-compose.ts는 답장 한 통을 만드는 순서(말투 굳히기·검색 태그·조립·호출·신호 반영·폐기 판정)를 갖고, 5번의 즉답과 몰아 답장이 상황 문단과 시간 표시 기준만 다르게 주고 둘 다 이 함수를 부른다. speech-level.ts는 최근 답장의 어미로 지금 반말인지 존댓말인지 가늠한다. reply-timing.ts는 두 태그 표와 붙잡기 판정에 유저가 이어 보내는 텀 계산까지 갖고, proactive-policy.ts는 오늘 먼저 연락해도 되는지와 무엇을 보낼지를 정하며 선톡을 종류별로 세는 meta_json 패턴도 여기서만 정한다.
+context.ts는 앞문이다. context/input.ts가 DB에서 값을 읽어 한 묶음으로 넘기면 context/assemble.ts가 안정도 순 3층을 쌓고, 각본 위의 지금(지나온 블록·지금 블록·빈자리의 잠)은 context/day-progress.ts가 DB 없이 계산한다. prompts/reply.ts가 캐릭터가 내보내는 모든 글의 규칙층 단일 소스고, 어느 층에 어느 순서로 넣을지는 assemble.ts가 정한다. turns.ts는 대화 기록을 턴으로 옮기고, reply-signal.ts는 답장 객체의 형식과 파서를 한 파일에 갖는다. reply-ask.ts는 한 통을 받아 오고 relationship-update.ts는 그 신호를 관계 컬럼에 반영한다. reply-compose.ts는 답장 한 통을 만드는 순서(말투 굳히기·검색 태그·조립·호출·신호 반영·폐기 판정)를 갖고, 5번의 즉답과 몰아 답장이 상황 문단과 시간 표시 기준만 다르게 주고 둘 다 이 함수를 부른다. context/mind.ts는 관계 행에 저장된 캐릭터의 오늘 생긴 마음과 월 리듬의 오늘 기분을 [네 마음] 블록으로 옮기고, 드러내는 정도 줄을 관계 단계·마음 종류·상대 상태로 고른다. 마음은 user-state.ts의 상대 상태 판정 호출이 함께 판정하고 relationship-update.ts가 바뀐 값만 저장한다. speech-level.ts는 최근 답장의 어미로 지금 반말인지 존댓말인지 가늠한다. reply-timing.ts는 두 태그 표와 붙잡기 판정에 유저가 이어 보내는 텀 계산까지 갖고, proactive-policy.ts는 오늘 먼저 연락해도 되는지와 무엇을 보낼지를 정하며 선톡을 종류별로 세는 meta_json 패턴도 여기서만 정한다.
 
 고칠 때 같이 보는 곳은 5번 bot.ts가 composeReply에 넘기는 상황 문단과 호출 근거다. 선톡 문안 7곳도 같은 3층을 쓴다. presence 1곳, followup 3곳, nightly 2곳, bot 복귀 인사 1곳이다. 7번의 eval/output-rules는 이 영역을 고친 PR에 eval 라벨을 붙여 돌리고, trace/reply-render.ts의 렌더도 답장 형식이 바뀌면 따라온다.
 
-검사는 reply-signal·reply-ask·reply-compose·reply-promise·output-rules·turns·held-draft·speech-level·proactive-counters·context-assemble·relationship-update 11개다. reply-timing은 이어 보내는 텀만 있다. 설계 원본은 ADR 0011·0012와 time-and-memory.md다.
+검사는 reply-signal·reply-ask·reply-compose·reply-promise·output-rules·turns·held-draft·speech-level·proactive-counters·context-assemble·relationship-update·mind-block·character-mind·reply-compose-mind 14개다. reply-timing은 이어 보내는 텀만 있다. 설계 원본은 ADR 0011·0012와 time-and-memory.md다.
 
 손볼 자리
 - 답장 밖 발화 표면 6곳의 문안이 각자 파일에 있다. 옮기기 쉬운 것은 followup 87-121, bot 527-586, tag-pick 32-38, reply-timing의 붙잡기 지시문이다.
@@ -234,7 +235,7 @@ nightly.ts가 하루를 닫는다. 수집 gatherNightlyInput 461-571, 반영 app
 
 ### 7. 관측과 운영
 
-trace.ts는 트레이스 표 trace_events에 쌓고 1분 틱으로 트레이스 채널에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을, trace/relationship-weekly.ts가 월요일마다 지난주 관계 요약을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 17개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 101개, scripts 5개, 워크플로 2개, 커밋 훅이 여기다.
+trace.ts는 트레이스 표 trace_events에 쌓고 1분 틱으로 트레이스 채널에 보낸다. trace/format.ts가 문안 조각 함수를 모으고, trace/reply-render.ts가 답장 호출 행을 슬랙 문안으로 그리고, trace/reply-post.ts가 그 문안을 호출 행에서 뒤늦게 읽어 올리며, trace/morning-plan.ts가 아침 각본을, trace/relationship-weekly.ts가 월요일마다 지난주 관계 요약을 게시한다. reply-trace.ts에는 발송·실패·접은 결과를 스레드에 덧붙이는 후기록만 남았다. feedback.ts는 슬랙 채널의 리액션과 답글을 폴링해 call_feedback에 쌓는다. 도구 17개, 더 돌리지 않는 도구 4개를 둔 tools/archive/, 평가 6개, 테스트 107개, scripts 5개, 워크플로 2개, 커밋 훅이 여기다.
 
 고칠 때 같이 보는 곳은 슬랙 채널의 글 형식과 호출부 전부다. 검사는 proactive-fail-trace·reply-render·morning-plan·feedback·relationship-weekly·relationship-status 6개고, trace는 테스트가 없다. 설계 원본은 ADR 0008·0009다.
 

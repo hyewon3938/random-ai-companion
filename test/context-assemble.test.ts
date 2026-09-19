@@ -70,6 +70,10 @@ const rel: RelationshipRow = {
   user_state_cause: null,
   user_state_tone: null,
   user_state_since: null,
+  mind_kind: null,
+  mind_level: null,
+  mind_reason: null,
+  mind_since: null,
   met_at: "2026-08-30 12:00:00",
   updated_at: "2026-09-05 04:00:00",
 };
@@ -111,6 +115,8 @@ const input = (over: Partial<ContextInput> = {}): ContextInput => ({
     intent: null,
     usedIntentLines: [],
   },
+  mood: null,
+  stamp: "2026-09-06 15:35:00",
   ...over,
 });
 

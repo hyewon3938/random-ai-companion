@@ -37,6 +37,10 @@
 // 있으면 memory.ts currentRows가 합친 값을 싣고, 상대가 아는지 표시도 그 값으로 붙인다.
 // 정체성은 사실을 적는 줄에만 표시를 붙이고, 표시가 없는 줄은 흘릴 사실 후보로 두지 않는다
 // (이슈 #456).
+//
+// 반영 끝에 하루짜리 관계 칸을 비운다 — 상대의 오늘 상태와 캐릭터의 오늘 생긴 마음(이슈 #473).
+// 둘 다 일기 날짜 다음 날 05:00 앞에 생긴 값만 비우고, 그 뒤에 생긴 값은 오늘 것이라 남긴다.
+// 다음 날까지 이어지는 마음은 기억 정리가 관계의 지금 마음(feelings)에 녹이는 기존 흐름에 맡긴다.
 
 import { chatJson } from "./llm.js";
 import { config } from "./config.js";
@@ -47,6 +51,7 @@ import {
   getDayPlanMadeBy,
   getDaySeed,
   getRelationship,
+  setMind,
   setUserState,
   updateRelationshipNotes,
   addSchedule,
@@ -1060,8 +1065,14 @@ const applyNightlyTxn = db.transaction(
       !!relNow?.user_state &&
       (relNow.user_state_since ?? "") < `${nextDate(g.diaryDate)} 05:00:00`;
     if (stateCleared) setUserState(g.characterId, null);
+    // 캐릭터의 오늘 생긴 마음도 같은 기준으로 비운다(#473). 생긴 시각이 없는 값은 읽는 쪽이
+    // 없는 것으로 보므로, 종류 칸이 차 있으면 시각과 상관없이 함께 비운다.
+    const mindCleared =
+      !!relNow?.mind_kind &&
+      (relNow.mind_since ?? "") < `${nextDate(g.diaryDate)} 05:00:00`;
+    if (mindCleared) setMind(g.characterId, null);
 
-    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${canon.size ? `, 새 태그 이름 ${canon.size}개는 기존 이름으로` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.advanceRejected ? `, 단계 전이 건너뜀(${rel.advanceRejected})` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${rel.scoreSamples ? `, 반응 표본 ${rel.scoreSamples}건` : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${workFactCount ? ` + 작품 카드 ${workFactCount}건` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
+    return `ok: ${g.diaryDate} 일기 응고 (대화 ${g.msgsCount}개${diaryTagList.length ? `, 일기 태그 ${diaryTagList.length}개` : ""}${memCount ? `, 기억 ${memCount}건` : ""}${schedTagCount ? `, 일정 태그 ${schedTagCount}개` : ""}${canon.size ? `, 새 태그 이름 ${canon.size}개는 기존 이름으로` : ""}${schedSkipped ? `, 이미 있는 일정 ${schedSkipped}건 건너뜀` : ""}${schedTimeFixed ? `, 일정 시각 ${schedTimeFixed}건 고침` : ""}${schedKnownFixed ? `, 상대에게 말한 일정 ${schedKnownFixed}건 표시` : ""}${skippedKeys.length ? `, 키 불가 ${skippedKeys.length}건 건너뜀` : ""}${notesCleared ? `, 오늘 메모 ${notesCleared}줄 비움` : ""}${stateCleared ? ", 상대 상태 비움" : ""}${mindCleared ? ", 캐릭터 마음 비움" : ""}${rel.advanced ? `, 단계 ${rel.advanced.from}→${rel.advanced.to}` : ""}${rel.advanceRejected ? `, 단계 전이 건너뜀(${rel.advanceRejected})` : ""}${rel.confirmed.length ? `, 처음 확정 ${rel.confirmed.length}건` : ""}${rel.cancelled.length ? `, 처음 취소 ${rel.cancelled.length}건` : ""}${rel.userAdded.length ? `, 상대가 먼저 한 처음 ${rel.userAdded.length}건` : ""}${rel.intentSaved ? ", 오늘 의도" : ""}${rel.scoreSamples ? `, 반응 표본 ${rel.scoreSamples}건` : ""}${progressCount ? `, 진행 중인 일 ${progressCount}건${progressDone ? ` (끝남 ${progressDone}건)` : ""}` : ""}${progressYielded ? `, 대화로 정리한 일 ${progressYielded}건은 진행 반영 건너뜀` : ""})${out.plan ? ` + ${g.today} 각본` : ""}${workFactCount ? ` + 작품 카드 ${workFactCount}건` : ""}${profileFilled.length ? ` + 상대 프로필(${profileFilled.join("·")})` : ""}${sendStored ? ` + 선톡 준비(${out.send?.kind ?? "morning"})` : ""}`;
   },
 );
 

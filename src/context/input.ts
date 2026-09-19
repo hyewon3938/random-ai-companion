@@ -4,7 +4,8 @@
 // 않는다. 그래서 조립 쪽은 값을 지어 넣어 검사할 수 있고, 무엇을 읽는지는 이 파일 하나로 보인다.
 // 이번 발화의 태그로 기억·옛 일기·지난 일정을 검색하는 것도 읽기라 여기서 하고, 무엇을 찾아
 // 넣었는지(BuildTrace)도 여기서 적는다. 작품 사실 카드를 붙일지 정하려고 대화·검색 결과·각본에서
-// 제목을 찾는 것도 같은 까닭으로 여기서 한다.
+// 제목을 찾는 것도 같은 까닭으로 여기서 한다. [네 마음] 블록(context/mind.ts)에 싣는 오늘
+// 기분(day_seeds)과 마음이 생긴 뒤 지난 시간을 재는 지금 시각도 여기서 읽는다(이슈 #473).
 
 import type { DayPlan } from "../day-plan.js";
 import { isSleeping } from "../day-plan.js";
@@ -25,6 +26,7 @@ import {
   getRecentMessages,
   type MessageRow,
   getDayActuals,
+  getDaySeed,
   listMemoryItems,
   listWorkFactTitles,
   getWorkFactsByTitles,
@@ -60,6 +62,7 @@ import {
   logicalDayStartTs,
   lastTalkedLabel,
   contactGapOf,
+  kstStamp,
   kstStampBefore,
   shiftDate,
   type ContactGap,
@@ -71,6 +74,7 @@ import {
   readRelationshipInput,
   type RelationshipInput,
 } from "./relationship.js";
+import type { DayMood } from "./mind.js";
 
 /** 이번 조립이 무엇을 찾아 넣었는지 — 답장 호출 기록에 붙여 "왜 저 기억을 꺼냈나"를 되짚는다. */
 export interface BuildTrace {
@@ -184,6 +188,10 @@ export interface ContextInput {
   relationship: RelationshipInput;
   /** 이번 프롬프트에 싣는 작품 사실 카드(#287·#458). 찾는 곳에 제목이 나온 작품만 상한까지 싣는다. */
   workFacts: WorkFact[];
+  /** 오늘 기분 — 월 리듬이 정해 둔 오늘(논리일)의 값. 시드가 없거나 기분이 비었으면 null(#473). */
+  mood: DayMood | null;
+  /** 지금 시각의 KST 타임스탬프 — 마음이 생긴 뒤 지난 시간을 재는 기준이다. */
+  stamp: string;
 }
 
 /** 작품 카드를 붙인 제목을 어디서 찾았는지 — 트레이스에 제목과 함께 적는다. */
@@ -516,6 +524,8 @@ export const readContextInput = (
     characterId,
     kstStampBefore(CONTACT_GAP_HOLD_MS),
   );
+  // 오늘 기분 — 상대와 상관없이 정해진 값이라 [네 마음] 블록에 이야깃거리로만 싣는다.
+  const seed = getDaySeed(characterId, logicalToday);
 
   return {
     identity,
@@ -550,5 +560,7 @@ export const readContextInput = (
       ? pickUserMemories(memoryItems, opts.userMemories)
       : [],
     relationship,
+    mood: seed?.mood.trim() ? { mood: seed.mood, reason: seed.reason } : null,
+    stamp: kstStamp(),
   };
 };
