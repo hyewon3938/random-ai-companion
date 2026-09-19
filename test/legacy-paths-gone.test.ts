@@ -49,6 +49,28 @@ const GONE_SYMBOLS = [
   "DAEPYO_CAST",
   "createDaepyoCharacter",
   "OUTPUT_FORMAT_COMPACT",
+  // v16에서 두 대기 표를 연락 행 표(outbox)로 합치며 없앤 접근 함수·타입(#476).
+  "PendingReplyRow",
+  "insertPendingReply",
+  "getWaitingPendingReplies",
+  "getPendingReply",
+  "hasWaitingPendingReply",
+  "supersedePendingReplies",
+  "supersedeWakeRows",
+  "supersedePromiseRows",
+  "markPendingReply",
+  "bumpPendingAttempt",
+  "markScheduledSend",
+  "recordSendAttempt",
+  "scheduleWakeRow",
+  "parseWakeMeta",
+  "WakeMeta",
+  "waitingPendingReplyCount",
+  "supersedeCharacterPendingReplies",
+  "pendingScheduledSendCount",
+  "skipCharacterScheduledSends",
+  "encodeNotes",
+  "decodeNotes",
 ];
 
 // 지운 표·컬럼 이름. 일부러 이름을 남긴 파일만 예외로 둔다.
@@ -57,9 +79,12 @@ const MIGRATION_TOOLS = [
   join("src", "tools", "archive", "migrate-v2-data.ts"),
 ];
 const DB = join("src", "db", "connection.ts");
+const SENDS = join("src", "db", "sends.ts");
 
 // db/connection.ts는 v6에서 이 자리를 지우는 파일이라 이름이 남는다. 이관 도구 둘은 한 번 돌고 끝난
-// 기록이라 지우지 않고 두기로 했다(ADR 0005) — 지금은 실행되지 않는다.
+// 기록이라 지우지 않고 두기로 했다(ADR 0005) — 지금은 실행되지 않는다. 두 대기 표는 v16이
+// *_legacy로 이름을 바꿔 남기므로, 그 뒤의 이름(pending_replies_legacy)은 이 검사에 걸리지 않는다.
+// db/sends.ts는 옮겨 온 예약 문안의 옛 번호 칸을 설명하느라 옛 표 이름을 적는다.
 const GONE_NAMES: [string, string[]][] = [
   ["cast_members", [DB, ...MIGRATION_TOOLS]],
   ["attention_override", [DB]],
@@ -70,6 +95,8 @@ const GONE_NAMES: [string, string[]][] = [
   ["last_contact_at", [DB]],
   // character.ts의 age_band는 옛 바이블 JSON의 키라 컬럼과 무관하다.
   ["age_band", [DB, join("src", "character.ts"), join("src", "context", "assemble.ts")]],
+  ["pending_replies", [DB]],
+  ["scheduled_messages", [DB, SENDS]],
 ];
 
 test("지운 함수·상수를 부르는 곳이 없다", () => {

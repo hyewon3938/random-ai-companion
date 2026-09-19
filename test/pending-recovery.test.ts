@@ -21,20 +21,19 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다 — 정적 import는 이 줄들보다 먼저 돈다.
 const { releaseRecoveryMark } = await import("../src/pending.js");
 const { getRecoveryMark, setRecoveryMark } = await import("../src/db.js");
-type PendingReplyRow = Parameters<typeof releaseRecoveryMark>[0];
+type OutboxRow = Parameters<typeof releaseRecoveryMark>[0];
 
 const USER_MSG_AT = "2026-09-02 11:38:26";
 
-const failedRow = (chatId: string): PendingReplyRow => ({
+const failedRow = (chatId: string): OutboxRow => ({
   id: 110,
+  kind: "reply",
   chat_id: chatId,
   character_id: 1,
-  user_msg_at: USER_MSG_AT,
-  bubbles_json: "[]",
-  note_to_save: null,
+  dedupe_key: `답장:${USER_MSG_AT}`,
   send_at: "2026-09-02 11:45:44",
-  kind: "reply",
-  meta_json: null,
+  expires_at: null,
+  payload_json: JSON.stringify({ userMsgAt: USER_MSG_AT, bubbles: [] }),
   call_id: null,
   attempts: 3,
   created_at: USER_MSG_AT,
@@ -53,6 +52,24 @@ test("그 사이 다른 경로가 찍은 표시는 그대로 둔다", () => {
   setRecoveryMark(chatId, newer);
   releaseRecoveryMark(failedRow(chatId));
   assert.equal(getRecoveryMark(chatId), newer);
+});
+
+test("구간 끝 행은 첫 발화 시각이 있을 때만 그 시각의 표시를 지운다", () => {
+  const chatId = "chat-block-end";
+  setRecoveryMark(chatId, USER_MSG_AT);
+  const blockEnd = (payload: object): OutboxRow => ({
+    ...failedRow(chatId),
+    kind: "block_end",
+    dedupe_key: "구간끝:10:00",
+    payload_json: JSON.stringify(payload),
+  });
+  // 유저가 말을 걸지 않은 구간 끝 행은 답장 책임이 없어 표시를 건드리지 않는다
+  releaseRecoveryMark(blockEnd({ blockStart: "10:00" }));
+  assert.equal(getRecoveryMark(chatId), USER_MSG_AT);
+  releaseRecoveryMark(
+    blockEnd({ blockStart: "10:00", userFirstAt: USER_MSG_AT }),
+  );
+  assert.notEqual(getRecoveryMark(chatId), USER_MSG_AT);
 });
 
 test("표시가 없으면 아무것도 만들지 않는다", () => {

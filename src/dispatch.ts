@@ -3,8 +3,10 @@
 // 밤에 준비해 둔 문안을 발송 창 안에서 보낸다. 모델을 부르지 않는다. 유저가 최근 4시간 안에
 // 먼저 연락했으면 보내지 않고, 관제탑이 그날 보낼 종류로 지목하지 않아도 보내지 않는다.
 //
-// 창을 놓치면 유예 안에서 보내고(창 종료 +90분, 시간대별 상한 11·14·22시), 넘기면 폐기
-// 사유와 시도 횟수를 적는다. 보낼 때는 예약 행 번호(scheduled_id)를 발송 기록에 함께 적는다.
+// 문안은 연락 예약 표(outbox)의 아침·안부 행이다(이슈 #476). 창을 놓치면 행의 만료 시각까지
+// 보내고(창 종료 +90분, 시간대별 상한 11·14·22시, kst.ts의 sendDeadline), 넘기면 시도했는지에
+// 따라 실패나 폐기로 닫는다. 보내지 않은 행은 상태와 사유를 함께 적는다. 보낼 때는 행 번호를
+// 발송 기록의 scheduled_id로 함께 적는다.
 //
 // 이 한 통의 근거는 일정이고, 오늘의 관계 의도는 문안을 쓸 때 이미 들어갔다 — 새벽 정리가
 // 아침 문안의 상황 문단에 네 줄을 넣고 이어갈 자리나 파고들 것 하나만 엮게 한다
@@ -15,10 +17,11 @@
 // (의도·근황은 발송 대기 중인 문안이 있으면 물러난다) 가장 낮은 상한 4에도 닿지 않는다.
 
 import {
+  bumpOutboxAttempt,
+  closeOutboxRow,
   getPendingSends,
-  markScheduledSend,
-  recordSendAttempt,
   hasUserMessageSince,
+  markOutboxDelivered,
 } from "./db.js";
 import {
   sendProactive,
@@ -28,8 +31,14 @@ import {
 } from "./bot.js";
 import { dailySendPlan } from "./proactive-policy.js";
 import { noOverlap } from "./proactive-send.js";
-import { kstClock, kstDateString, kstStamp, kstStampBefore } from "./kst.js";
-import { RECENT_USER_MS, SEND_GRACE_MIN } from "./thresholds.js";
+import {
+  kstClock,
+  kstDateString,
+  kstStamp,
+  kstStampBefore,
+  sendDeadline,
+} from "./kst.js";
+import { RECENT_USER_MS } from "./thresholds.js";
 
 // 선톡 디스패처: LLM 콜 없이, 밤 정리가 준비해둔 문안을 발송 창 안에서 내보내는 틱.
 // 유저가 오늘 이미 먼저 말을 걸었다면 보내지 않는다 — 선톡은 침묵을 여는 용도이고,
@@ -38,33 +47,6 @@ import { RECENT_USER_MS, SEND_GRACE_MIN } from "./thresholds.js";
 // 유저가 방금까지 대화 중이었는지는 RECENT_USER_MS 창으로 본다. 논리일(새벽 5시) 기준으로
 // 재면 유저가 새벽 4시에 말을 걸었을 때 그 대화가 어제로 들어가, 세 시간 뒤 아침 선톡이
 // 그대로 나간다.
-
-const addMin = (hhmm: string, m: number): string => {
-  const [h, mm] = hhmm.split(":").map(Number);
-  const t = Math.min(23 * 60 + 59, (h ?? 0) * 60 + (mm ?? 0) + m);
-  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
-};
-
-// 유예: 네트워크 실패로 창을 놓쳐도 그날 안에 늦게라도 보낸다.
-//
-// 다만 문안은 '아침'이 아니라 특정 순간에 맞춰 쓰였다 — 새벽 정리가 하루 각본에서 기상과
-// 첫 일과를 찾아 "막 일어난 참" / "첫 일과를 막 시작할 무렵" / "하다가 한숨 돌린 참" 중
-// 하나의 결로 쓰게 한다(nightly.ts의 morningStyles). 그래서 무한정 늦출 수 없고 두 겹으로 잡는다:
-//   - 창 종료 +90분: 문안이 쓰인 순간에서 너무 멀어지지 않게. 06:15 기상 문안은 아무리 늦어도 08:40까지.
-//   - 시간대별 절대 상한: 늦게 시작하는 하루(09:50 시작)의 문안이 점심까지 밀리지 않게.
-// 둘 중 이른 쪽이 마감이고, 넘기면 폐기하되 왜 폐기됐는지를 행에 남긴다.
-const GRACE_MIN = SEND_GRACE_MIN;
-
-const hardCap = (windowStart: string): string =>
-  windowStart < "11:00" ? "11:00" : windowStart < "15:00" ? "14:00" : "22:00";
-
-const graceUntil = (windowStart: string, windowEnd: string): string => {
-  const soft = addMin(windowEnd, GRACE_MIN);
-  const cap = hardCap(windowStart);
-  const d = soft < cap ? soft : cap;
-  // 디스패처 크론은 6시부터 돈다 — 아주 이른 기상 문안(새벽 창)이 첫 틱 전에 만료되지 않게 하한
-  return d < "06:30" ? "06:30" : d;
-};
 
 // 틱이 겹치지 않게 — 재시도 간격을 넓히면서 한 틱이 최대 ~130초까지 붙잡힐 수 있게 됐고,
 // 틱 간격도 짧아졌다. 겹치면 같은 행을 두 틱이 집어 이중 발송이 된다.
@@ -80,26 +62,33 @@ export const runDispatchTick = noOverlap(async () => {
     const allowed =
       r.kind === "checkin" ? plan.kind === "checkin" : plan.kind === "morning";
     if (!allowed) {
-      markScheduledSend(
-        r.id,
-        "skipped",
-        `보내지 않는 날 (${plan.reason})`,
-        null,
-      );
+      closeOutboxRow(r.id, "skipped", "off_day", plan.reason, null);
       continue;
     }
 
-    const deadline = graceUntil(r.window_start, r.window_end);
+    // 마감은 문안을 적을 때 행의 만료 시각으로 넣어 둔다. 비어 있는 행은 없지만, 있으면 같은
+    // 계산으로 채운다.
+    const deadline = r.expires_at
+      ? r.expires_at.slice(11, 16)
+      : sendDeadline(r.window_start, r.window_end);
     if (now > deadline) {
-      // 시도 흔적이 있으면 전송 실패로 죽은 것, 없으면 창 자체를 못 잡은 것 — 사유를 가른다.
-      markScheduledSend(
-        r.id,
-        "skipped",
-        r.attempts > 0
-          ? `유예(${deadline})까지 전송 실패 — ${r.attempts}회 시도`
-          : `발송 창 지남 (시도 없음, 유예 ${deadline})`,
-        null,
-      );
+      // 시도 흔적이 있으면 전송 실패로 죽은 것, 없으면 창 자체를 못 잡은 것 — 상태를 가른다.
+      if (r.attempts > 0)
+        closeOutboxRow(
+          r.id,
+          "failed",
+          "retries_exhausted",
+          `마감(${deadline})까지 전송 실패 — ${r.attempts}회 시도`,
+          null,
+        );
+      else
+        closeOutboxRow(
+          r.id,
+          "dropped",
+          "expired",
+          `발송 창 지남 (시도 없음, 마감 ${deadline})`,
+          null,
+        );
       console.warn(
         `[dispatch] 폐기 #${r.id} attempts=${r.attempts} deadline=${deadline}`,
       );
@@ -113,7 +102,7 @@ export const runDispatchTick = noOverlap(async () => {
         kstStampBefore(RECENT_USER_MS),
       )
     ) {
-      markScheduledSend(r.id, "skipped", "유저가 먼저 연락함", null);
+      closeOutboxRow(r.id, "skipped", "user_first", null, null);
       continue;
     }
 
@@ -135,9 +124,9 @@ export const runDispatchTick = noOverlap(async () => {
         delivered < total ? `부분 발송 ${delivered}/${total}` : null,
         r.attempts > 0 ? `${r.attempts}회 실패 후 성공` : null,
       ].filter(Boolean);
-      markScheduledSend(
+      markOutboxDelivered(
         r.id,
-        "sent",
+        delivered < total ? "partial" : "sent",
         notes.length ? notes.join(" / ") : null,
         kstStamp(),
       );
@@ -145,8 +134,8 @@ export const runDispatchTick = noOverlap(async () => {
         `[dispatch] sent #${r.id} to ${r.chat_id}${late ? " (유예)" : ""}`,
       );
     } catch (e) {
-      // 상태는 pending 그대로 — 마감 전이면 다음 틱이 다시 시도한다. 실패 흔적만 행에 남긴다.
-      recordSendAttempt(r.id, e instanceof Error ? e.message : String(e));
+      // 상태는 대기 그대로 — 마감 전이면 다음 틱이 다시 시도한다. 실패 흔적만 행에 남긴다.
+      bumpOutboxAttempt(r.id, e instanceof Error ? e.message : String(e));
       logErr(`[dispatch] send error #${r.id}:`, e);
     } finally {
       releaseProactive(r.chat_id);

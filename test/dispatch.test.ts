@@ -1,8 +1,9 @@
 // 선톡 디스패처(dispatch.ts)가 발송 전에 DB만 보고 내리는 판단을 검사한다 — 모델은 부르지 않는다.
 //
 // 창이 아직 안 열린 행은 두는지, 관제탑이 지목하지 않은 종류·유예를 넘긴 행·유저가 먼저 연락한
-// 대화의 행은 어떤 사유로 건너뛰는지 본다. 유예는 창 종료 뒤 90분, 시간대별 상한, 06:30 하한
-// 셋이 겹치므로 각각 한 번씩 짚는다. 시계는 Date.now를 고정해 KST 벽시계를 정한다.
+// 대화의 행은 어떤 상태와 사유로 닫는지 본다. 유예는 창 종료 뒤 90분, 시간대별 상한, 06:30 하한
+// 셋이 겹치므로 각각 한 번씩 짚는다. 마감은 문안을 적을 때 행의 만료 시각으로 들어간다(#476).
+// 시계는 Date.now를 고정해 KST 벽시계를 정한다.
 //
 // 텔레그램은 부르지 않는다 — 모든 판단을 통과해 발송 직전까지 간 행은 이 대화의 선톡 잠금을
 // 미리 쥐어 다음 틱으로 미뤄지게 한다. DB는 임시 파일로 새로 만든다.
@@ -22,10 +23,10 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다 — 정적 import는 이 줄들보다 먼저 돈다.
 const {
   db,
+  bumpOutboxAttempt,
+  closeOutboxRow,
   insertScheduledSend,
   logMessage,
-  markScheduledSend,
-  recordSendAttempt,
 } = await import("../src/db.js");
 const { createFixtureCharacter } =
   await import("../src/eval/fixture-character.js");
@@ -79,7 +80,9 @@ const plant = (
   );
   const id = Number(
     db
-      .prepare(`SELECT id FROM scheduled_messages WHERE character_id = ?`)
+      .prepare(
+        `SELECT id FROM outbox WHERE character_id = ? AND kind IN ('morning', 'checkin')`,
+      )
       .pluck()
       .get(characterId),
   );
@@ -88,7 +91,8 @@ const plant = (
 
 interface RowState {
   status: string;
-  skip_reason: string | null;
+  reason: string | null;
+  detail: string | null;
   attempts: number;
   sent_at: string | null;
 }
@@ -96,13 +100,14 @@ interface RowState {
 const stateOf = (id: number): RowState =>
   db
     .prepare(
-      `SELECT status, skip_reason, attempts, sent_at FROM scheduled_messages WHERE id = ?`,
+      `SELECT status, reason, detail, attempts, sent_at FROM outbox WHERE id = ?`,
     )
     .get(id) as RowState;
 
 const PENDING: RowState = {
-  status: "pending",
-  skip_reason: null,
+  status: "waiting",
+  reason: null,
+  detail: null,
   attempts: 0,
   sent_at: null,
 };
@@ -122,31 +127,38 @@ test("관제탑이 그날 보낼 종류로 지목하지 않은 행은 보내지 
   assert.deepEqual(stateOf(row.id), {
     ...PENDING,
     status: "skipped",
-    skip_reason: "보내지 않는 날 (아침에 한 통)",
+    reason: "off_day",
+    detail: "아침에 한 통",
   });
 });
 
 test("창 종료 뒤 90분을 넘긴 행은 시도 없음 사유로 폐기한다", async () => {
   setClock("09:00");
   const row = plant("morning", "06:00", "06:30");
+  assert.equal(
+    db.prepare(`SELECT expires_at FROM outbox WHERE id = ?`).pluck().get(row.id),
+    `${DAY} 08:00:00`,
+  );
   await runDispatchTick();
   assert.deepEqual(stateOf(row.id), {
     ...PENDING,
-    status: "skipped",
-    skip_reason: "발송 창 지남 (시도 없음, 유예 08:00)",
+    status: "dropped",
+    reason: "expired",
+    detail: "발송 창 지남 (시도 없음, 마감 08:00)",
   });
 });
 
 test("전송을 시도한 흔적이 있으면 전송 실패 사유로 폐기한다", async () => {
   setClock("09:00");
   const row = plant("morning", "06:00", "06:30");
-  recordSendAttempt(row.id, "telegram down");
-  recordSendAttempt(row.id, "telegram down");
+  bumpOutboxAttempt(row.id, "telegram down");
+  bumpOutboxAttempt(row.id, "telegram down");
   await runDispatchTick();
   assert.deepEqual(stateOf(row.id), {
     ...PENDING,
-    status: "skipped",
-    skip_reason: "유예(08:00)까지 전송 실패 — 2회 시도",
+    status: "failed",
+    reason: "retries_exhausted",
+    detail: "마감(08:00)까지 전송 실패 — 2회 시도",
     attempts: 2,
   });
 });
@@ -157,8 +169,9 @@ test("점심 창의 문안은 90분이 남았어도 두 시를 넘기면 폐기�
   await runDispatchTick();
   assert.deepEqual(stateOf(row.id), {
     ...PENDING,
-    status: "skipped",
-    skip_reason: "발송 창 지남 (시도 없음, 유예 14:00)",
+    status: "dropped",
+    reason: "expired",
+    detail: "발송 창 지남 (시도 없음, 마감 14:00)",
   });
 });
 
@@ -176,7 +189,7 @@ test("유저가 네 시간 안에 먼저 연락한 대화에는 보내지 않는
   assert.deepEqual(stateOf(row.id), {
     ...PENDING,
     status: "skipped",
-    skip_reason: "유저가 먼저 연락함",
+    reason: "user_first",
   });
 });
 
@@ -194,8 +207,9 @@ test("새벽 창의 문안은 06:30까지 살아 있다가 넘기면 폐기한�
   await runDispatchTick();
   assert.deepEqual(stateOf(row.id), {
     ...PENDING,
-    status: "skipped",
-    skip_reason: "발송 창 지남 (시도 없음, 유예 06:30)",
+    status: "dropped",
+    reason: "expired",
+    detail: "발송 창 지남 (시도 없음, 마감 06:30)",
   });
 });
 
@@ -209,6 +223,6 @@ test("다른 틱이 이 대화의 잠금을 쥐고 있으면 다음 틱으로 �
   } finally {
     releaseProactive(row.chatId);
     // 잠금을 풀고 나면 이 행은 다음 틱에서 실제 발송으로 간다. 뒤에 검사가 붙어도 안 나가게 닫는다.
-    markScheduledSend(row.id, "skipped", "검사 뒤 정리", null);
+    closeOutboxRow(row.id, "skipped", "held", "검사 뒤 정리", null);
   }
 });

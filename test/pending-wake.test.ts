@@ -1,10 +1,10 @@
-// 답장 대기 행(pending.ts)의 meta 읽기·깨우기 행 거두기·걸어 두기·이어받기·구간 끝 표시 걸기를 검사한다.
+// 연락 행(pending.ts)의 종류별 값 읽기·구간 끝 행 거두기·걸어 두기·이어받기·구간 끝 표시 걸기를 검사한다.
 //
-// meta는 깨져 있어도 예외 없이 빈 값으로 읽히는지, dropWakeRows가 wake·return만 거두고 promise와
-// reply는 남기는지, schedulePendingReply가 적은 행이 입력과 같은지, resumePendingReplies가 남은
-// 행을 다시 걸어 시각이 지난 행은 바로 울리고 먼 행은 기다리는지, 보낸 답장의 메모가 그 답장을
-// 적은 기록 행 번호와 함께 남는지, armReturnRow가 지금 블록 끝에 return 행을 걸고 울릴 행이나
-// 약속 행이 있거나 구간이 끝났으면 걸지 않는지 본다. 울리는 쪽은
+// 종류별 값(payload_json)은 깨져 있어도 예외 없이 빈 값으로 읽히는지, dropWakeRows가 구간 끝
+// 행만 거두고 약속과 답장은 남기는지, schedulePendingReply가 적은 행이 입력과 같은지,
+// resumePendingReplies가 남은 행을 다시 걸어 시각이 지난 행은 바로 울리고 먼 행은 기다리는지,
+// 보낸 답장의 메모가 그 답장을 적은 기록 행 번호와 함께 남는지, armReturnRow가 지금 블록 끝에
+// 구간 끝 행을 걸고 울릴 행이나 약속 행이 있거나 구간이 끝났으면 걸지 않는지 본다. 울리는 쪽은
 // setPendingSender로 가짜 발송기를 넣어 받는다 — bot.ts를 읽으면 그쪽 발송기가 등록되므로 여기서는
 // 읽지 않는다.
 //
@@ -24,7 +24,7 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:1";
 
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다 — 정적 import는 이 줄들보다 먼저 돈다.
-const { db, getWaitingPendingReplies, insertPendingReply } =
+const { db, getWaitingOutboxRows, insertOutboxRow, parsePayload } =
   await import("../src/db.js");
 const { createFixtureCharacter } =
   await import("../src/eval/fixture-character.js");
@@ -33,14 +33,12 @@ const {
   dropPendingReplies,
   dropPromiseRows,
   dropWakeRows,
-  parseWakeMeta,
   resumePendingReplies,
   schedulePendingReply,
   setPendingSender,
 } = await import("../src/pending.js");
 const { kstLogicalClock } = await import("../src/kst.js");
 const { toMin } = await import("../src/context/day-progress.js");
-type PendingReplyRow = Parameters<typeof parseWakeMeta>[0];
 
 // 분 수를 각본 표기 "HH:MM"으로 — 새벽은 24를 넘긴 채 둔다(kstLogicalClock과 같은 표기).
 const clockAt = (min: number): string =>
@@ -56,38 +54,31 @@ const stampAfter = (ms: number): string =>
     .slice(0, 19)
     .replace("T", " ");
 
-const rowOf = (over: Partial<PendingReplyRow>): PendingReplyRow => ({
-  id: 1,
-  chat_id: "chat-wake",
-  character_id: characterId,
-  user_msg_at: AT,
-  bubbles_json: "[]",
-  note_to_save: null,
-  send_at: "2026-09-07 14:00:30",
-  kind: "wake",
-  meta_json: null,
-  call_id: null,
-  attempts: 0,
-  created_at: AT,
-  ...over,
-});
-
-const insert = (chatId: string, kind: string, sendAt: string): number =>
-  insertPendingReply({
+let seq = 0;
+const insert = (
+  chatId: string,
+  kind: "reply" | "block_end" | "promise",
+  sendAt: string,
+): number => {
+  const id = insertOutboxRow({
+    kind,
     chatId,
     characterId,
-    userMsgAt: AT,
-    bubbles: ["다녀왔어요"],
-    notesToSave: [],
+    dedupeKey: `test:${++seq}`,
     sendAt,
-    kind,
-    metaJson: null,
+    payload:
+      kind === "reply"
+        ? { userMsgAt: AT, bubbles: ["다녀왔어요"] }
+        : { activity: "통화", blockStart: "13:00", blockEnd: "14:00" },
     createdAt: AT,
   });
+  assert.ok(id !== null);
+  return id;
+};
 
 const statusOf = (id: number): string =>
   (
-    db.prepare(`SELECT status FROM pending_replies WHERE id = ?`).get(id) as {
+    db.prepare(`SELECT status FROM outbox WHERE id = ?`).get(id) as {
       status: string;
     }
   ).status;
@@ -105,7 +96,7 @@ const waitUntil = async (
 
 after(() => {
   // 아직 기다리는 행이 있으면 대화마다 세 갈래로 거둬 타이머를 모두 지운다.
-  for (const r of getWaitingPendingReplies()) {
+  for (const r of getWaitingOutboxRows()) {
     dropPendingReplies(r.chat_id);
     dropPromiseRows(r.chat_id);
     dropWakeRows(r.chat_id);
@@ -113,47 +104,41 @@ after(() => {
   db.close();
 });
 
-test("meta가 제대로 적힌 행은 활동·구간·약속·호출 번호를 그대로 읽는다", () => {
-  const meta = parseWakeMeta(
-    rowOf({
-      kind: "promise",
-      meta_json: JSON.stringify({
-        activity: "통화",
-        blockStart: "13:00",
-        blockEnd: "14:00",
-        promise: "통화 끝나고 다시 연락",
-        callId: 42,
-      }),
-    }),
-  );
-  assert.deepEqual(meta, {
+test("종류별 값이 제대로 적힌 행은 활동·구간·약속을 그대로 읽는다", () => {
+  const payload = {
     activity: "통화",
     blockStart: "13:00",
     blockEnd: "14:00",
     promise: "통화 끝나고 다시 연락",
-    callId: 42,
-  });
+    userMsgAt: AT,
+  };
+  assert.deepEqual(
+    parsePayload({ payload_json: JSON.stringify(payload) }),
+    payload,
+  );
 });
 
-test("meta가 없는 행은 빈 객체로 읽는다", () => {
-  assert.deepEqual(parseWakeMeta(rowOf({ meta_json: null })), {});
+test("종류별 값이 비었거나 객체가 아니면 빈 객체로 읽는다", () => {
+  assert.deepEqual(parsePayload({ payload_json: "{}" }), {});
+  assert.deepEqual(parsePayload({ payload_json: "[1,2]" }), {});
+  assert.deepEqual(parsePayload({ payload_json: "null" }), {});
 });
 
-test("meta가 깨진 행도 예외 없이 빈 객체로 읽는다", () => {
-  assert.deepEqual(parseWakeMeta(rowOf({ meta_json: "{깨진 json" })), {});
+test("종류별 값이 깨진 행도 예외 없이 빈 객체로 읽는다", () => {
+  assert.deepEqual(parsePayload({ payload_json: "{깨진 json" }), {});
 });
 
-test("깨우기 행을 거두면 wake·return만 지나가고 promise·reply는 그대로 기다린다", () => {
+test("구간 끝 행을 거두면 구간 끝 행만 닫히고 약속·답장은 그대로 기다린다", () => {
   const chat = "chat-drop";
   const far = stampAfter(6 * 3600_000);
-  const wake = insert(chat, "wake", far);
-  const ret = insert(chat, "return", far);
+  const wake = insert(chat, "block_end", far);
+  const ret = insert(chat, "block_end", far);
   const promise = insert(chat, "promise", far);
   const reply = insert(chat, "reply", far);
 
   assert.equal(dropWakeRows(chat), 2);
-  assert.equal(statusOf(wake), "superseded");
-  assert.equal(statusOf(ret), "superseded");
+  assert.equal(statusOf(wake), "dropped");
+  assert.equal(statusOf(ret), "dropped");
   assert.equal(statusOf(promise), "waiting");
   assert.equal(statusOf(reply), "waiting");
 
@@ -166,7 +151,7 @@ test("답장을 걸어 두면 행의 종류·말풍선·호출 번호가 입력�
   const chat = "chat-sched";
   const waitMs = 6 * 3600_000;
   const before = Date.now();
-  const { id, sendAt } = schedulePendingReply({
+  const armed = schedulePendingReply({
     chatId: chat,
     characterId,
     userMsgAt: AT,
@@ -176,30 +161,56 @@ test("답장을 걸어 두면 행의 종류·말풍선·호출 번호가 입력�
     kind: "reply",
     callId: 42,
   });
-  const row = db
-    .prepare(`SELECT * FROM pending_replies WHERE id = ?`)
-    .get(id) as PendingReplyRow & { status: string };
+  assert.ok(armed);
+  const { id, sendAt } = armed;
+  const row = db.prepare(`SELECT * FROM outbox WHERE id = ?`).get(id) as {
+    kind: string;
+    dedupe_key: string;
+    payload_json: string;
+    call_id: number | null;
+    status: string;
+    send_at: string;
+    expires_at: string | null;
+  };
   assert.equal(row.kind, "reply");
-  assert.deepEqual(JSON.parse(row.bubbles_json), ["안녕", "잘 지냈어요?"]);
+  assert.equal(row.dedupe_key, `답장:${AT}`);
+  assert.deepEqual(JSON.parse(row.payload_json), {
+    userMsgAt: AT,
+    bubbles: ["안녕", "잘 지냈어요?"],
+    notes: ["메모 한 줄"],
+  });
   assert.equal(row.call_id, 42);
-  assert.equal(row.note_to_save, "메모 한 줄");
-  assert.equal(row.meta_json, null);
   assert.equal(row.status, "waiting");
   assert.equal(row.send_at, sendAt);
+  assert.equal(row.expires_at, null);
   const sendEpoch = new Date(`${sendAt.replace(" ", "T")}+09:00`).getTime();
   assert.ok(sendEpoch - before >= waitMs - 2000);
   assert.ok(sendEpoch - before <= waitMs + 2000);
 
+  // 같은 유저 메시지에 답장을 또 걸면 키가 겹쳐 넣지 않는다.
+  assert.equal(
+    schedulePendingReply({
+      chatId: chat,
+      characterId,
+      userMsgAt: AT,
+      bubbles: ["또"],
+      notesToSave: [],
+      waitMs,
+      kind: "reply",
+    }),
+    null,
+  );
+
   // 걸린 타이머를 여기서 거둔다 — 안 거두면 프로세스가 여섯 시간 매달린다.
   assert.equal(dropPendingReplies(chat), 1);
-  assert.equal(statusOf(id), "superseded");
+  assert.equal(statusOf(id), "dropped");
 });
 
 test("이어받기는 시각이 지난 행을 바로 울리고 먼 행은 그대로 기다리게 건다", async () => {
   const fired: Array<{ id: number; bubbles: string[] }> = [];
   setPendingSender(async (row, bubbles) => {
     fired.push({ id: row.id, bubbles });
-    return null;
+    return { messageId: null, delivered: bubbles.length };
   });
   const due = insert("chat-resume-due", "reply", "2026-01-01 09:00:00");
   const later = insert("chat-resume-later", "reply", stampAfter(6 * 3600_000));
@@ -211,15 +222,18 @@ test("이어받기는 시각이 지난 행을 바로 울리고 먼 행은 그대
   assert.equal(statusOf(later), "waiting");
 
   assert.equal(dropPendingReplies("chat-resume-later"), 1);
-  assert.equal(statusOf(later), "superseded");
+  assert.equal(statusOf(later), "dropped");
 });
 
 // 메모는 답장 하나에 딸린다 — 발송기가 돌려준 기록 행 번호를 그대로 적어야 대화 기록의
 // 그 턴에 이 메모를 다시 실을 수 있다(이슈 #346).
 test("보낸 답장의 메모는 그 답장을 적은 기록 행 번호와 함께 남는다", async () => {
   const chat = "chat-note-id";
-  setPendingSender(async () => 777);
-  const { id } = schedulePendingReply({
+  setPendingSender(async (_row, bubbles) => ({
+    messageId: 777,
+    delivered: bubbles.length,
+  }));
+  const armed = schedulePendingReply({
     chatId: chat,
     characterId,
     userMsgAt: AT,
@@ -228,7 +242,8 @@ test("보낸 답장의 메모는 그 답장을 적은 기록 행 번호와 함�
     waitMs: 50,
     kind: "reply",
   });
-  await waitUntil(() => statusOf(id) === "sent");
+  assert.ok(armed);
+  await waitUntil(() => statusOf(armed.id) === "sent");
 
   const note = db
     .prepare(
@@ -241,12 +256,15 @@ test("보낸 답장의 메모는 그 답장을 적은 기록 행 번호와 함�
   });
 });
 
-// 한 답장이 메모를 여럿 남긴다(이슈 #399). 컬럼은 한 칸이라 걸 때 줄바꿈으로 잇고 보낼 때
-// 되돌리는데, 그 왕복에서 한 건이 새면 그날 알게 된 사실이 사라진다.
+// 한 답장이 메모를 여럿 남긴다(이슈 #399). 종류별 값에 배열로 두었다가 보낼 때 한 줄씩
+// 옮기는데, 그 왕복에서 한 건이 새면 그날 알게 된 사실이 사라진다.
 test("한 답장에 메모가 여럿이면 같은 기록 행 번호로 여러 줄이 남는다", async () => {
   const chat = "chat-note-many";
-  setPendingSender(async () => 778);
-  const { id } = schedulePendingReply({
+  setPendingSender(async (_row, bubbles) => ({
+    messageId: 778,
+    delivered: bubbles.length,
+  }));
+  const armed = schedulePendingReply({
     chatId: chat,
     characterId,
     userMsgAt: AT,
@@ -258,7 +276,8 @@ test("한 답장에 메모가 여럿이면 같은 기록 행 번호로 여러 �
     waitMs: 50,
     kind: "reply",
   });
-  await waitUntil(() => statusOf(id) === "sent");
+  assert.ok(armed);
+  await waitUntil(() => statusOf(armed.id) === "sent");
 
   const rows = db
     .prepare(
@@ -271,7 +290,7 @@ test("한 답장에 메모가 여럿이면 같은 기록 행 번호로 여러 �
   ]);
 });
 
-test("구간 끝 표시는 지금 블록이 끝나는 시각에 return 행으로 걸린다", () => {
+test("구간 끝 표시는 지금 블록이 끝나는 시각에 구간 끝 행으로 걸린다", () => {
   const chat = "chat-arm";
   const now = toMin(kstLogicalClock());
   const block = { activity: "씻기", start: clockAt(now - 5), end: clockAt(now + 10) };
@@ -279,18 +298,19 @@ test("구간 끝 표시는 지금 블록이 끝나는 시각에 return 행으로
   assert.ok(armed);
   const row = db
     .prepare(
-      `SELECT kind, status, user_msg_at, meta_json FROM pending_replies WHERE id = ?`,
+      `SELECT kind, status, dedupe_key, payload_json FROM outbox WHERE id = ?`,
     )
     .get(armed.id) as {
     kind: string;
     status: string;
-    user_msg_at: string;
-    meta_json: string;
+    dedupe_key: string;
+    payload_json: string;
   };
-  assert.equal(row.kind, "return");
+  assert.equal(row.kind, "block_end");
   assert.equal(row.status, "waiting");
-  assert.equal(row.user_msg_at, AT);
-  assert.deepEqual(JSON.parse(row.meta_json), {
+  assert.equal(row.dedupe_key, `구간끝:${block.start}`);
+  // 유저 첫 발화 시각은 비운 채 건다 — 유저가 구간 안에서 말을 걸 때 적힌다.
+  assert.deepEqual(JSON.parse(row.payload_json), {
     activity: "씻기",
     blockStart: block.start,
     blockEnd: block.end,
@@ -301,15 +321,26 @@ test("구간 끝 표시는 지금 블록이 끝나는 시각에 return 행으로
     60_000;
   assert.ok(diffMin >= 9 && diffMin <= 11.1, `끝 시각과 ${diffMin}분 차이`);
 
-  // 같은 대화에 울릴 행이 있으면 걸지 않고, 울리는 중인 행을 빼라고 하면 그 행은 세지 않는다.
+  // 같은 대화에 울릴 행이 있으면 걸지 않는다. 울리는 중인 행을 빼라고 해도 같은 구간이면
+  // 키가 겹쳐 넣지 않고, 다음 구간이면 새 행을 건다.
   assert.equal(
     armReturnRow({ chatId: chat, characterId, block, userMsgAt: AT }),
+    null,
+  );
+  assert.equal(
+    armReturnRow({
+      chatId: chat,
+      characterId,
+      block,
+      userMsgAt: AT,
+      exceptRowId: armed.id,
+    }),
     null,
   );
   const next = armReturnRow({
     chatId: chat,
     characterId,
-    block,
+    block: { ...block, start: clockAt(now - 1) },
     userMsgAt: AT,
     exceptRowId: armed.id,
   });

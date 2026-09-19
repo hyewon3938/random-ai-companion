@@ -6,15 +6,16 @@
 // 상태만 바꾸고 대화 기록은 그대로 둔다. 대화방을 그대로 두고 새 캐릭터를 시작해도 읽는
 // 함수가 캐릭터 번호로 거르므로(db/messages.ts), 앞 캐릭터의 대화가 섞이지 않는다.
 // 슬랙에는 트레이스 표 행만 쌓고, 내보내는 일은 봇의 1분 틱이 맡는다.
+//
+// 걸린 발송은 연락 예약 표(outbox)의 대기 행이다. 대기 답장에는 답장·구간 끝·약속 행을,
+// 예약 선톡에는 아침·안부 행을 세고, 둘 다 폐기와 사유 캐릭터 종료로 닫는다(이슈 #476).
 import {
   endCharacter,
   getActiveCharacter,
   getConfirmedFirsts,
   getStage,
-  skipCharacterScheduledSends,
-  supersedeCharacterPendingReplies,
-  waitingPendingReplyCount,
-  pendingScheduledSendCount,
+  dropCharacterOutbox,
+  waitingOutboxCounts,
 } from "../db.js";
 import { alwaysIncluded, identityValue } from "../memory.js";
 import { RELATIONSHIP_STAGE_NAME } from "../labels.js";
@@ -52,8 +53,7 @@ const stageLine = stage
   : "단계 없음";
 const days = daysTogether(character.created_at, kstDateString());
 const firsts = getConfirmedFirsts(character.id).length;
-const waiting = waitingPendingReplyCount(character.id);
-const scheduled = pendingScheduledSendCount(character.id);
+const { replies: waiting, scheduled } = waitingOutboxCounts(character.id);
 
 console.log(`캐릭터 #${character.id} — 대화방 ${chatId}`);
 if (name) console.log(`  이름: ${name}`);
@@ -69,8 +69,9 @@ if (!apply) {
 
 // 상태를 바꾸기 전에 걸린 행부터 거둔다. 순서가 반대면 그 사이에 돌아온 발송 틱이 이미 끝난
 // 캐릭터의 답장을 내보낸다.
-const superseded = supersedeCharacterPendingReplies(character.id);
-const skipped = skipCharacterScheduledSends(character.id, "캐릭터 종료");
+const { replies: superseded, scheduled: skipped } = dropCharacterOutbox(
+  character.id,
+);
 const ended = endCharacter(character.id);
 
 recordTraceEvent({

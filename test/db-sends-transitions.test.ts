@@ -1,9 +1,11 @@
-// 대기 중인 답장 행(pending_replies)의 종류별 상태 전이와 발송 실패 기록이 규칙대로 도는지 검사한다.
+// 연락 예약 표(outbox)의 넣기·닫기·대기 판정과 발송 실패 기록이 규칙대로 도는지 검사한다.
 //
-// 종류마다 다른 함수가 거둔다 — 답장(reply·recover)은 유저가 말을 더 걸면, 깨우기(wake·return)는
-// 불가 구간 밖 길로 답이 나갈 때, 약속(promise)은 새 약속이 걸릴 때. 서로 남의 종류를 건드리면
-// 선톡·붙잡기·약속 논리가 한꺼번에 틀어지므로 함수마다 무엇을 남기는지 못 박는다. 발송 실패는
-// 오류 문구 상한과 시도 횟수를 본다.
+// 고유 제약은 기다리는 행에만 걸린다 — 같은 키의 대기 행은 하나뿐이고, 닫힌 행과 같은 키로는 새
+// 행을 넣을 수 있다. 행을 닫는 함수는 대기 행만 바꿔서 먼저 적힌 결과가 남고, 실제로 말이 나간
+// 뒤 적는 보냄 표시만 폐기로 먼저 닫힌 행을 덮는다. 종류마다 다른 함수가 거두므로(답장은 유저가
+// 말을 더 걸면, 구간 끝은 불가 구간 밖 길로 답이 나갈 때, 약속은 새 약속이 걸릴 때) 서로 남의
+// 종류를 건드리지 않는지도 못 박는다. 유저가 답을 기다리는지(isWaiting)는 대기 답장과 첫 발화
+// 시각이 적힌 구간 끝 행만 센다(outgoing.md 「구간 끝 행의 종류별 값」).
 //
 // DB는 임시 파일로 새로 만든다. 모델도 텔레그램도 부르지 않아 값이 안 든다.
 import assert from "node:assert/strict";
@@ -22,19 +24,24 @@ process.env.ANTHROPIC_API_KEY ??= "test-key";
 // DB 경로를 정한 뒤에 읽어야 임시 파일로 열린다 — 정적 import는 이 줄들보다 먼저 돈다.
 const {
   db,
-  bumpPendingAttempt,
-  getPendingReply,
-  getWaitingPendingReplies,
-  hasWaitingPendingReply,
-  insertPendingReply,
+  bumpOutboxAttempt,
+  closeOutboxRow,
+  closeWaitingRowsOf,
+  getPendingSends,
+  getWaitingOutboxRow,
+  getWaitingOutboxRows,
+  hasPendingSendOn,
+  hasScheduledSendOn,
+  hasWaitingReply,
+  insertOutboxRow,
+  insertOutboxRowByRowKey,
   insertScheduledSend,
-  markPendingReply,
+  markOutboxDelivered,
+  markOutboxLocked,
+  outboxKey,
   promoteWakeRow,
-  recordSendAttempt,
   recordSendFailure,
-  supersedePendingReplies,
-  supersedePromiseRows,
-  supersedeWakeRows,
+  replaceWaitingRow,
 } = await import("../src/db.js");
 const { createFixtureCharacter } =
   await import("../src/eval/fixture-character.js");
@@ -43,207 +50,385 @@ const AT = "2026-09-07 13:20:00";
 const SEND_AT = "2026-09-07 14:00:30";
 const characterId = createFixtureCharacter("chat-sends");
 
+type Kind = "reply" | "block_end" | "promise";
+
+let seq = 0;
 const insert = (
   chatId: string,
-  kind: string,
-  opts: { sendAt?: string; callId?: number } = {},
-): number =>
-  insertPendingReply({
+  kind: Kind,
+  opts: {
+    sendAt?: string;
+    callId?: number;
+    key?: string;
+    payload?: object;
+  } = {},
+): number => {
+  const id = insertOutboxRow({
+    kind,
     chatId,
     characterId,
-    userMsgAt: AT,
-    bubbles: ["안녕"],
-    notesToSave: [],
+    dedupeKey: opts.key ?? `test:${++seq}`,
     sendAt: opts.sendAt ?? SEND_AT,
-    kind,
+    payload: opts.payload ?? {},
     callId: opts.callId ?? null,
     createdAt: AT,
   });
+  assert.ok(id !== null, "테스트 행이 들어가야 한다");
+  return id;
+};
 
 interface RawRow {
   status: string;
+  reason: string | null;
+  detail: string | null;
   kind: string;
-  user_msg_at: string;
+  dedupe_key: string;
+  payload_json: string;
   attempts: number;
-  last_error: string | null;
   sent_at: string | null;
+  expires_at: string | null;
 }
 
 const rowOf = (id: number): RawRow =>
   db
     .prepare(
-      `SELECT status, kind, user_msg_at, attempts, last_error, sent_at
-         FROM pending_replies WHERE id = ?`,
+      `SELECT status, reason, detail, kind, dedupe_key, payload_json, attempts, sent_at, expires_at
+         FROM outbox WHERE id = ?`,
     )
     .get(id) as RawRow;
 
+const payloadOf = (id: number): Record<string, unknown> =>
+  JSON.parse(rowOf(id).payload_json) as Record<string, unknown>;
+
 after(() => db.close());
 
-// ── promoteWakeRow ────────────────────────────────────────────────────────
+// ── 고유 제약 ─────────────────────────────────────────────────────────────
 
-test("걸려 있던 return 행만 wake로 올리고 그 첫 메시지 시각을 적는다", () => {
+test("같은 대화·종류·키의 대기 행은 하나만 들어간다", () => {
+  const chat = "chat-unique";
+  const first = insert(chat, "reply", { key: outboxKey.reply(AT) });
+  const dup = insertOutboxRow({
+    kind: "reply",
+    chatId: chat,
+    characterId,
+    dedupeKey: outboxKey.reply(AT),
+    sendAt: SEND_AT,
+    payload: {},
+    createdAt: AT,
+  });
+  assert.equal(dup, null);
+  // 종류가 다르거나 대화가 다르면 같은 키도 들어간다.
+  insert(chat, "promise", { key: outboxKey.reply(AT) });
+  insert("chat-unique-other", "reply", { key: outboxKey.reply(AT) });
+  assert.equal(rowOf(first).status, "waiting");
+});
+
+test("닫힌 행과 같은 키로는 새 대기 행을 넣을 수 있다", () => {
+  const chat = "chat-unique-closed";
+  const key = outboxKey.blockEnd("14:00");
+  const first = insert(chat, "block_end", { key });
+  closeOutboxRow(first, "skipped", "already_done", null, null);
+  const second = insert(chat, "block_end", { key });
+  assert.notEqual(second, first);
+  assert.equal(rowOf(second).status, "waiting");
+});
+
+test("목록 밖 종류·사유는 넣을 때 던진다", () => {
+  assert.throws(() =>
+    db
+      .prepare(
+        `INSERT INTO outbox (kind, chat_id, character_id, dedupe_key, send_at, created_at)
+         VALUES ('wake', 'chat-check', ?, 'k', ?, ?)`,
+      )
+      .run(characterId, SEND_AT, AT),
+  );
+  const id = insert("chat-check", "reply");
+  assert.throws(() =>
+    closeOutboxRow(id, "skipped", "superseded" as never, null, null),
+  );
+});
+
+test("키를 지을 값이 없는 행은 row<번호>를 키로 받는다", () => {
+  const id = insertOutboxRowByRowKey({
+    kind: "promise",
+    chatId: "chat-rowkey",
+    characterId,
+    sendAt: SEND_AT,
+    payload: { promise: "끝나고 연락할게" },
+    createdAt: AT,
+  });
+  assert.equal(rowOf(id).dedupe_key, outboxKey.row(id));
+});
+
+// ── 닫기 ──────────────────────────────────────────────────────────────────
+
+test("먼저 닫힌 결과가 남는다 — 두 번째 닫기는 아무것도 바꾸지 않는다", () => {
+  const id = insert("chat-close-once", "reply");
+  assert.equal(
+    closeOutboxRow(id, "dropped", "user_followup", "다시 만든다", null),
+    true,
+  );
+  assert.equal(
+    closeOutboxRow(id, "failed", "retries_exhausted", "포기", null),
+    false,
+  );
+  const row = rowOf(id);
+  assert.equal(row.status, "dropped");
+  assert.equal(row.reason, "user_followup");
+  assert.equal(row.detail, "다시 만든다");
+  assert.equal(getWaitingOutboxRow(id), null);
+});
+
+test("닫을 때 상세를 300자로 자르고 덧붙일 칸을 합치며 잠금 표시를 지운다", () => {
+  const id = insert("chat-close-patch", "promise", {
+    payload: { promise: "저녁에 연락할게", lockSince: AT },
+  });
+  closeOutboxRow(id, "skipped", "model_declined", "x".repeat(400), null, {
+    draftCallId: 77,
+  });
+  const row = rowOf(id);
+  assert.equal(row.detail?.length, 300);
+  const p = payloadOf(id);
+  assert.equal(p.draftCallId, 77);
+  assert.equal(p.promise, "저녁에 연락할게");
+  assert.equal("lockSince" in p, false);
+});
+
+test("말이 나간 뒤 적는 보냄 표시는 폐기로 먼저 닫힌 행도 덮고 사유를 비운다", () => {
+  const id = insert("chat-delivered", "reply");
+  closeOutboxRow(id, "dropped", "user_followup", "다시 만든다", null);
+  assert.equal(
+    markOutboxDelivered(id, "partial", "말풍선 1/2", "2026-09-07 14:00:31"),
+    true,
+  );
+  let row = rowOf(id);
+  assert.equal(row.status, "partial");
+  assert.equal(row.reason, null);
+  assert.equal(row.detail, "말풍선 1/2");
+  assert.equal(row.sent_at, "2026-09-07 14:00:31");
+  // 이미 보냄으로 닫힌 행은 다시 덮지 않는다.
+  assert.equal(
+    markOutboxDelivered(id, "sent", null, "2026-09-07 14:05:00"),
+    false,
+  );
+  row = rowOf(id);
+  assert.equal(row.status, "partial");
+  assert.equal(row.sent_at, "2026-09-07 14:00:31");
+});
+
+test("자기 행을 닫고 같은 키로 새 행을 넣는 일을 한 번에 한다", () => {
+  const chat = "chat-replace";
+  const key = outboxKey.promise(501);
+  const own = insert(chat, "promise", { key, callId: 501 });
+  const next = replaceWaitingRow(own, "다음 블록 끝으로 다시 건다", () =>
+    insert(chat, "promise", { key, callId: 501 }),
+  );
+  assert.ok(next !== null && next !== own);
+  const old = rowOf(own);
+  assert.equal(old.status, "skipped");
+  assert.equal(old.reason, "rescheduled");
+  assert.equal(old.detail, "다음 블록 끝으로 다시 건다");
+  assert.equal(rowOf(next).status, "waiting");
+});
+
+test("새 행을 못 넣으면 자기 행을 닫은 것까지 되돌린다", () => {
+  const own = insert("chat-replace-none", "block_end");
+  assert.equal(
+    replaceWaitingRow(own, "다시 건다", () => null),
+    null,
+  );
+  const row = rowOf(own);
+  assert.equal(row.status, "waiting");
+  assert.equal(row.reason, null);
+  assert.equal(row.detail, null);
+});
+
+test("이미 닫힌 행이면 새 행을 넣지 않는다", () => {
+  const own = insert("chat-replace-closed", "promise");
+  closeOutboxRow(own, "dropped", "replaced_promise", null, null);
+  let called = false;
+  assert.equal(
+    replaceWaitingRow(own, "다시 건다", () => {
+      called = true;
+      return 1;
+    }),
+    null,
+  );
+  assert.equal(called, false);
+  assert.equal(rowOf(own).status, "dropped");
+});
+
+// ── 재시도와 잠금 충돌 ────────────────────────────────────────────────────
+
+test("재시도마다 시도 횟수가 하나씩 오르고 마지막 오류가 상세에 남는다", () => {
+  const id = insert("chat-bump", "reply");
+  assert.equal(rowOf(id).attempts, 0);
+  bumpOutboxAttempt(id, "첫 실패");
+  bumpOutboxAttempt(id, "y".repeat(400));
+  const row = rowOf(id);
+  assert.equal(row.attempts, 2);
+  assert.equal(row.detail?.length, 300);
+  assert.equal(row.status, "waiting");
+});
+
+test("잠금 충돌은 시도로 세지 않고 처음 막힌 시각만 남긴다", () => {
+  const id = insert("chat-locked", "block_end");
+  const t1 = "2026-09-07 14:00:00";
+  const t2 = "2026-09-07 14:02:00";
+  assert.equal(markOutboxLocked(id, t1, "선톡 자리가 차 있음"), t1);
+  assert.equal(markOutboxLocked(id, t2, "선톡 자리가 차 있음"), t1);
+  const row = rowOf(id);
+  assert.equal(row.attempts, 0);
+  assert.equal(row.detail, "선톡 자리가 차 있음");
+  assert.equal(payloadOf(id).lockSince, t1);
+  // 잠금을 넘어 실제 시도에서 실패하면 충돌이 끊긴 것이라 표시를 지운다.
+  bumpOutboxAttempt(id, "네트워크 끊김");
+  assert.equal("lockSince" in payloadOf(id), false);
+});
+
+// ── 구간 끝 행에 첫 발화 시각 적기 ────────────────────────────────────────
+
+test("걸려 있던 구간 끝 행에 첫 발화 시각을 적고 다른 종류는 건드리지 않는다", () => {
   const chat = "chat-promote";
-  const ret = insert(chat, "return");
-  const reply = insert(chat, "reply");
-  const promise = insert(chat, "promise");
+  const end = insert(chat, "block_end", {
+    payload: { activity: "회의", blockStart: "13:00", blockEnd: "15:00" },
+  });
+  const promise = insert(chat, "promise", { payload: { promise: "p" } });
   const at = "2026-09-07 13:40:00";
   assert.equal(promoteWakeRow(chat, at), 1);
-  assert.equal(rowOf(ret).kind, "wake");
-  assert.equal(rowOf(ret).user_msg_at, at);
-  assert.equal(rowOf(reply).kind, "reply");
-  assert.equal(rowOf(promise).kind, "promise");
+  assert.equal(payloadOf(end).userFirstAt, at);
+  assert.equal(payloadOf(end).activity, "회의");
+  assert.equal("userFirstAt" in payloadOf(promise), false);
 });
 
-test("이미 wake인 행은 그대로 두고 먼저 온 메시지 시각을 지킨다", () => {
+test("이미 첫 발화 시각이 적힌 행은 먼저 온 메시지 시각을 지킨다", () => {
   const chat = "chat-promote-keep";
-  const wake = insert(chat, "wake");
+  const end = insert(chat, "block_end", { payload: { userFirstAt: AT } });
   assert.equal(promoteWakeRow(chat, "2026-09-07 13:50:00"), 0);
-  assert.equal(rowOf(wake).kind, "wake");
-  assert.equal(rowOf(wake).user_msg_at, AT);
+  assert.equal(payloadOf(end).userFirstAt, AT);
 });
 
-test("이미 거둔 return 행은 올리지 않는다", () => {
+test("이미 닫힌 구간 끝 행에는 적지 않는다", () => {
   const chat = "chat-promote-done";
-  const ret = insert(chat, "return");
-  markPendingReply(ret, "superseded", null);
+  const end = insert(chat, "block_end");
+  closeOutboxRow(end, "dropped", "yielded", null, null);
   assert.equal(promoteWakeRow(chat, "2026-09-07 13:50:00"), 0);
-  assert.equal(rowOf(ret).kind, "return");
+  assert.equal("userFirstAt" in payloadOf(end), false);
 });
 
-// ── supersede* ────────────────────────────────────────────────────────────
+// ── 종류별로 거두기 ───────────────────────────────────────────────────────
 
-test("유저가 말을 더 걸면 reply·recover만 버리고 wake·return·promise는 남긴다", () => {
-  const chat = "chat-supersede-reply";
+test("한 종류만 거두고 다른 종류와 다른 대화방의 행은 남긴다", () => {
+  const chat = "chat-close-kind";
   const reply = insert(chat, "reply", { callId: 11 });
-  const recover = insert(chat, "recover");
-  const wake = insert(chat, "wake");
-  const ret = insert(chat, "return");
+  const end = insert(chat, "block_end");
   const promise = insert(chat, "promise");
-  const dropped = supersedePendingReplies(chat);
-  assert.deepEqual(
-    dropped.map((r) => r.id).sort((a, b) => a - b),
-    [reply, recover],
+  const other = insert("chat-close-kind-b", "reply");
+  const closed = closeWaitingRowsOf(
+    chat,
+    "reply",
+    "dropped",
+    "user_followup",
+    "다시 만든다",
   );
-  assert.equal(dropped.find((r) => r.id === reply)?.call_id, 11);
-  assert.equal(rowOf(reply).status, "superseded");
-  assert.equal(rowOf(recover).status, "superseded");
-  assert.equal(rowOf(wake).status, "waiting");
-  assert.equal(rowOf(ret).status, "waiting");
-  assert.equal(rowOf(promise).status, "waiting");
-  assert.deepEqual(supersedePendingReplies(chat), []);
-});
-
-test("깨우기 표시를 거둘 때는 wake·return만 버리고 reply·promise는 남긴다", () => {
-  const chat = "chat-supersede-wake";
-  const wake = insert(chat, "wake");
-  const ret = insert(chat, "return");
-  const reply = insert(chat, "reply");
-  const promise = insert(chat, "promise");
-  const dropped = supersedeWakeRows(chat);
   assert.deepEqual(
-    dropped.map((r) => r.id).sort((a, b) => a - b),
-    [wake, ret],
+    closed.map((r) => r.id),
+    [reply],
   );
-  assert.equal(rowOf(wake).status, "superseded");
-  assert.equal(rowOf(ret).status, "superseded");
-  assert.equal(rowOf(reply).status, "waiting");
+  assert.equal(closed[0]?.call_id, 11);
+  assert.equal(rowOf(reply).status, "dropped");
+  assert.equal(rowOf(reply).reason, "user_followup");
+  assert.equal(rowOf(end).status, "waiting");
   assert.equal(rowOf(promise).status, "waiting");
-});
-
-test("다른 대화방의 행은 거두지 않는다", () => {
-  const mine = insert("chat-supersede-a", "reply");
-  const other = insert("chat-supersede-b", "reply");
-  assert.equal(supersedePendingReplies("chat-supersede-a").length, 1);
-  assert.equal(rowOf(mine).status, "superseded");
   assert.equal(rowOf(other).status, "waiting");
+  assert.deepEqual(
+    closeWaitingRowsOf(chat, "reply", "dropped", "user_followup", null),
+    [],
+  );
 });
 
-test("약속을 거둘 때 지금 울리는 행은 빼고 나머지 약속만 버린다", () => {
-  const chat = "chat-supersede-promise";
+test("지금 울리는 행은 빼고 나머지만 거둔다", () => {
+  const chat = "chat-close-except";
   const ringing = insert(chat, "promise");
   const older = insert(chat, "promise");
-  const reply = insert(chat, "reply");
-  const dropped = supersedePromiseRows(chat, ringing);
+  const closed = closeWaitingRowsOf(
+    chat,
+    "promise",
+    "dropped",
+    "replaced_promise",
+    null,
+    ringing,
+  );
   assert.deepEqual(
-    dropped.map((r) => r.id),
+    closed.map((r) => r.id),
     [older],
   );
-  assert.equal(dropped[0]?.character_id, characterId);
+  assert.equal(closed[0]?.character_id, characterId);
   assert.equal(rowOf(ringing).status, "waiting");
-  assert.equal(rowOf(older).status, "superseded");
-  assert.equal(rowOf(reply).status, "waiting");
 });
 
-test("뺄 행을 주지 않으면 대기 중인 약속을 전부 거둔다", () => {
-  const chat = "chat-supersede-promise-all";
-  const a = insert(chat, "promise");
-  const b = insert(chat, "promise");
-  assert.equal(supersedePromiseRows(chat).length, 2);
-  assert.equal(rowOf(a).status, "superseded");
-  assert.equal(rowOf(b).status, "superseded");
-  assert.deepEqual(supersedePromiseRows(chat), []);
+// ── 대기 판정과 목록 ──────────────────────────────────────────────────────
+
+test("유저가 답을 기다리는지는 대기 답장과 첫 발화가 적힌 구간 끝 행만 센다", () => {
+  const onlyEnd = "chat-waiting-end";
+  insert(onlyEnd, "block_end");
+  assert.equal(hasWaitingReply(onlyEnd), false);
+  promoteWakeRow(onlyEnd, AT);
+  assert.equal(hasWaitingReply(onlyEnd), true);
+
+  const onlyPromise = "chat-waiting-promise";
+  insert(onlyPromise, "promise");
+  assert.equal(hasWaitingReply(onlyPromise), false);
+
+  const reply = "chat-waiting-reply";
+  const id = insert(reply, "reply");
+  assert.equal(hasWaitingReply(reply), true);
+  markOutboxDelivered(id, "sent", null, SEND_AT);
+  assert.equal(hasWaitingReply(reply), false);
 });
 
-// ── 대기 여부와 목록 ──────────────────────────────────────────────────────
-
-test("return 행만 있으면 답을 기다리는 중으로 세지 않는다", () => {
-  const chat = "chat-waiting-return";
-  insert(chat, "return");
-  assert.equal(hasWaitingPendingReply(chat), false);
-});
-
-test("reply 행이 있으면 답을 기다리는 중이다", () => {
-  const chat = "chat-waiting-reply";
-  const id = insert(chat, "reply");
-  assert.equal(hasWaitingPendingReply(chat), true);
-  markPendingReply(id, "sent", SEND_AT);
-  assert.equal(hasWaitingPendingReply(chat), false);
-});
-
-test("대기 목록은 waiting 행만 보낼 시각 순으로 준다", () => {
+test("대기 목록은 대기 행만 보낼 시각 순으로 주고 종류로 거를 수 있다", () => {
   const chat = "chat-waiting-list";
   const late = insert(chat, "reply", { sendAt: "2026-09-07 15:00:00" });
-  const early = insert(chat, "wake", { sendAt: "2026-09-07 14:10:00" });
+  const early = insert(chat, "block_end", { sendAt: "2026-09-07 14:10:00" });
   const done = insert(chat, "reply", { sendAt: "2026-09-07 14:00:00" });
-  markPendingReply(done, "sent", "2026-09-07 14:00:01");
-  const ids = getWaitingPendingReplies()
+  markOutboxDelivered(done, "sent", null, "2026-09-07 14:00:01");
+  const ids = getWaitingOutboxRows()
     .filter((r) => r.chat_id === chat)
     .map((r) => r.id);
   assert.deepEqual(ids, [early, late]);
+  const replies = getWaitingOutboxRows(["reply"])
+    .filter((r) => r.chat_id === chat)
+    .map((r) => r.id);
+  assert.deepEqual(replies, [late]);
 });
 
-// ── 상태 표시와 실패 기록 ─────────────────────────────────────────────────
+// ── 아침·안부 문안 ────────────────────────────────────────────────────────
 
-test("보낸 표시는 시각을 적고 오류를 안 주면 앞서 적힌 오류를 지우지 않는다", () => {
-  const id = insert("chat-mark", "reply");
-  bumpPendingAttempt(id, "네트워크 끊김");
-  markPendingReply(id, "sent", "2026-09-07 14:00:31");
-  const row = rowOf(id);
-  assert.equal(row.status, "sent");
-  assert.equal(row.sent_at, "2026-09-07 14:00:31");
-  assert.equal(row.last_error, "네트워크 끊김");
-  assert.equal(getPendingReply(id), null);
+test("아침 문안은 하루 한 통이고 마감을 만료 시각으로 적는다", () => {
+  const date = "2026-09-08";
+  insertScheduledSend(characterId, "chat-sends", date, "08:00", "09:00", "좋은 아침", AT);
+  insertScheduledSend(characterId, "chat-sends", date, "20:00", "21:00", "잘 자", AT, "checkin");
+  const rows = getPendingSends(date).filter((r) => r.character_id === characterId);
+  assert.equal(rows.length, 1);
+  const r = rows[0]!;
+  assert.equal(r.kind, "morning");
+  assert.equal(r.window_start, "08:00");
+  assert.equal(r.window_end, "09:00");
+  assert.equal(r.text, "좋은 아침");
+  assert.equal(r.send_at, `${date} 08:00:00`);
+  assert.equal(r.dedupe_key, outboxKey.morning(date));
+  // 창 끝 + 유예 90분 = 10:30
+  assert.equal(r.expires_at, `${date} 10:30:00`);
+  assert.equal(hasScheduledSendOn(characterId, date), true);
+  assert.equal(hasPendingSendOn(characterId, date), true);
+  markOutboxDelivered(r.id, "sent", null, `${date} 08:10:00`);
+  assert.equal(hasPendingSendOn(characterId, date), false);
+  assert.equal(hasScheduledSendOn(characterId, date), true);
+  assert.equal(getPendingSends(date).length, 0);
 });
 
-test("실패 표시에 오류를 주면 그 문구로 바꾼다", () => {
-  const id = insert("chat-mark-fail", "reply");
-  markPendingReply(id, "failed", null, "발송 포기");
-  const row = rowOf(id);
-  assert.equal(row.status, "failed");
-  assert.equal(row.sent_at, null);
-  assert.equal(row.last_error, "발송 포기");
-});
-
-test("재시도마다 시도 횟수가 하나씩 오르고 마지막 오류가 남는다", () => {
-  const id = insert("chat-bump", "reply");
-  assert.equal(rowOf(id).attempts, 0);
-  bumpPendingAttempt(id, "첫 실패");
-  bumpPendingAttempt(id, "둘째 실패");
-  const row = rowOf(id);
-  assert.equal(row.attempts, 2);
-  assert.equal(row.last_error, "둘째 실패");
-  assert.equal(row.status, "waiting");
-});
+// ── 순간에 묶인 선톡의 실패 기록 ──────────────────────────────────────────
 
 test("순간에 묶인 선톡의 발송 실패는 오류 문구를 300자로 잘라 남긴다", () => {
   const chat = "chat-send-failure";
@@ -262,38 +447,4 @@ test("순간에 묶인 선톡의 발송 실패는 오류 문구를 300자로 잘
     rows[1]?.failed_at ?? "",
     /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
   );
-});
-
-test("예약 발송의 실패 기록은 시도 횟수를 올리고 오류 문구를 300자로 자른다", () => {
-  const date = "2026-09-08";
-  insertScheduledSend(
-    characterId,
-    "chat-sends",
-    date,
-    "08:00",
-    "09:00",
-    "좋은 아침",
-    AT,
-  );
-  const row = db
-    .prepare(
-      `SELECT id FROM scheduled_messages WHERE character_id = ? AND date = ?`,
-    )
-    .get(characterId, date) as { id: number };
-  recordSendAttempt(row.id, "y".repeat(400));
-  recordSendAttempt(row.id, "두 번째");
-  const after2 = db
-    .prepare(
-      `SELECT attempts, last_error, status FROM scheduled_messages WHERE id = ?`,
-    )
-    .get(row.id) as { attempts: number; last_error: string; status: string };
-  assert.equal(after2.attempts, 2);
-  assert.equal(after2.last_error, "두 번째");
-  assert.equal(after2.status, "pending");
-  // 첫 기록이 300자로 잘렸는지는 두 번째로 덮이기 전 값이 필요해 따로 한 번 더 본다.
-  recordSendAttempt(row.id, "z".repeat(400));
-  const after3 = db
-    .prepare(`SELECT last_error FROM scheduled_messages WHERE id = ?`)
-    .get(row.id) as { last_error: string };
-  assert.equal(after3.last_error.length, 300);
 });

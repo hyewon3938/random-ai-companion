@@ -3,7 +3,8 @@
 // 옛 표와 컬럼을 지우는 마이그레이션(v6)을 더하면서 정의부도 같이 줄였다. 정의부와
 // 마이그레이션이 어긋나면 새로 만든 DB에만 옛 자리가 남거나 반대로 새 자리가 빠지는데,
 // 둘 다 부팅에서는 조용하고 한참 뒤 질의에서 터진다. 여기서 새로 만든 DB의 버전과
-// 없어야 할 자리를 못 박는다.
+// 없어야 할 자리를 못 박는다. v16부터는 연락 행 표(outbox)와 대기 행에만 거는 중복 막는
+// 인덱스가 새 DB에도 서는지 함께 본다.
 //
 // DB는 임시 파일로 새로 만든다. 모델도 텔레그램도 부르지 않아 값이 안 든다.
 import assert from "node:assert/strict";
@@ -28,6 +29,11 @@ const GONE_TABLES = [
   "capture_marks",
   "user_preferences",
   "memory_items_legacy",
+  // v16이 두 대기 표를 연락 행 표 하나로 합쳤다. 옛 표는 옮길 때만 _legacy로 남는다.
+  "pending_replies",
+  "scheduled_messages",
+  "pending_replies_legacy",
+  "scheduled_messages_legacy",
 ];
 
 const GONE_COLUMNS: [string, string][] = [
@@ -47,7 +53,7 @@ const columnNames = (table: string): string[] =>
   );
 
 test("빈 DB는 최신 버전으로 선다", () => {
-  assert.equal(db.pragma("user_version", { simple: true }), 15);
+  assert.equal(db.pragma("user_version", { simple: true }), 16);
 });
 
 test("새로 만든 DB에도 호출 관측 칸 둘이 있다", () => {
@@ -59,6 +65,37 @@ test("새로 만든 DB에도 호출 관측 칸 둘이 있다", () => {
 test("지운 표는 새로 만든 DB에도 없다", () => {
   for (const name of GONE_TABLES)
     assert.equal(tableExists(name), false, `${name}이 남아 있다`);
+});
+
+test("새로 만든 DB에도 연락 행 표와 대기 행 중복 막는 인덱스가 있다", () => {
+  const cols = columnNames("outbox");
+  for (const c of [
+    "id",
+    "kind",
+    "chat_id",
+    "character_id",
+    "dedupe_key",
+    "send_at",
+    "expires_at",
+    "payload_json",
+    "call_id",
+    "status",
+    "reason",
+    "detail",
+    "attempts",
+    "created_at",
+    "sent_at",
+  ])
+    assert.ok(cols.includes(c), `outbox.${c}이 없다`);
+
+  const index = db
+    .prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_outbox_waiting_key'`,
+    )
+    .get() as { sql: string } | undefined;
+  assert.ok(index, "idx_outbox_waiting_key가 없다");
+  assert.match(index.sql, /UNIQUE/);
+  assert.match(index.sql, /status\s*=\s*'waiting'/);
 });
 
 test("지운 컬럼은 새로 만든 DB에도 없다", () => {

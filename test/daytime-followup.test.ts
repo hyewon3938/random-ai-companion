@@ -19,7 +19,7 @@ const {
   hasPendingSendOn,
   insertScheduledSend,
   logMessage,
-  markScheduledSend,
+  markOutboxDelivered,
 } = await import("../src/db.js");
 const { kstLogicalDate } = await import("../src/kst.js");
 const { createFixtureCharacter } = await import("../src/eval/fixture-character.js");
@@ -84,6 +84,6 @@ test("아직 안 나간 아침 문안이 있으면 hasPendingSendOn이 참이다
 
   const row = getPendingSends(TODAY).find((r) => r.character_id === characterId);
   assert.ok(row);
-  markScheduledSend(row.id, "sent", null, `${TODAY} 09:12:00`);
+  markOutboxDelivered(row.id, "sent", null, `${TODAY} 09:12:00`);
   assert.equal(hasPendingSendOn(characterId, TODAY), false);
 });
