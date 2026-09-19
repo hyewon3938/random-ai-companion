@@ -11,8 +11,10 @@
 // 캐릭터가 자리를 비우는 상황에 붙는 한 마디라 새로 거는 연락과 성격이 다르다.
 //
 // 의도 선톡이 오늘의 의도 가운데 어느 줄을 쓸 수 있는지도 여기서 정한다(intentCandidates).
-// 오늘 이미 쓴 줄은 빼고, 어제 의도 선톡이 쓴 줄은 뒤로 보내 여는 모양이 날마다 같지 않게 한다.
-// 남은 줄 가운데 지금 맞는 줄은 문안을 만드는 모델이 고른다(이슈 #471).
+// 오늘 이미 쓴 줄은 빼고, 최근 14일 동안 선톡이 가장 오래전에 쓴 줄을 앞에 둔다. 남은 줄
+// 가운데 지금 맞는 줄은 문안을 만드는 모델이 고른다(이슈 #471·#475). 근황·의도 선톡이 어떤
+// 방식으로 말을 여는지도 같은 방법으로 돌려 쓴다(openingOrder) — 바로 앞 선톡이 쓴 방식은
+// 빼고, 나머지는 가장 오래전에 쓴 것부터 적는다.
 //
 // 유저 메시지가 오면 즉시 평상으로 돌아온다.
 //
@@ -39,6 +41,7 @@ import {
   type RelationshipStage,
 } from "./labels.js";
 import {
+  PROACTIVE_ROTATION_DAYS,
   PROACTIVE_STAGE_BUDGET,
   QUIET_AFTER_DAYS,
   RECONNECT_AT_DAYS,
@@ -519,9 +522,12 @@ export const basisLineFromMeta = (
 // 시도할 플러팅은 아직 먼저 걸 자리가 아니다. 2단계부터 네 줄 전부 열린다.
 //
 // 순서만 따르면 파고들 것이 날마다 먼저 나가서 의도 선톡이 매일 상대가 전에 한 말로 열렸다.
-// 그래서 어제 의도 선톡이 쓴 줄은 목록 뒤로 보낸다(이슈 #462). 새벽 정리가 어제 쓴 플러팅을
-// 뒤로 보내는 것(moveCandidates)과 같은 방식이다. 목록의 순서는 지금 맞는 줄이 여럿일 때
-// 모델이 앞의 줄을 고르게 하는 데만 쓴다.
+// 그래서 어제 의도 선톡이 쓴 줄을 목록 뒤로 보냈는데(이슈 #462), 어제만 보면 이틀 전에 쓴 줄이
+// 다시 앞으로 와서 두 줄이 번갈아 나가고 나머지 줄은 차례가 잘 오지 않았다. 지금은 최근 14일
+// 동안 선톡이 쓴 시각을 줄마다 보고, 안 쓴 줄부터 가장 오래전에 쓴 줄 순서로 적는다(이슈 #475).
+// 근황 선톡이 쓴 줄도 센다 — 근황 선톡이 파고들 것으로 물었으면 다음 날 의도 선톡은 다른 줄로
+// 연다. 답장이 쓴 줄은 대화 중에 받은 말이라 세지 않는다. 목록의 순서는 지금 맞는 줄이 여럿일
+// 때 모델이 앞의 줄을 고르게 하는 데만 쓴다.
 export const STAGE_INTENT_LINES: Record<RelationshipStage, IntentLine[]> = {
   1: ["dig", "thread"],
   2: ["dig", "share", "move", "thread"],
@@ -530,18 +536,39 @@ export const STAGE_INTENT_LINES: Record<RelationshipStage, IntentLine[]> = {
 };
 
 interface LineMeta {
+  proactive?: unknown;
   intent_line?: unknown;
   move?: unknown;
   intent_lines?: unknown;
+  opening?: unknown;
 }
 
+/** meta_json 한 칸을 읽는다. 비었거나 객체가 아니면 null. */
+const parseMeta = (json: string | null): LineMeta | null => {
+  if (!json) return null;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return parsed && typeof parsed === "object" ? (parsed as LineMeta) : null;
+  } catch {
+    return null;
+  }
+};
+
+const isIntentLine = (v: unknown): v is IntentLine =>
+  typeof v === "string" && v in INTENT_LINE_NAME;
+
+/** 배열 칸(intent_lines)에서 목록에 있는 줄 코드만 고른다. */
+const intentLinesOf = (v: unknown): IntentLine[] =>
+  Array.isArray(v) ? v.filter(isIntentLine) : [];
+
 /**
- * 오늘 이미 쓴 의도 줄. 선톡은 meta_json의 intent_line에 줄 코드를 적고, 답장은 쓴 플러팅을
- * move에, 나머지 줄을 intent_lines 배열에 적는다 — 플러팅을 이미 뒀으면 시도할 플러팅 줄은
- * 오늘 쓴 것으로 본다.
+ * 오늘 이미 쓴 의도 줄. 의도 선톡은 meta_json의 intent_line에 줄 코드를 적고, 근황 선톡과
+ * 답장은 쓴 줄을 intent_lines 배열에 적는다. 답장은 쓴 플러팅을 move에도 적는다 — 플러팅을
+ * 이미 뒀으면 시도할 플러팅 줄은 오늘 쓴 것으로 본다.
  *
  * 답장 쪽 배열을 세기 전에는 낮에 답장이 던진 물음을 몇 시간 뒤 의도 선톡이 다시 물었다 —
- * 답장이 쓴 줄은 어디에도 안 남아서 아직 안 쓴 줄로 읽혔다(이슈 #390).
+ * 답장이 쓴 줄은 어디에도 안 남아서 아직 안 쓴 줄로 읽혔다(이슈 #390). 근황 선톡이 쓴 줄도
+ * 같은 이유로 적는다(이슈 #475).
  */
 export const usedIntentLines = (
   chatId: string,
@@ -550,57 +577,68 @@ export const usedIntentLines = (
 ): IntentLine[] => {
   const out = new Set<IntentLine>();
   for (const row of getAssistantMetaSince(chatId, characterId, since)) {
-    if (!row.meta_json) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(row.meta_json);
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== "object") continue;
-    const m = parsed as LineMeta;
-    if (typeof m.intent_line === "string" && m.intent_line in INTENT_LINE_NAME)
-      out.add(m.intent_line as IntentLine);
+    const m = parseMeta(row.meta_json);
+    if (!m) continue;
+    if (isIntentLine(m.intent_line)) out.add(m.intent_line);
     if (typeof m.move === "string" && m.move) out.add("move");
-    if (Array.isArray(m.intent_lines))
-      for (const line of m.intent_lines)
-        if (typeof line === "string" && line in INTENT_LINE_NAME)
-          out.add(line as IntentLine);
+    for (const line of intentLinesOf(m.intent_lines)) out.add(line);
   }
   return [...out];
 };
 
 /**
- * 어제 의도 선톡이 쓴 줄. 어제 논리일 시작부터 todayStart 전까지 나간 선톡의 intent_line만
- * 센다 — 답장이 쓴 줄은 대화 중에 받은 말이라 다음 날 여는 모양과 상관이 없다.
- * todayStart는 오늘 논리일 시작 시각("YYYY-MM-DD 05:00:00")이다.
+ * 돌려 쓰기에서 되짚는 첫 시각. todayStart는 오늘 논리일 시작 시각("YYYY-MM-DD 05:00:00")이고,
+ * 거기서 PROACTIVE_ROTATION_DAYS만큼 앞이다.
  */
-export const yesterdayIntentLines = (
+export const rotationSince = (todayStart: string): string => {
+  const [date, time] = todayStart.split(" ");
+  return `${shiftDate(date, -PROACTIVE_ROTATION_DAYS)} ${time}`;
+};
+
+/** 두 시각 가운데 늦은 쪽. 행은 번호 순서로 오는데, 번호와 보낸 시각의 순서가 다를 때도 늦은
+ * 시각을 남긴다. */
+const later = (a: string | undefined, b: string): string =>
+  a && a > b ? a : b;
+
+/**
+ * 줄마다 선톡이 마지막으로 쓴 시각. since 뒤로 나간 선톡의 intent_line(의도 선톡)과
+ * intent_lines(근황 선톡)를 센다. 답장이 쓴 줄은 대화 중에 받은 말이라 다음에 어느 줄로
+ * 먼저 말을 걸지와 상관이 없어서 뺀다.
+ */
+export const intentLineLastUse = (
   chatId: string,
   characterId: number,
-  todayStart: string,
-): IntentLine[] => {
-  const [date, time] = todayStart.split(" ");
-  const from = `${shiftDate(date, -1)} ${time}`;
-  const out = new Set<IntentLine>();
-  const rows = getAssistantMetaSince(chatId, characterId, from, {
-    like: ['%"intent_line"%'],
+  since: string,
+): Partial<Record<IntentLine, string>> => {
+  const out: Partial<Record<IntentLine, string>> = {};
+  // intent_line과 intent_lines를 함께 걸러낸다. 같은 줄이 여러 번이면 늦은 시각이 이긴다.
+  const rows = getAssistantMetaSince(chatId, characterId, since, {
+    like: ['%"intent_line%'],
   });
   for (const row of rows) {
-    if (row.sent_at >= todayStart || !row.meta_json) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(row.meta_json);
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== "object") continue;
-    const line = (parsed as LineMeta).intent_line;
-    if (typeof line === "string" && line in INTENT_LINE_NAME)
-      out.add(line as IntentLine);
+    const m = parseMeta(row.meta_json);
+    if (!m || m.proactive !== true) continue;
+    const lines = [
+      ...(isIntentLine(m.intent_line) ? [m.intent_line] : []),
+      ...intentLinesOf(m.intent_lines),
+    ];
+    for (const line of lines) out[line] = later(out[line], row.sent_at);
   }
-  return [...out];
+  return out;
 };
+
+/**
+ * 안 쓴 것을 먼저 원래 순서대로, 그 뒤로 가장 오래전에 쓴 것부터 적는다. lastUse에 없는 것이
+ * 안 쓴 것이고, 시각이 같으면 원래 순서를 지킨다.
+ */
+const oldestFirst = <T extends string>(
+  items: readonly T[],
+  lastUse: Partial<Record<T, string>>,
+): T[] =>
+  items
+    .map((item, i) => ({ item, i, at: lastUse[item] ?? "" }))
+    .sort((a, b) => (a.at === b.at ? a.i - b.i : a.at < b.at ? -1 : 1))
+    .map((x) => x.item);
 
 export interface IntentLineSource {
   dig?: string | null;
@@ -611,16 +649,17 @@ export interface IntentLineSource {
 }
 
 /**
- * 오늘의 의도 행에서 의도 선톡이 쓸 수 있는 줄 목록. 값이 있고 아직 안 쓴 줄을 단계 순서대로
- * 담되, 어제 의도 선톡이 쓴 줄은 뒤로 보낸다. 어느 줄을 쓸지는 문안을 만드는 모델이 지금
- * 상황을 보고 고른다 — 코드가 한 줄만 넘기면 저녁 일정을 다룬 줄처럼 아직 때가 아닌 줄이 앞에
- * 있는 동안 지금 맞는 뒷줄이 차례를 받지 못한다(이슈 #471).
+ * 오늘의 의도 행에서 의도 선톡이 쓸 수 있는 줄 목록. 값이 있고 아직 안 쓴 줄을 담되, 선톡이 안
+ * 쓴 줄을 단계 순서대로 먼저 적고 그 뒤로 가장 오래전에 쓴 줄부터 적는다(lastUse는
+ * intentLineLastUse가 준다). 어느 줄을 쓸지는 문안을 만드는 모델이 지금 상황을 보고 고른다 —
+ * 코드가 한 줄만 넘기면 저녁 일정을 다룬 줄처럼 아직 때가 아닌 줄이 앞에 있는 동안 지금 맞는
+ * 뒷줄이 차례를 받지 못한다(이슈 #471).
  */
 export const intentCandidates = (
   intent: IntentLineSource | null,
   stage: RelationshipStage,
   used: IntentLine[],
-  yesterday: IntentLine[] = [],
+  lastUse: Partial<Record<IntentLine, string>> = {},
 ): IntentLine[] => {
   if (!intent) return [];
   // 고백 차례는 플러팅 코드 없이 자리만 적힌 날이라 move_note만 있어도 시도할 플러팅 줄이 산다.
@@ -633,8 +672,62 @@ export const intentCandidates = (
   const open = STAGE_INTENT_LINES[stage].filter(
     (line) => filled[line] && !used.includes(line),
   );
-  return [
-    ...open.filter((line) => !yesterday.includes(line)),
-    ...open.filter((line) => yesterday.includes(line)),
-  ];
+  return oldestFirst(open, lastUse);
+};
+
+// ── 선톡이 여는 방식 ─────────────────────────────────────────────────────
+// 근황·의도 선톡이 말을 여는 방식은 넷이다. 예전에는 상대가 전에 한 말을 떠올려 여는 모양과
+// 캐릭터의 장면으로 여는 모양 둘뿐이라 먼저 거는 말이 날마다 비슷하게 열렸다. 모델이 고른
+// 방식은 발송 기록의 opening에 적고, 다음 선톡은 바로 앞 선톡이 쓴 방식을 빼고 나머지를 가장
+// 오래전에 쓴 것부터 받는다(이슈 #475). 아침·점심·밤 인사처럼 때와 용건이 정해진 선톡은 이
+// 방식을 쓰지 않는다.
+export const OPENING_METHODS = ["ask", "reminded", "my_day", "my_question"] as const;
+export type OpeningMethod = (typeof OPENING_METHODS)[number];
+
+/** 여는 방식의 이름. 상황 문단의 줄 머리와 응답 읽기에 쓴다. 캐릭터 쪽에서 부르는 이름이다. */
+export const OPENING_NAME: Record<OpeningMethod, string> = {
+  ask: "뭐 하냐고 묻기",
+  reminded: "뭐 하다가 네 생각이 났다고 하기",
+  my_day: "내 일상 전하기",
+  my_question: "내 일상에서 나온 물음",
+};
+
+export const isOpeningMethod = (v: unknown): v is OpeningMethod =>
+  typeof v === "string" && (OPENING_METHODS as readonly string[]).includes(v);
+
+/** 여는 방식마다 선톡이 마지막으로 쓴 시각. since 뒤로 나간 선톡의 opening을 센다. */
+export const openingLastUse = (
+  chatId: string,
+  characterId: number,
+  since: string,
+): Partial<Record<OpeningMethod, string>> => {
+  const out: Partial<Record<OpeningMethod, string>> = {};
+  const rows = getAssistantMetaSince(chatId, characterId, since, {
+    like: ['%"opening"%'],
+  });
+  for (const row of rows) {
+    const m = parseMeta(row.meta_json);
+    if (m?.proactive === true && isOpeningMethod(m.opening))
+      out[m.opening] = later(out[m.opening], row.sent_at);
+  }
+  return out;
+};
+
+/**
+ * 이번 선톡에 넘길 여는 방식 목록. 가장 최근에 쓴 방식 하나는 빼서 바로 앞 선톡과 같은 모양으로
+ * 열지 않게 하고, 나머지는 안 쓴 것부터 가장 오래전에 쓴 것 순서로 적는다. 모델은 지금 상황에
+ * 맞는 것 가운데 앞의 것을 고른다.
+ */
+export const openingOrder = (
+  lastUse: Partial<Record<OpeningMethod, string>>,
+): OpeningMethod[] => {
+  let latest: OpeningMethod | null = null;
+  for (const m of OPENING_METHODS) {
+    const at = lastUse[m];
+    if (at && (!latest || at > (lastUse[latest] ?? ""))) latest = m;
+  }
+  return oldestFirst(
+    OPENING_METHODS.filter((m) => m !== latest),
+    lastUse,
+  );
 };

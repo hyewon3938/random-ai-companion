@@ -167,6 +167,11 @@ export const PROACTIVE_STAGE_BUDGET: Record<
 export const INTENT_QUIET_MS = 2 * 60 * 60 * 1000;
 export const INTENT_WINDOW = { start: "09:00", end: "23:00" } as const;
 
+/** 선톡이 쓴 의도 줄과 여는 방식을 돌려 쓸 때 되짚는 날수. 이 안에서 가장 오래전에 쓴 것을
+ * 목록 앞에 두고, 이보다 오래전에 쓴 것은 아직 안 쓴 것과 같이 본다(이슈 #475). 어제만 보면
+ * 이틀 전에 쓴 것이 다시 앞으로 와서 두 개가 번갈아 나가고 나머지는 차례가 잘 오지 않는다. */
+export const PROACTIVE_ROTATION_DAYS = 14;
+
 // ── 하루와 기록 ─────────────────────────────────────────────────────────
 
 /** 하루의 경계. 날짜를 세는 모든 곳이 이 기준을 쓴다. */

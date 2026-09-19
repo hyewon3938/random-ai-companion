@@ -5,7 +5,8 @@
 // 채로 두고 둘 중 하나가 바뀌면 다시 묻는지 본다. 종류와 방이 서로 섞이지 않는 것도 함께 본다.
 //
 // 문안 호출이 실패한 자리도 같은 방식으로 기억하는지, 의도 선톡이 모델이 적은 줄 코드를 후보에서
-// 찾아 발송 기록에 싣고 못 찾으면 접는지 함께 본다(이슈 #471).
+// 찾아 발송 기록에 싣고 못 찾으면 접는지 함께 본다(이슈 #471). 근황·의도 선톡이 적은 여는 방식과
+// 근황 선톡이 적은 줄 코드를 발송 기록에 싣는지, 값을 못 읽어도 문안은 보내는지도 본다(이슈 #475).
 //
 // followup.ts가 DB와 봇 모듈을 함께 읽으므로 DB는 임시 파일로 새로 만들고 토큰은 가짜다.
 import assert from "node:assert/strict";
@@ -24,6 +25,9 @@ const {
   declineSpot,
   declinedHere,
   pickedIntentLine,
+  pickedLines,
+  pickedOpening,
+  readCatchupOnce,
   readIntentOnce,
   readSendTextOnce,
   rememberDecline,
@@ -112,6 +116,15 @@ test("의도 read는 고른 줄을 발송 기록 값으로 주고 못 찾으면 
     text: "나 오늘 새벽에 뛰었어",
     meta: { intent_line: "share" },
   });
+  // 여는 방식을 적었으면 함께 싣고, 못 읽으면 그 칸만 빼고 보낸다.
+  assert.deepEqual(
+    read({ send: true, line: "thread", opening: "my_day", text: "나 방금 퇴근" }),
+    { text: "나 방금 퇴근", meta: { intent_line: "thread", opening: "my_day" } },
+  );
+  assert.deepEqual(
+    read({ send: true, line: "thread", opening: "아무거나", text: "나 방금 퇴근" }),
+    { text: "나 방금 퇴근", meta: { intent_line: "thread" } },
+  );
   assert.equal(declinedHere("chat-h", "intent", spot), false);
   // 후보에 없는 줄을 적었으면 보내지 않고 그 자리를 기억한다.
   assert.equal(read({ send: true, line: "move", text: "뭐 해" }), null);
@@ -123,4 +136,57 @@ test("의도 read도 안 보낸다는 답이면 자리를 기억한다", () => {
   const read = readIntentOnce("chat-i", spot, ["dig"]);
   assert.equal(read({ send: false }), null);
   assert.equal(declinedHere("chat-i", "intent", spot), true);
+});
+
+test("여는 방식은 코드나 이름으로 찾고 목록 밖이면 못 찾은 것으로 센다", () => {
+  assert.equal(pickedOpening("ask"), "ask");
+  assert.equal(pickedOpening(" my_question "), "my_question");
+  assert.equal(pickedOpening("내 일상 전하기"), "my_day");
+  assert.equal(pickedOpening("reminded(뭐 하다가 네 생각이 났다고 하기)"), "reminded");
+  // my_day는 my_question과 글자가 겹치지 않아 하나로 읽힌다.
+  assert.equal(pickedOpening("my_day"), "my_day");
+  assert.equal(pickedOpening("ask 아니면 my_day"), null);
+  assert.equal(pickedOpening("hello"), null);
+  assert.equal(pickedOpening(undefined), null);
+  assert.equal(pickedOpening(3), null);
+});
+
+test("근황 선톡이 꺼낸 줄은 넘긴 줄 가운데서만 고른다", () => {
+  const offered: ("share" | "dig")[] = ["share", "dig"];
+  assert.deepEqual(pickedLines(["dig"], offered), ["dig"]);
+  assert.deepEqual(pickedLines(["dig", "share", "dig"], offered), ["share", "dig"]);
+  assert.deepEqual(pickedLines(["파고들 것"], offered), ["dig"]);
+  // 문자열 하나로 왔으면 그 안에 든 줄을 전부 고른다.
+  assert.deepEqual(pickedLines("share, dig", offered), ["share", "dig"]);
+  // 넘기지 않은 줄과 읽을 수 없는 칸은 버린다.
+  assert.deepEqual(pickedLines(["thread", 3, null], offered), []);
+  assert.deepEqual(pickedLines([], offered), []);
+  assert.deepEqual(pickedLines(undefined, offered), []);
+  assert.deepEqual(pickedLines(["dig"], []), []);
+});
+
+test("근황 read는 꺼낸 줄과 여는 방식을 발송 기록 값으로 주고, 못 읽어도 문안은 보낸다", () => {
+  const spot = declineSpot("17:00", LAST);
+  const read = readCatchupOnce("chat-j", spot, ["share", "dig"]);
+  assert.deepEqual(
+    read({ send: true, opening: "my_question", lines: ["dig"], text: "저녁 뭐 먹을지 정했어?" }),
+    {
+      text: "저녁 뭐 먹을지 정했어?",
+      meta: { intent_lines: ["dig"], opening: "my_question" },
+    },
+  );
+  // 꺼낸 줄이 없으면 intent_lines를 싣지 않는다.
+  assert.deepEqual(read({ send: true, opening: "ask", lines: [], text: "뭐 해?" }), {
+    text: "뭐 해?",
+    meta: { opening: "ask" },
+  });
+  // 두 칸 다 못 읽어도 보낸다.
+  assert.deepEqual(read({ send: true, opening: "?", lines: "없음", text: "나 이제 밥 먹어" }), {
+    text: "나 이제 밥 먹어",
+    meta: {},
+  });
+  assert.equal(declinedHere("chat-j", "catchup", spot), false);
+  // 안 보낸다는 답이면 그 자리를 기억한다.
+  assert.equal(read({ send: false }), null);
+  assert.equal(declinedHere("chat-j", "catchup", spot), true);
 });
